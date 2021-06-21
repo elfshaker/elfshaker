@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[package]
+name = "elfshaker"
+version = "0.1.0"
+authors = ["Veselin Karaganev <veselin.karaganev@arm.com>"]
+edition = "2018"
+
+[[bin]]
+name = "create-pack"
+path = "src/bin/create-pack/main.rs"
+
+[dependencies]
+zstd = "0.9.0"
+tar = "0.4.35"
+walkdir = "2.3.2"
+clap = "2.33.0"
+rust-crypto = "0.2.36"
+rayon = "1.5.1"
+thread_local = "1.1.3"
+hex = "0.4.3"

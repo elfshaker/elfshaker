@@ -3,13 +3,13 @@
 
 use std::{
     cell::RefCell,
+    collections::hash_map::Entry,
     collections::HashMap,
-    ffi::{OsStr, OsString},
+    error::Error,
     fs::{create_dir_all, read_link, write, File, Metadata},
     io::{self, Read, Write},
-    path::{Component, Path, PathBuf},
-    rc::Rc,
-    time::{Instant, SystemTime},
+    path::{Path, PathBuf},
+    time::Instant,
 };
 
 use clap::{App, Arg};
@@ -21,78 +21,56 @@ use walkdir::WalkDir;
 use zstd::stream::raw::{CParameter, DParameter};
 use zstd::{Decoder, Encoder};
 
+use elfshaker::packidx::{
+    ObjectChecksum, ObjectIndex, PackError, PackIndex, PackedFile, PackedFileList, Snapshot,
+};
+use elfshaker::pathidx::{PathError, PathIndex, PathTree};
+
 #[derive(Clone, Debug)]
-struct Object {
+struct InputFileEntry {
     paths: Vec<PathBuf>,
     content_path: PathBuf,
-    modified: SystemTime,
     checksum: [u8; 20],
     offset: u64,
     size: u64,
 }
 
-#[derive(Clone, Debug)]
-struct FileNode {
-    name: OsString,
-    index: u32,
-}
-
-#[derive(Clone, Debug)]
-struct DirNode {
-    name: OsString,
-    children: Vec<Rc<RefCell<Tree>>>,
-}
-
-#[derive(Clone, Debug)]
-enum Tree {
-    Dir(DirNode),
-    File(FileNode),
-}
-
-impl Tree {
-    fn is_dir(&self) -> bool {
-        matches!(self, Tree::Dir(_))
-    }
-
-    fn is_file(&self) -> bool {
-        matches!(self, Tree::File(_))
-    }
-
-    fn unwrap_dir(&self) -> &DirNode {
-        match self {
-            Tree::Dir(ref dir) => dir,
-            _ => panic!("Not a dir node!"),
-        }
-    }
-
-    fn unwrap_file(&self) -> &FileNode {
-        match self {
-            Tree::File(ref file) => file,
-            _ => panic!("Not a file node!"),
-        }
-    }
-}
-
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("create-pack")
         .arg(Arg::with_name("INPUT").required(true).index(1))
         .arg(Arg::with_name("OUTPUT").required(true).index(2))
+        .arg(Arg::with_name("strip-components")
+            .required(true)
+            .takes_value(true)
+            .long("strip-components")
+            .help("Specifies now many levels deep relative to the input directory the sets of files to be included in each snapshot are found."))
+        .arg(Arg::with_name("compression-level")
+            .required(true)
+            .takes_value(true)
+            .long("compression-level"))
         .arg(
             Arg::with_name("validate")
                 .takes_value(true)
-                .long("validate") // --validate=01/T034951-4d7201e7b988
-                .help("The directory to extract after packing (for validation purposes)"),
+                .long("validate") // --validate=04T182935-99f74a64a2dd
+                .help("The snapshot tag to extract after packing (for validation purposes)"),
         )
         .get_matches();
 
-    let input_dir = matches.value_of("INPUT").unwrap();
+    let input_dir = Path::new(matches.value_of("INPUT").unwrap());
     let output = matches.value_of("OUTPUT").unwrap();
-    let validate_path = matches.value_of("validate").map(PathBuf::from);
+    let validate_tag = matches.value_of("validate");
+    let path_depth: u32 = matches.value_of("strip-components").unwrap().parse()?;
+    let compression_level: i32 = matches.value_of("compression-level").unwrap().parse()?;
+    let pack_index_path = String::from(output) + ".idx";
 
-    if let Some(validate_path) = validate_path.as_ref() {
+    if path_depth == 0 {
+        panic!("--strip-components value must be > 1!");
+    }
+
+    if let Some(validate_tag) = validate_tag {
         println!(
-            "Entries under {:?} will be decompressed after packing for validation purposes.",
-            validate_path
+            "Snapshot with tag {:?} will be decompressed after packing for validation purposes.",
+            validate_tag
         );
     }
 
@@ -102,28 +80,29 @@ fn main() -> io::Result<()> {
 
     println!("Creating auxiliary structures");
 
-    let entries_iter = dir_iter
-        .map(|x| -> io::Result<Object> {
-            Ok(Object {
-                paths: x.symlinks,
-                content_path: x.original,
-                modified: x.metadata.modified()?,
-                checksum: [0; 20],
-                offset: 0,
-                size: x.metadata.len(),
-            })
-        });
+    let entries_iter = dir_iter.map(|x| -> io::Result<InputFileEntry> {
+        Ok(InputFileEntry {
+            paths: x.symlinks,
+            content_path: x.original,
+            size: x.metadata.len(),
+            // will be computed later
+            checksum: [0; 20],
+            offset: 0,
+        })
+    });
 
     let mut objects: Vec<_> = entries_iter.collect::<io::Result<Vec<_>>>()?;
 
     println!("Sorting the entries...");
     // Sorting by filename
-    objects.sort_by(|x, y| {
-        Iterator::cmp(
-            x.paths.first().unwrap().components(),
-            y.paths.first().unwrap().components(),
-        )
-    });
+    // objects.sort_by(|x, y| {
+    //     Iterator::cmp(
+    //         x.paths.first().unwrap().components(),
+    //         y.paths.first().unwrap().components(),
+    //     )
+    // });
+    // Sorting by filesize -- seems to work better
+    objects.sort_by_key(|x| x.size);
 
     // Fix offsets
     let mut offset = 0;
@@ -133,79 +112,70 @@ fn main() -> io::Result<()> {
     }
 
     println!("Computing checksums...");
-    let tls_buf = ThreadLocal::new();
-    let checksums: Vec<[u8; 20]> = objects
-        .par_iter()
-        .map(|x| {
-            let mut buf = tls_buf.get_or(|| RefCell::new(vec![])).borrow_mut();
-            buf.clear();
-
-            let mut file = File::open(&x.content_path)?;
-            file.read_to_end(&mut buf)?;
-
-            let checksum_buf = &mut [0u8; 20];
-            let mut hasher = Sha1::new();
-            hasher.input(&buf);
-            hasher.result(checksum_buf);
-            Ok(*checksum_buf)
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-
+    let object_paths = objects.iter().map(|x| &x.content_path).collect::<Vec<_>>();
+    let file_paths = objects
+        .iter()
+        .map(|x| &x.paths)
+        .flatten()
+        .collect::<Vec<_>>();
+    // Create path tree
+    println!("Constructing tree...");
+    let tree = create_path_tree(&Path::new(input_dir), path_depth, &file_paths).expect("Bad path!");
+    // Compute and assign checksums
+    let checksums = compute_checksums(&object_paths)?;
     for (checksum, entry) in checksums.iter().zip(objects.iter_mut()) {
         entry.checksum = *checksum;
     }
 
-    println!("Constructing tree...");
-    let root = create_file_tree(&Path::new(input_dir), &mut objects);
+    println!("Constructing snapshots...");
+    let mut snapshots = create_snapshots_from_paths(input_dir, path_depth, &tree, &objects)?;
+    // Sort snapshots by tag
+    snapshots.sort_by(|x, y| x.tag.cmp(&y.tag));
 
-    println!("Writing index...");
-    let pack_index_file = File::create(String::from(output) + ".idx")?;
-    write_metadata(pack_index_file, &objects, &root)?;
-
-    let pack_file = File::create(output)?;
-    let mut encoder = Encoder::new(pack_file, 10)?;
-    encoder.set_parameter(CParameter::EnableLongDistanceMatching(true))?;
-    // 2^28 = 256GMiB window log
-    encoder.set_parameter(CParameter::WindowLog(28))?;
-    // 8 worker threads -- fails at runtime: not supported ???
-    // encoder.set_parameter(CParameter::NbWorkers(8))?;
-
-    println!("Writing pack file...");
-
-    let mut processed = 0;
-    let mut processed_bytes = 0;
-
-    for obj in &objects {
-        let mut file = File::open(&obj.content_path)?;
-        let bytes = io::copy(&mut file, &mut encoder)?;
-        processed += 1;
-        processed_bytes += bytes;
-        println!("{} of {} ({} bytes)", processed, objects.len(), bytes);
+    println!("Creating the following {} snapshots: ", snapshots.len());
+    for c in &snapshots {
+        println!("{}", c.tag);
     }
 
-    encoder.finish()?;
-    
-    println!("Processed {} bytes!", processed_bytes);
+    println!("Computing file changes between snapshots...");
+    let snapshots =
+        Snapshot::compute_deltas(snapshots.iter()).expect("Failed to compute file changes!");
+
+    println!("Writing index...");
+    let mut pack_index_file = File::create(String::from(output) + ".idx")?;
+
+    let object_index = objects
+        .iter()
+        .map(|x| ObjectIndex {
+            checksum: x.checksum,
+            offset: x.offset,
+            size: x.size,
+        })
+        .collect();
+
+    let pack_index = PackIndex::new(tree, object_index, snapshots);
+    rmp_serde::encode::write(&mut pack_index_file, &pack_index)?;
+
+    let pack_file = File::create(output)?;
+    let object_paths = objects.iter().map(|x| &x.content_path).collect::<Vec<_>>();
+    create_pack(pack_file, compression_level, &object_paths)?;
 
     // Validation
-    if let Some(validate_path) = validate_path {
+    if let Some(validate_tag) = validate_tag {
         let output_dir = PathBuf::from(String::from(output) + ".dir/");
         create_dir_all(&output_dir)?;
 
         let start_time = Instant::now();
         println!("Decompressing back into {:?}", &output_dir);
-        unpack_dir(
-            Path::new(input_dir),
+        unpack_snapshot(
             File::open(output)?,
-            &validate_path,
-            &objects,
-            &output_dir,
+            File::open(pack_index_path)?,
+            validate_tag,
+            output_dir,
         )?;
         let time_to_decompress = (Instant::now() - start_time).as_secs_f32();
         // This number give us an upper bound on how quickly (after reading the index)
         // we can materialise a single build.
-        // This is actually very suboptimal ATM, but shows 10s for a single build on my machine.
-        // The suboptimal part has to do with Rust iterators and decompressing all blocks individually.
         println!("Decompression took {}s", time_to_decompress);
     }
 
@@ -218,95 +188,218 @@ struct FileEntry {
     symlinks: Vec<PathBuf>,
 }
 
-fn unpack_dir<R: Read, P: AsRef<Path>>(
-    source_dir: P,
-    packfile: R,
-    match_path: P,
-    objects: &[Object],
+/// Unpacks the snapshot with the given tag to the output directory.
+fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
+    pack: R1,
+    packidx: R2,
+    snapshot_tag: &str,
     output_dir: P,
-) -> io::Result<()> {
-    let mut decoder = Decoder::new(packfile)?;
-    // 2^28 = 256GMiB window log
-    decoder.set_parameter(DParameter::WindowLogMax(28))?;
-    // 8 worker threads -- fails at runtime: not supported ???
-    // decoder.set_parameter(DParameter::NbWorkers(8))?;
+) -> Result<(), Box<dyn Error>> {
+    let packidx: PackIndex = rmp_serde::decode::from_read(packidx)?;
+    let file_list;
+    if let Some(snapshot) = packidx.find_snapshot(snapshot_tag) {
+        // PackIndex::find_snapshot returns snapshots with complete lists only
+        file_list = match snapshot.list {
+            PackedFileList::Complete(c) => c,
+            _ => unreachable!(),
+        }
+    } else {
+        panic!("Snapshot not found!");
+    }
+
+    let path_lookup = packidx.tree().create_lookup();
+    // Map the indexes to the correspondng path and object info.
+    let mut entries = file_list
+        .iter()
+        .map(|x| {
+            (
+                path_lookup[&x.tree_index()].clone(),
+                packidx.objects()[x.object_index() as usize].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // Sort objects to allow for one-way seeking
+    entries.sort_by_key(|(_, o)| o.offset);
+    println!("Decompressing {} files...", entries.len());
+
+    let mut decoder = Decoder::new(pack)?;
+    // 2^30 = 1024MiB window log
+    decoder.set_parameter(DParameter::WindowLogMax(30))?;
     let mut buf = vec![];
+    let mut path_buf = PathBuf::new();
+    let mut pos = 0;
 
-    for obj in objects {
-        if buf.len() < obj.size as usize {
-            buf.resize(obj.size as usize, 0);
+    for (path, object) in entries {
+        let discard_bytes = object.offset - pos;
+        io::copy(&mut decoder.by_ref().take(discard_bytes), &mut io::sink())?;
+        // Resize buf
+        if buf.len() < object.size as usize {
+            buf.resize(object.size as usize, 0);
         }
-        decoder.read_exact(&mut buf[..obj.size as usize])?;
-
-        for path in &obj.paths {
-            let rel_path = path
-                .components()
-                .skip(source_dir.as_ref().components().count())
-                .collect::<PathBuf>();
-
-            let match_c = match_path.as_ref().components();
-            if Iterator::eq(rel_path.components().take(match_c.clone().count()), match_c) {
-                let mut file_path: PathBuf = output_dir.as_ref().into();
-                file_path.push(rel_path.to_str().unwrap());
-                create_dir_all(file_path.parent().unwrap())?;
-                write(&file_path, &buf[..obj.size as usize])?;
-            }
+        // Read object
+        decoder.read_exact(&mut buf[..object.size as usize])?;
+        pos = object.offset + object.size;
+        // Verify checksum
+        let mut checksum = [0u8; 20];
+        let mut hasher = Sha1::new();
+        hasher.input(&buf[..object.size as usize]);
+        hasher.result(&mut checksum);
+        if object.checksum != checksum {
+            return Err(Box::new(PackError::ChecksumMismatch));
         }
+        // Output path
+        path_buf.clear();
+        path_buf.push(&output_dir);
+        path_buf.push(snapshot_tag);
+        path_buf.push(path);
+        create_dir_all(path_buf.parent().unwrap())?;
+        write(&path_buf, &buf)?;
     }
 
     Ok(())
 }
 
-fn create_file_tree(
+/// Creates a PathTree from the given list of paths and using the specified options.
+fn create_path_tree<P>(
     root_path: &Path,
-    objects: &mut Vec<Object>,
-) -> std::rc::Rc<std::cell::RefCell<Tree>> {
-    let root = Rc::new(RefCell::new(Tree::Dir(DirNode {
-        name: Default::default(),
-        children: vec![],
-    })));
+    path_depth: u32,
+    paths: &[P],
+) -> Result<PathTree, PathError>
+where
+    P: AsRef<Path>,
+{
+    let mut tree = PathTree::new();
 
-    // Indexes start from 1;
-    // 0 is reserved as a sentinel value when serialising a sequence of these indexes. 
-    let mut path_index = 1;
-    for obj in objects.iter() {
-        // Create a path in the tree for each path referencing this object
-        for path in &obj.paths {
-            let components = path.components();
-            let mut components: Vec<_> = remove_prefix(&components, root_path.components())
-                .map(|c| c.as_os_str())
+    // Create a path in the tree for each path referencing this object
+    for path in paths {
+        let components: Result<Vec<_>, PathError> = path
+            .as_ref()
+            .strip_prefix(root_path)
+            .map_err(|_| PathError::InvalidPath)?
+            .components()
+            .skip(path_depth as usize)
+            .map(|x| x.as_os_str().to_str().ok_or(PathError::InvalidPath))
+            .collect();
+        tree.create_file(components?.iter())?;
+    }
+
+    println!("Tree contains {} file objects.", tree.file_count());
+
+    tree.update_index();
+
+    Ok(tree)
+}
+
+/// Creates a list of snapshots from the given files and options.
+fn create_snapshots_from_paths(
+    input_dir: &Path,
+    path_depth: u32,
+    tree: &PathTree,
+    objects: &[InputFileEntry],
+) -> Result<Vec<Snapshot>, PackError> {
+    let mut snapshots: HashMap<String, Vec<PackedFile>> = HashMap::new();
+    // Use the --path-depth value to create tags/names for the snapshots.
+    for (object_index, object) in objects.iter().enumerate() {
+        for path in &object.paths {
+            let rel_path = path
+                .strip_prefix(input_dir)
+                .map_err(|_| PackError::PathNotFound)?;
+            // Use the first #path_depth directory names as the tag.
+            let tag_path = rel_path
+                .components()
+                .take(path_depth as usize)
+                .map(|x| x.as_os_str().to_str().unwrap())
                 .collect();
+            let in_tree_path = rel_path
+                .components()
+                .skip(path_depth as usize)
+                .map(|x| x.as_os_str());
 
-            let filename = components.pop().unwrap().to_os_string();
+            let tree_index = tree
+                .find_index(in_tree_path)
+                .map_err(|_| PackError::PathNotFound)?
+                .ok_or(PackError::PathNotFound)?;
+            let packed_file = PackedFile::new(tree_index, object_index as u32);
 
-            let dir = create_dir_all_node(&root, components.into_iter());
-            create_file_node(
-                &dir,
-                FileNode {
-                    name: filename.to_os_string(),
-                    index: path_index, // assign unique index to each leaf node
-                },
+            match snapshots.entry(tag_path) {
+                Entry::Occupied(mut o) => {
+                    o.get_mut().push(packed_file);
+                }
+                Entry::Vacant(v) => {
+                    v.insert(vec![packed_file]);
+                }
+            }
+        }
+    }
+    Ok(snapshots
+        .into_iter()
+        .map(|(key, value)| Snapshot {
+            tag: key,
+            list: PackedFileList::Complete(value),
+        })
+        .collect())
+}
+
+/// Concats the contents of the files at the provided paths and Zstandard compresses it.
+fn create_pack<W, P>(pack_file: W, compression_level: i32, objects_paths: &[P]) -> io::Result<()>
+where
+    W: Write,
+    P: AsRef<Path>,
+{
+    let mut encoder = Encoder::new(pack_file, compression_level)?;
+    // NbWorkers requires the zstdmt features to be enabled.
+    encoder.set_parameter(CParameter::NbWorkers(num_cpus::get_physical() as u32))?;
+    encoder.set_parameter(CParameter::EnableLongDistanceMatching(true))?;
+    // 2^30 = 1024MiB window log
+    encoder.set_parameter(CParameter::WindowLog(30))?;
+
+    println!("Writing pack file...");
+
+    let mut processed_bytes = 0;
+
+    for (i, obj) in objects_paths.iter().enumerate() {
+        let mut file = File::open(&obj)?;
+        let bytes = io::copy(&mut file, &mut encoder)?;
+        processed_bytes += bytes;
+        if i % 100 == 0 {
+            println!(
+                "File no. {} of {} ({} bytes)",
+                i,
+                objects_paths.len(),
+                bytes
             );
-
-            path_index += 1;
         }
     }
 
-    println!("Tree contains {} file objects.", path_index - 1);
+    encoder.finish()?;
+    println!("Processed {} bytes!", processed_bytes);
 
-    root
+    Ok(())
 }
 
-fn remove_prefix<P: AsRef<Path>>(path: &P, prefix: P) -> impl Iterator<Item = Component> {
-    let path = path.as_ref();
-    let prefix = prefix.as_ref();
+/// Computes the content checksums of the files at the listed paths.
+fn compute_checksums<P>(paths: &[P]) -> io::Result<Vec<ObjectChecksum>>
+where
+    P: AsRef<Path> + Sync,
+{
+    let tls_buf = ThreadLocal::new();
+    paths
+        .par_iter()
+        .map(|x| {
+            let mut buf = tls_buf.get_or(|| RefCell::new(vec![])).borrow_mut();
+            buf.clear();
 
-    assert!(Iterator::eq(
-        path.components().take(prefix.components().count()),
-        prefix.components()
-    ));
+            let mut file = File::open(&x)?;
+            file.read_to_end(&mut buf)?;
 
-    path.components().skip(prefix.components().count())
+            let checksum_buf = &mut [0u8; 20];
+            let mut hasher = Sha1::new();
+            hasher.input(&buf);
+            hasher.result(checksum_buf);
+            Ok(*checksum_buf)
+        })
+        .collect::<io::Result<Vec<_>>>()
 }
 
 fn walk_follow_symlinks<P: AsRef<Path>>(
@@ -362,140 +455,4 @@ fn walk_follow_symlinks<P: AsRef<Path>>(
     }
 
     Ok(entry_map.into_iter().map(|x| x.1))
-}
-
-fn create_file_node(dir: &Rc<RefCell<Tree>>, file: FileNode) -> Rc<RefCell<Tree>> {
-    if let Tree::Dir(ref mut dir) = *dir.borrow_mut() {
-        let node = Rc::new(RefCell::new(Tree::File(file)));
-        dir.children.push(node.clone());
-        node
-    } else {
-        panic!("Root is not a directory!")
-    }
-}
-
-fn create_dir_all_node<'a, I: Iterator<Item = &'a OsStr>>(
-    root: &Rc<RefCell<Tree>>,
-    mut components: I,
-) -> Rc<RefCell<Tree>> {
-    let root_ref = root.borrow();
-    if let Tree::Dir(ref dir) = *root_ref {
-        if let Some(c) = components.next() {
-            if let Some(node) = find_dir_node(dir, c) {
-                return create_dir_all_node(&node, components);
-            } else {
-                drop(root_ref);
-                let subdir = create_dir_node(root, c);
-                return create_dir_all_node(&subdir, components);
-            }
-        }
-        root.clone()
-    } else {
-        panic!("Root is not a directory!")
-    }
-}
-
-fn find_dir_node(root: &DirNode, name: &OsStr) -> Option<Rc<RefCell<Tree>>> {
-    let n = root.children.iter().find(|x| match &*x.borrow() {
-        Tree::Dir(DirNode {
-            name: _name,
-            ..
-        }) => _name == name,
-        _ => false,
-    });
-
-    n?;
-
-    if let Tree::Dir(_) = *n.unwrap().borrow_mut() {
-        return Some(n.unwrap().clone());
-    }
-    None
-}
-
-fn create_dir_node(root: &Rc<RefCell<Tree>>, name: &OsStr) -> Rc<RefCell<Tree>> {
-    if let Tree::Dir(ref mut dir) = *root.borrow_mut() {
-        dir.children.push(Rc::new(RefCell::new(Tree::Dir(DirNode {
-            name: name.to_os_string(),
-            children: vec![],
-        }))));
-        dir.children.last().unwrap().clone()
-    } else {
-        panic!("Node is not a directory!")
-    }
-}
-
-const FILE_NODE: &[u8] = &[b'F'];
-const DIR_NODE: &[u8] = &[b'D'];
-const EXIT_NODE: &[u8] = &[b';'];
-
-fn write_metadata(
-    mut writer: impl Write,
-    objects: &[Object],
-    tree: &Rc<RefCell<Tree>>,
-) -> io::Result<()> {
-    // Serialise and write the tree
-    let mut tree_buf = vec![];
-    println!("Serialising tree...");
-    write_tree(&mut tree_buf, tree)?;
-    let tree_size = tree_buf.len() as u32;
-    println!("Tree metadata is {} bytes", tree_size);
-    writer.write_all(&tree_size.to_be_bytes())?;
-    writer.write_all(&tree_buf)?;
-
-    // Write the sorted entries
-    let num_entries = (objects.len() * 20) as u32;
-    writer.write_all(&num_entries.to_be_bytes())?;
-    for obj in objects {
-        writer.write_all(&obj.checksum)?;
-        writer.write_all(&obj.offset.to_be_bytes())?;
-        writer.write_all(&obj.size.to_be_bytes())?;
-        writer.write_all(&0u32.to_be_bytes())?
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
-fn write_tree(writer: &mut impl Write, root: &Rc<RefCell<Tree>>) -> io::Result<()> {
-    write_dir(writer, root.borrow().unwrap_dir())?;
-    Ok(())
-}
-
-fn write_dir(writer: &mut impl Write, dir: &DirNode) -> io::Result<()> {
-    let subdirs = dir.children.iter().filter(|x| x.borrow().is_dir());
-    let files = dir.children.iter().filter(|x| x.borrow().is_file());
-
-    writer.write_all(DIR_NODE)?;
-    let dir_name = dir
-        .name
-        .to_str()
-        .expect("Filename cannot be losslessly converted to UTF-8!");
-    // Write nul-terminated UTF-8 path name.
-    writer.write_all(dir_name.as_bytes())?;
-    writer.write_all(&[0])?;
-
-    for file in files {
-        write_file(writer, file.borrow().unwrap_file())?;
-    }
-
-    for subdir in subdirs {
-        write_dir(writer, subdir.borrow().unwrap_dir())?;
-    }
-    writer.write_all(EXIT_NODE)?;
-
-    Ok(())
-}
-
-fn write_file(writer: &mut impl Write, file: &FileNode) -> io::Result<()> {
-    writer.write_all(FILE_NODE)?;
-    let file_name = file
-        .name
-        .to_str()
-        .expect("Filename cannot be losslessly converted to UTF-8!");
-    // Write null-terminated UTF-8 path name.
-    writer.write_all(file_name.as_bytes())?;
-    writer.write_all(&[0])?;
-    // Write index as a 32-bit big endian number.
-    writer.write_all(&file.index.to_be_bytes())?;
-    Ok(())
 }

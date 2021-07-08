@@ -183,7 +183,6 @@ impl PathIndex for PathTree {
 
         let dir = DirectoryNode::open_dir_all(&self.root, path_components.into_iter());
         if dir.is_none() {
-            println!("Dir is none!");
             return Ok(None);
         }
         let dir = dir.unwrap();

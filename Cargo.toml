@@ -11,6 +11,10 @@ edition = "2018"
 name = "create-pack"
 path = "src/bin/create-pack/main.rs"
 
+[[bin]]
+name = "elfshaker"
+path = "src/bin/elfshaker/main.rs"
+
 [dependencies]
 zstd = { version = "0.9.0", features = ["zstdmt"] }
 tar = "0.4.35"
@@ -23,3 +27,5 @@ hex = "0.4.3"
 serde = { version = "1.0.126", features = ["derive", "rc"] }
 rmp-serde = "0.15.5"
 num_cpus = "1.13.0"
+log = "0.4.0"
+lazy_static = "1.4.0"

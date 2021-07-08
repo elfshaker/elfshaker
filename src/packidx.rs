@@ -1,11 +1,12 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use crate::pathidx::PathTree;
+use crate::pathidx::{PathIndex, PathTree};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::iter::FromIterator;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
 
 /// Error type used in the packidx module.
 #[derive(Debug, Clone)]
@@ -13,6 +14,7 @@ pub enum PackError {
     CompleteListNeeded,
     PathNotFound,
     ObjectNotFound,
+    SnapshotNotFound,
     ChecksumMismatch,
 }
 
@@ -27,6 +29,7 @@ impl std::fmt::Display for PackError {
             ),
             PackError::ObjectNotFound => write!(f, "The object was not found!"),
             PackError::PathNotFound => write!(f, "The path was not found!"),
+            PackError::SnapshotNotFound => write!(f, "The snapshot was not found!"),
             PackError::ChecksumMismatch => write!(f, "The object checksum did not match!"),
         }
     }
@@ -115,7 +118,7 @@ impl Snapshot {
         for snapshot in snapshots {
             match &snapshot.list {
                 PackedFileList::Complete(c) => {
-                    let set = HashSet::from_iter(c.into_iter().cloned());
+                    let set: HashSet<_, _> = c.iter().cloned().collect();
                     let changes = Self::get_changes(&mut complete, &set);
                     results.push(Snapshot {
                         tag: snapshot.tag.clone(),
@@ -188,10 +191,35 @@ impl Snapshot {
     }
 }
 
+/// Holds a path and object index, enough information to
+/// extract any packed file. This is a useful representation to have at runtime.
+#[derive(Clone, Debug)]
+pub struct PackEntry {
+    path: OsString,
+    object_index: ObjectIndex,
+}
+
+impl PackEntry {
+    fn new(path: &OsStr, object_index: ObjectIndex) -> Self {
+        Self {
+            path: path.to_os_string(),
+            object_index,
+        }
+    }
+
+    pub fn path(&self) -> &OsStr {
+        &self.path
+    }
+
+    pub fn object_index(&self) -> &ObjectIndex {
+        &self.object_index
+    }
+}
+
 /**
  * Represents the pack index in full.
  */
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct PackIndex {
     tree: PathTree,
     objects: Vec<ObjectIndex>,
@@ -218,7 +246,14 @@ impl PackIndex {
     }
 
     pub fn find_snapshot(&self, tag: &str) -> Option<Snapshot> {
-        let mut set = Snapshot::create_set(self.snapshots.first()?).unwrap();
+        let first_snapshot = self.snapshots.first()?;
+        if first_snapshot.tag == tag {
+            if matches!(first_snapshot.list, PackedFileList::Delta(_)) {
+                panic!("{:?}", PackError::CompleteListNeeded);
+            }
+            return Some(first_snapshot.clone());
+        }
+        let mut set = Snapshot::create_set(first_snapshot).unwrap();
         for snapshot in self.snapshots.iter().skip(1) {
             match snapshot.list {
                 PackedFileList::Complete(_) => {
@@ -237,5 +272,45 @@ impl PackIndex {
         }
 
         None
+    }
+
+    /// Creates a list of PackEntry for the given files.
+    pub fn entries<I>(&self, files: I) -> Result<Vec<PackEntry>, PackError>
+    where
+        I: Iterator<Item = PackedFile>,
+    {
+        let path_lookup = self.tree.create_lookup();
+        // Map the indexes to the correspondng path and object info.
+        files
+            .map(|x| -> Result<_, PackError> {
+                let path = path_lookup
+                    .get(&x.tree_index())
+                    .ok_or(PackError::PathNotFound)?;
+                let object = self
+                    .objects
+                    .get(x.object_index() as usize)
+                    .ok_or(PackError::ObjectNotFound)?;
+                Ok(PackEntry::new(path, object.clone()))
+            })
+            .collect::<Result<Vec<_>, PackError>>()
+    }
+}
+
+/// Custom debug representation
+impl fmt::Debug for PackIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[derive(Debug)]
+        struct DebugPackIndex {
+            objects: usize,
+            snapshots: usize,
+            paths: usize,
+        }
+
+        let index = DebugPackIndex {
+            objects: self.objects().len(),
+            snapshots: self.snapshots().len(),
+            paths: self.tree().file_count(),
+        };
+        fmt::Debug::fmt(&index, f)
     }
 }

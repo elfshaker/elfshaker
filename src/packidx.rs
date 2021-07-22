@@ -1,20 +1,23 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use crate::pathidx::{PathIndex, PathTree};
+use crate::pathidx::{PathError, PathIndex, PathTree};
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 
 /// Error type used in the packidx module.
 #[derive(Debug, Clone)]
 pub enum PackError {
+    PathError(PathError),
     CompleteListNeeded,
     PathNotFound,
     ObjectNotFound,
     SnapshotNotFound,
+    /// A snapshot with that tag is already present in the pack
+    SnapshotAlreadyExists,
     ChecksumMismatch,
 }
 
@@ -23,6 +26,7 @@ impl std::error::Error for PackError {}
 impl std::fmt::Display for PackError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            PackError::PathError(e) => e.fmt(f),
             PackError::CompleteListNeeded => write!(
                 f,
                 "Expected a complete file list, but got the delta format instead!"
@@ -30,23 +34,55 @@ impl std::fmt::Display for PackError {
             PackError::ObjectNotFound => write!(f, "The object was not found!"),
             PackError::PathNotFound => write!(f, "The path was not found!"),
             PackError::SnapshotNotFound => write!(f, "The snapshot was not found!"),
+            PackError::SnapshotAlreadyExists => write!(
+                f,
+                "A snapshot with this tag is already present in the pack!"
+            ),
             PackError::ChecksumMismatch => write!(f, "The object checksum did not match!"),
         }
     }
 }
 
 pub type ObjectChecksum = [u8; 20];
+pub const LOOSE_OBJECT_OFFSET: u64 = std::u64::MAX;
 
-/// Metadata for a object stored in a pack.
+/// Metadata for an object stored in a pack.
 ///
 /// Contains a size and an offset (relative to the decompressed stream).
 ///
 /// The checksum can be used to validate the contents of the object.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ObjectIndex {
-    pub checksum: ObjectChecksum,
-    pub offset: u64,
-    pub size: u64,
+    checksum: ObjectChecksum,
+    offset: u64,
+    size: u64,
+}
+
+impl ObjectIndex {
+    pub fn new(checksum: ObjectChecksum, offset: u64, size: u64) -> Self {
+        Self {
+            checksum,
+            offset,
+            size,
+        }
+    }
+    pub fn loose(checksum: ObjectChecksum, size: u64) -> Self {
+        Self {
+            checksum,
+            size,
+            offset: LOOSE_OBJECT_OFFSET,
+        }
+    }
+
+    pub fn checksum(&self) -> &ObjectChecksum {
+        &self.checksum
+    }
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+    pub fn size(&self) -> u64 {
+        self.size
+    }
 }
 
 /// Identifies a file reference in a pack file.
@@ -65,7 +101,7 @@ impl Eq for PackedFile {}
 
 impl PackedFile {
     pub fn new(tree_index: u32, object_index: u32) -> Self {
-        PackedFile {
+        Self {
             tree_index,
             object_index,
         }
@@ -86,6 +122,19 @@ pub struct ChangeSet<T> {
     removed: Vec<T>,
 }
 
+impl<T> ChangeSet<T> {
+    pub fn new(added: Vec<T>, removed: Vec<T>) -> Self {
+        Self { added, removed }
+    }
+
+    pub fn added(&self) -> &[T] {
+        &self.added
+    }
+    pub fn removed(&self) -> &[T] {
+        &self.removed
+    }
+}
+
 /// A list of packed files can be stored either as a complete list of file
 /// references or as a delta to be applied to the previous list.
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -99,11 +148,26 @@ pub enum PackedFileList {
 /// The list of files can be a complete list or a list diff.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Snapshot {
-    pub tag: String,
-    pub list: PackedFileList,
+    tag: String,
+    list: PackedFileList,
 }
 
 impl Snapshot {
+    pub fn new(tag: &str, list: PackedFileList) -> Self {
+        Self {
+            tag: tag.to_owned(),
+            list,
+        }
+    }
+
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    pub fn list(&self) -> &PackedFileList {
+        &self.list
+    }
+
     pub fn compute_deltas<'a, I>(mut snapshots: I) -> Result<Vec<Snapshot>, PackError>
     where
         I: Iterator<Item = &'a Snapshot>,
@@ -200,7 +264,7 @@ pub struct PackEntry {
 }
 
 impl PackEntry {
-    pub(crate) fn new(path: &OsStr, object_index: ObjectIndex) -> Self {
+    pub fn new(path: &OsStr, object_index: ObjectIndex) -> Self {
         Self {
             path: path.to_os_string(),
             object_index,
@@ -219,7 +283,7 @@ impl PackEntry {
 /**
  * Represents the pack index in full.
  */
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct PackIndex {
     tree: PathTree,
     objects: Vec<ObjectIndex>,
@@ -228,7 +292,7 @@ pub struct PackIndex {
 
 impl PackIndex {
     pub fn new(tree: PathTree, objects: Vec<ObjectIndex>, snapshots: Vec<Snapshot>) -> Self {
-        PackIndex {
+        Self {
             tree,
             objects,
             snapshots,
@@ -293,6 +357,102 @@ impl PackIndex {
                 Ok(PackEntry::new(path, object.clone()))
             })
             .collect::<Result<Vec<_>, PackError>>()
+    }
+    /// Returns the full list of [`PackEntry`].
+    pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<PackEntry>, PackError> {
+        let snapshot = self.find_snapshot(tag).ok_or(PackError::SnapshotNotFound)?;
+
+        // Convert the PackedFileList into a list of entries to write to disk.
+        let entries = match snapshot.list {
+            PackedFileList::Complete(ref list) => self.entries(list.iter().cloned())?,
+            _ => unreachable!(),
+        };
+        Ok(entries)
+    }
+
+    /// Create and add a new snapshot compatible with the unpacked
+    /// index format using the list of tuples of (filepath, checksum, filesize).
+    pub fn push_snapshot(&mut self, tag: &str, input: &[PackEntry]) -> Result<(), PackError> {
+        if self.snapshots().iter().any(|s| s.tag == tag) {
+            return Err(PackError::SnapshotAlreadyExists);
+        }
+
+        // Expand all snapshots into String -> [PackEntry]
+        let mut snapshots: Vec<(String, Vec<PackEntry>)> = self
+            .snapshots
+            .iter()
+            .map(|s| Ok((s.tag.clone(), self.entries_from_snapshot(&s.tag)?)))
+            .collect::<Result<_, PackError>>()?;
+
+        let existing_objects: HashSet<&_> = self.objects().iter().map(|o| &o.checksum).collect();
+
+        // Compute and extend with the set of objects which are not available in the unpacked storage
+        let new_objects: Vec<_> = input
+            .iter()
+            .filter(|x| !existing_objects.contains(&x.object_index().checksum))
+            .map(|x| x.object_index().clone())
+            .collect();
+
+        // Operating on a clone is safer, since the below operation might fail half-way.
+        // If we were extending self.tree directly, a failure would corrupt the tree.
+        let mut new_tree = self.tree.clone();
+        for path in input.iter().map(|e| e.path()) {
+            new_tree.create_file(path).map_err(PackError::PathError)?;
+        }
+        snapshots.push((tag.to_owned(), input.into()));
+        let path_lookup = new_tree
+            .create_lookup()
+            .into_iter()
+            .map(|(i, p)| (p, i))
+            .collect();
+        let object_lookup: HashMap<ObjectChecksum, u32> = self
+            .objects
+            .iter()
+            .chain(new_objects.iter())
+            .enumerate()
+            .map(|(i, o)| (*o.checksum(), i as u32))
+            .collect();
+        let new_snapshots = self.to_snapshots(&path_lookup, &object_lookup, &snapshots)?;
+
+        self.objects.extend_from_slice(&new_objects);
+        self.snapshots = new_snapshots;
+        self.tree = new_tree;
+
+        Ok(())
+    }
+
+    fn to_snapshots(
+        &self,
+        path_lookup: &HashMap<OsString, u32>,
+        object_lookup: &HashMap<ObjectChecksum, u32>,
+        snapshots: &[(String, Vec<PackEntry>)],
+    ) -> Result<Vec<Snapshot>, PackError> {
+        snapshots
+            .iter()
+            .map(|s| {
+                let list =
+                    s.1.iter()
+                        .map(|e| self.entry_to_packed_file(e, path_lookup, object_lookup))
+                        .collect::<Result<Vec<_>, PackError>>()?;
+                Ok(Snapshot::new(&s.0, PackedFileList::Complete(list)))
+            })
+            .collect::<Result<Vec<Snapshot>, PackError>>()
+    }
+
+    /// Converts between the [`PackEntry`] (runtime) and [`PackedFile`] (on-disk) representation.
+    fn entry_to_packed_file(
+        &self,
+        entry: &PackEntry,
+        path_lookup: &HashMap<OsString, u32>,
+        object_lookup: &HashMap<ObjectChecksum, u32>,
+    ) -> Result<PackedFile, PackError> {
+        let tree_index = path_lookup
+            .get(entry.path())
+            .ok_or(PackError::PathNotFound)?;
+        let object_index = object_lookup
+            .get(entry.object_index().checksum())
+            .ok_or(PackError::ObjectNotFound)?;
+        Ok(PackedFile::new(*tree_index, *object_index))
     }
 }
 

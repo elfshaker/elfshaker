@@ -1,13 +1,14 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
-use log::{error, info, trace, warn};
-use std::error::Error;
+use std::{error::Error, str::FromStr};
 
-use elfshaker::log::measure;
+use clap::{App, Arg, ArgMatches};
+use log::{error, warn};
+
+use super::utils::{find_pack_with_snapshot, open_repo_from_cwd};
 use elfshaker::packidx::PackError;
-use elfshaker::repo::{Error as RepoError, ExtractOptions, Repository, SnapshotId, HEAD_FILE};
+use elfshaker::repo::{Error as RepoError, ExtractOptions, PackId, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "extract";
 
@@ -18,56 +19,15 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let is_verify = matches.is_present("verify");
     let is_force = matches.is_present("force");
 
-    // Open repo from cwd.
-    let repo_path = std::env::current_dir()?;
-    let (elapsed, open_result) = measure(|| Repository::open(&repo_path));
-    let mut repo = match open_result {
-        Ok(repo) => repo,
-        Err(RepoError::CorruptRepositoryIndex) => {
-            error!("The repository index is corrupt or missing! Run update-index and try again.");
-            return Err(Box::new(RepoError::CorruptRepositoryIndex));
-        }
-        Err(RepoError::CorruptHead) => {
-            let mut head_path = repo_path.join(&*Repository::data_dir());
-            head_path.push(HEAD_FILE);
-            error!(
-                "The repository HEAD file ({:?}) is corrupt! Remove the file and try again.",
-                head_path
-            );
-            return Err(Box::new(RepoError::CorruptHead));
-        }
-        Err(e) => return Err(Box::new(e)),
-    };
-    info!("Opening repository {:?} took {:?}", repo_path, elapsed);
+    let mut repo = open_repo_from_cwd()?;
 
     // Determine the pack file to use.
     let pack = match pack {
-        Some(pack) => pack.to_owned(),
-        None => {
-            // Try to locate this snapshot.
-            trace!("Looking for snapshot in top-level index...");
-            let packs = repo.find_packs(snapshot);
-            match packs.len() {
-                0 => {
-                    error!(
-                        "Snapshot {} is not available in the known set of pack files! \
-                        Make sure that the correct pack file is available, refresh the index, and try again!",
-                        snapshot
-                    );
-                    return Err(Box::new(RepoError::PackError(PackError::SnapshotNotFound)));
-                }
-                1 => packs[0].clone(),
-                _ => {
-                    error!(
-                        "The following pack files provide snapshot {}:\n{:?}\nSpecify which one to use with -P <pack>!",
-                        snapshot, packs);
-                    return Err(Box::new(RepoError::AmbiguousSnapshotMatch));
-                }
-            }
-        }
+        Some(pack) => PackId::from_str(pack)?,
+        None => find_pack_with_snapshot(repo.index(), snapshot)?,
     };
 
-    let new_head = SnapshotId::new(&pack, snapshot);
+    let new_head = SnapshotId::new(pack, snapshot)?;
     if repo.head().as_ref() == Some(&new_head) && !is_reset {
         // The specified snapshot is already extracted and --reset is not specified,
         // so this is a no-op.
@@ -106,6 +66,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> App<'static, 'static> {
     App::new(SUBCOMMAND)
+        .about("Can be used to extract a snapshot.")
         .arg(
             Arg::with_name("snapshot")
                 .required(true)

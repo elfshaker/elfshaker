@@ -6,6 +6,7 @@ use std::cmp::{Ord, Ordering};
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
@@ -32,10 +33,7 @@ pub trait PathIndex {
     /// The number of unique file paths in the tree.
     fn file_count(&self) -> usize;
     /// Stores the specified file path.
-    fn create_file<S: AsRef<OsStr>, I: Iterator<Item = S>>(
-        &mut self,
-        path_components: I,
-    ) -> Result<(), PathError>;
+    fn create_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), PathError>;
 
     /// Updates the file index.
     ///
@@ -61,7 +59,7 @@ pub struct PathTree {
 impl PathTree {
     /// Creates a new empty PathTree.
     pub fn new() -> Self {
-        PathTree {
+        Self {
             file_count: 0,
             root: Rc::new(RefCell::new(TreeNode::Directory(DirectoryNode::new(
                 "".as_ref(),
@@ -133,16 +131,22 @@ impl Default for PathTree {
     }
 }
 
+impl Clone for PathTree {
+    fn clone(&self) -> Self {
+        Self {
+            file_count: self.file_count,
+            root: Rc::new((*self.root).clone()),
+        }
+    }
+}
+
 impl PathIndex for PathTree {
     fn file_count(&self) -> usize {
         self.file_count
     }
 
-    fn create_file<S: AsRef<OsStr>, I: Iterator<Item = S>>(
-        &mut self,
-        path_components: I,
-    ) -> Result<(), PathError> {
-        let mut path_components = path_components.collect::<Vec<_>>();
+    fn create_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), PathError> {
+        let mut path_components = path.as_ref().components().collect::<Vec<_>>();
         let filename = path_components.pop();
         let filename = filename.ok_or(PathError::InvalidPath)?;
 
@@ -219,7 +223,7 @@ impl PathIndex for PathTree {
 /// A node in the path index tree.
 ///
 /// Note: Path names are stored as UTF-8 encoded strings.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 enum TreeNode {
     Directory(DirectoryNode),
     File(FileNode),
@@ -233,7 +237,20 @@ struct DirectoryNode {
     children: BTreeSet<TreeNodeRc>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+impl Clone for DirectoryNode {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            children: self
+                .children
+                .iter()
+                .map(|x| Rc::new((**x).clone()))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct FileNode {
     name: OsString,
     #[serde(skip)]
@@ -270,8 +287,8 @@ impl PartialEq for TreeNode {
 impl Eq for TreeNode {}
 
 impl DirectoryNode {
-    fn new(name: &OsStr) -> DirectoryNode {
-        DirectoryNode {
+    fn new(name: &OsStr) -> Self {
+        Self {
             name: name.into(),
             children: BTreeSet::new(),
         }
@@ -358,7 +375,7 @@ impl DirectoryNode {
 
 impl FileNode {
     fn new(name: &OsStr) -> Self {
-        FileNode {
+        Self {
             name: name.into(),
             index: None,
         }

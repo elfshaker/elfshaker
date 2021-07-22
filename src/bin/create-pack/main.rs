@@ -2,7 +2,6 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use std::{
-    cell::RefCell,
     collections::hash_map::Entry,
     collections::HashMap,
     error::Error,
@@ -15,15 +14,11 @@ use std::{
 use clap::{App, Arg};
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
-use rayon::prelude::*;
-use thread_local::ThreadLocal;
 use walkdir::WalkDir;
 use zstd::stream::raw::{CParameter, DParameter};
 use zstd::{Decoder, Encoder};
 
-use elfshaker::packidx::{
-    ObjectChecksum, ObjectIndex, PackError, PackIndex, PackedFile, PackedFileList, Snapshot,
-};
+use elfshaker::packidx::{ObjectIndex, PackError, PackIndex, PackedFile, PackedFileList, Snapshot};
 use elfshaker::pathidx::{PathError, PathIndex, PathTree};
 
 #[derive(Clone, Debug)]
@@ -122,7 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Constructing tree...");
     let tree = create_path_tree(&Path::new(input_dir), path_depth, &file_paths).expect("Bad path!");
     // Compute and assign checksums
-    let checksums = compute_checksums(&object_paths)?;
+    let checksums = elfshaker::batch::compute_checksums(&object_paths)?;
     for (checksum, entry) in checksums.iter().zip(objects.iter_mut()) {
         entry.checksum = *checksum;
     }
@@ -130,11 +125,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Constructing snapshots...");
     let mut snapshots = create_snapshots_from_paths(input_dir, path_depth, &tree, &objects)?;
     // Sort snapshots by tag
-    snapshots.sort_by(|x, y| x.tag.cmp(&y.tag));
+    snapshots.sort_by(|x, y| x.tag().cmp(&y.tag()));
 
     println!("Creating the following {} snapshots: ", snapshots.len());
     for c in &snapshots {
-        println!("{}", c.tag);
+        println!("{}", c.tag());
     }
 
     println!("Computing file changes between snapshots...");
@@ -146,11 +141,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let object_index = objects
         .iter()
-        .map(|x| ObjectIndex {
-            checksum: x.checksum,
-            offset: x.offset,
-            size: x.size,
-        })
+        .map(|x| ObjectIndex::new(x.checksum, x.offset, x.size))
         .collect();
 
     let pack_index = PackIndex::new(tree, object_index, snapshots);
@@ -199,8 +190,8 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
     let file_list;
     if let Some(snapshot) = packidx.find_snapshot(snapshot_tag) {
         // PackIndex::find_snapshot returns snapshots with complete lists only
-        file_list = match snapshot.list {
-            PackedFileList::Complete(c) => c,
+        file_list = match snapshot.list() {
+            PackedFileList::Complete(c) => c.clone(),
             _ => unreachable!(),
         }
     } else {
@@ -220,7 +211,7 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
         .collect::<Vec<_>>();
 
     // Sort objects to allow for one-way seeking
-    entries.sort_by_key(|(_, o)| o.offset);
+    entries.sort_by_key(|(_, o)| o.offset());
     println!("Decompressing {} files...", entries.len());
 
     let mut decoder = Decoder::new(pack)?;
@@ -231,21 +222,21 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
     let mut pos = 0;
 
     for (path, object) in entries {
-        let discard_bytes = object.offset - pos;
+        let discard_bytes = object.offset() - pos;
         io::copy(&mut decoder.by_ref().take(discard_bytes), &mut io::sink())?;
         // Resize buf
-        if buf.len() < object.size as usize {
-            buf.resize(object.size as usize, 0);
+        if buf.len() < object.size() as usize {
+            buf.resize(object.size() as usize, 0);
         }
         // Read object
-        decoder.read_exact(&mut buf[..object.size as usize])?;
-        pos = object.offset + object.size;
+        decoder.read_exact(&mut buf[..object.size() as usize])?;
+        pos = object.offset() + object.size();
         // Verify checksum
         let mut checksum = [0u8; 20];
         let mut hasher = Sha1::new();
-        hasher.input(&buf[..object.size as usize]);
+        hasher.input(&buf[..object.size() as usize]);
         hasher.result(&mut checksum);
-        if object.checksum != checksum {
+        if *object.checksum() != checksum {
             return Err(Box::new(PackError::ChecksumMismatch));
         }
         // Output path
@@ -281,7 +272,7 @@ where
             .skip(path_depth as usize)
             .map(|x| x.as_os_str().to_str().ok_or(PathError::InvalidPath))
             .collect();
-        tree.create_file(components?.iter())?;
+        tree.create_file(components?.iter().collect::<PathBuf>())?;
     }
 
     println!("Tree contains {} file objects.", tree.file_count());
@@ -334,10 +325,7 @@ fn create_snapshots_from_paths(
     }
     Ok(snapshots
         .into_iter()
-        .map(|(key, value)| Snapshot {
-            tag: key,
-            list: PackedFileList::Complete(value),
-        })
+        .map(|(key, value)| Snapshot::new(&key, PackedFileList::Complete(value)))
         .collect())
 }
 
@@ -376,30 +364,6 @@ where
     println!("Processed {} bytes!", processed_bytes);
 
     Ok(())
-}
-
-/// Computes the content checksums of the files at the listed paths.
-fn compute_checksums<P>(paths: &[P]) -> io::Result<Vec<ObjectChecksum>>
-where
-    P: AsRef<Path> + Sync,
-{
-    let tls_buf = ThreadLocal::new();
-    paths
-        .par_iter()
-        .map(|x| {
-            let mut buf = tls_buf.get_or(|| RefCell::new(vec![])).borrow_mut();
-            buf.clear();
-
-            let mut file = File::open(&x)?;
-            file.read_to_end(&mut buf)?;
-
-            let checksum_buf = &mut [0u8; 20];
-            let mut hasher = Sha1::new();
-            hasher.input(&buf);
-            hasher.result(checksum_buf);
-            Ok(*checksum_buf)
-        })
-        .collect::<io::Result<Vec<_>>>()
 }
 
 fn walk_follow_symlinks<P: AsRef<Path>>(

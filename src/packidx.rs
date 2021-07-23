@@ -200,7 +200,7 @@ pub struct PackEntry {
 }
 
 impl PackEntry {
-    fn new(path: &OsStr, object_index: ObjectIndex) -> Self {
+    pub(crate) fn new(path: &OsStr, object_index: ObjectIndex) -> Self {
         Self {
             path: path.to_os_string(),
             object_index,

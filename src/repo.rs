@@ -610,16 +610,16 @@ impl Repository {
         from_entries: &[PackEntry],
         to_entries: &[PackEntry],
     ) -> (Vec<PackEntry>, Vec<PackEntry>) {
-        // Object cheksum to index in from_entries.
-        let checksum2fromidx: BTreeMap<_, _> = from_entries
+        // Object path+checksum to index in from_entries.
+        let entry2fromidx: BTreeMap<_, _> = from_entries
             .iter()
             .enumerate()
-            .map(|(i, e)| (e.object_index().checksum, i))
+            .map(|(i, e)| ((e.path(), e.object_index().checksum), i))
             .collect();
-        let checksum2toidx: BTreeMap<_, _> = to_entries
+        let entry2toidx: BTreeMap<_, _> = to_entries
             .iter()
             .enumerate()
-            .map(|(i, e)| (e.object_index().checksum, i))
+            .map(|(i, e)| ((e.path(), e.object_index().checksum), i))
             .collect();
 
         let mut added = vec![];
@@ -627,8 +627,8 @@ impl Repository {
 
         // Check which from entries are missing in to_entries or under a different path,
         // and mark them for removal
-        for (checksum, &from_idx) in &checksum2fromidx {
-            match checksum2toidx.get(checksum) {
+        for (entry, &from_idx) in &entry2fromidx {
+            match entry2toidx.get(entry) {
                 Some(&to_idx) => {
                     if from_entries[from_idx].path() != to_entries[to_idx].path() {
                         removed.push(from_entries[from_idx].clone());
@@ -639,8 +639,8 @@ impl Repository {
         }
         // Check which to entries were added or moved,
         // and add them for extraction
-        for (checksum, &to_idx) in &checksum2toidx {
-            match checksum2fromidx.get(checksum) {
+        for (entry, &to_idx) in &entry2toidx {
+            match entry2fromidx.get(entry) {
                 Some(&from_idx) => {
                     if from_entries[from_idx].path() != to_entries[to_idx].path() {
                         added.push(to_entries[to_idx].clone());
@@ -682,5 +682,141 @@ where
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packidx::ObjectIndex;
+
+    #[test]
+    fn compute_entry_diff_finds_updates() {
+        let path = "/path/to/A";
+        let old_checksum = [0; 20];
+        let new_checksum = [1; 20];
+        let old_entries = [PackEntry::new(
+            path.as_ref(),
+            ObjectIndex {
+                checksum: old_checksum,
+                offset: 0,
+                size: 1,
+            },
+        )];
+        let new_entries = [PackEntry::new(
+            path.as_ref(),
+            ObjectIndex {
+                checksum: new_checksum,
+                offset: 0,
+                size: 1,
+            },
+        )];
+        let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
+        assert_eq!(1, added.len());
+        assert_eq!(path, added[0].path());
+        assert_eq!(1, removed.len());
+        assert_eq!(path, removed[0].path());
+    }
+
+    #[test]
+    fn compute_entry_diff_finds_update_of_duplicated() {
+        let path_a = "/path/to/A";
+        let path_a_old_checksum = [0; 20];
+        let path_b = "/path/to/B";
+        let path_b_old_checksum = [0; 20];
+        let path_a_new_checksum = [1; 20];
+        let old_entries = [
+            PackEntry::new(
+                path_a.as_ref(),
+                ObjectIndex {
+                    checksum: path_a_old_checksum,
+                    offset: 0,
+                    size: 1,
+                },
+            ),
+            PackEntry::new(
+                path_b.as_ref(),
+                ObjectIndex {
+                    checksum: path_b_old_checksum,
+                    offset: 0,
+                    size: 1,
+                },
+            ),
+        ];
+        let new_entries = [PackEntry::new(
+            path_a.as_ref(),
+            ObjectIndex {
+                checksum: path_a_new_checksum,
+                offset: 0,
+                size: 1,
+            },
+        )];
+        let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
+        assert_eq!(1, added.len());
+        assert_eq!(path_a, added[0].path());
+        assert_eq!(2, removed.len());
+        assert!(removed.iter().any(|e| path_a == e.path()));
+        assert!(removed.iter().any(|e| path_b == e.path()));
+    }
+
+    #[test]
+    fn compute_entry_diff_path_switch() {
+        let path_a = "/path/to/A";
+        let path_a_old_checksum = [0; 20];
+        let path_a_new_checksum = [1; 20];
+        let path_b = "/path/to/B";
+        let path_b_old_checksum = [1; 20];
+        let path_b_new_checksum = [0; 20];
+        let old_entries = [
+            PackEntry::new(
+                path_a.as_ref(),
+                ObjectIndex {
+                    checksum: path_a_old_checksum,
+                    offset: 0,
+                    size: 1,
+                },
+            ),
+            PackEntry::new(
+                path_b.as_ref(),
+                ObjectIndex {
+                    checksum: path_b_old_checksum,
+                    offset: 0,
+                    size: 1,
+                },
+            ),
+        ];
+        let new_entries = [
+            PackEntry::new(
+                path_a.as_ref(),
+                ObjectIndex {
+                    checksum: path_a_new_checksum,
+                    offset: 0,
+                    size: 1,
+                },
+            ),
+            PackEntry::new(
+                path_b.as_ref(),
+                ObjectIndex {
+                    checksum: path_b_new_checksum,
+                    offset: 0,
+                    size: 1,
+                },
+            ),
+        ];
+        let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
+        assert_eq!(2, added.len());
+        assert!(added
+            .iter()
+            .any(|e| path_a == e.path() && path_a_new_checksum == e.object_index().checksum));
+        assert!(added
+            .iter()
+            .any(|e| path_b == e.path() && path_b_new_checksum == e.object_index().checksum));
+        assert_eq!(2, removed.len());
+        assert!(removed
+            .iter()
+            .any(|e| path_a == e.path() && path_a_old_checksum == e.object_index().checksum));
+        assert!(removed
+            .iter()
+            .any(|e| path_b == e.path() && path_b_old_checksum == e.object_index().checksum));
     }
 }

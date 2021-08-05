@@ -3,8 +3,14 @@
 
 use elfshaker::log::measure;
 use elfshaker::packidx::PackError;
+use elfshaker::progress::ProgressReporter;
 use elfshaker::repo::{Error as RepoError, PackId, Repository, RepositoryIndex, HEAD_FILE};
 use log::{error, info, trace};
+use std::io::Write;
+use std::sync::{
+    atomic::{AtomicIsize, Ordering},
+    Arc,
+};
 
 /// Prints the values as a table. The first set of values
 /// is used for the table header.
@@ -98,4 +104,24 @@ pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
         Err(e) => return Err(e),
     };
     Ok(repo)
+}
+
+pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressReporter<'static> {
+    assert!(step <= 100);
+
+    let current = Arc::new(AtomicIsize::new(-100));
+    let message = message.to_owned();
+    ProgressReporter::new(move |checkpoint| {
+        if let Some(remaining) = checkpoint.remaining {
+            let percentage = (100 * checkpoint.done / (checkpoint.done + remaining)) as isize;
+            if percentage - current.load(Ordering::Acquire) >= step as isize {
+                current.store(percentage, Ordering::Release);
+                println!("{}... {}%", message, percentage);
+                std::io::stdout().flush().unwrap();
+            }
+        } else {
+            print!("{}... {} of ?", message, checkpoint.done);
+            std::io::stdout().flush().unwrap();
+        }
+    })
 }

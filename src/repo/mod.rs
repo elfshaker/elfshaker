@@ -13,4 +13,4 @@ pub use constants::{
 };
 pub use error::Error;
 pub use pack::{Pack, PackId, SnapshotId};
-pub use repository::{ExtractOptions, Repository, RepositoryIndex};
+pub use repository::{ExtractOptions, PackOptions, Repository, RepositoryIndex};

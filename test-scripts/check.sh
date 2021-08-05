@@ -157,6 +157,96 @@ test_store_finds_new_files() {
   }
 }
 
+rand_megs() {
+  dd if=/dev/urandom bs="$1M" count=1 iflag=fullblock
+}
+
+test_pack_simple_works() {
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_before=$(cat ./foo ./bar | sha1sum)
+  # Pack the two files
+  "$elfshaker" --verbose update-index
+  "$elfshaker" --verbose store SS-1
+  "$elfshaker" --verbose pack P-1
+  "$elfshaker" --verbose update-index
+  # Delete the files
+  rm ./foo ./bar
+  # Then extract them from the pack and verify the checksums
+  "$elfshaker" --verbose extract --reset -P P-1 SS-1
+  sha1_after=$(cat ./foo ./bar | sha1sum)
+  if [[ "$sha1_before" != "$sha1_after" ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+}
+
+test_pack_two_snapshots_works() {
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_ss1=$(cat ./foo ./bar | sha1sum)
+  # Store the two files in SS-1
+  "$elfshaker" --verbose update-index
+  "$elfshaker" --verbose store SS-1
+  # Modify the files
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_ss2=$(cat ./foo ./bar | sha1sum)
+  if [[ "$sha1_ss1" == "$sha1_ss2" ]]; then
+    echo 'I/O error!'
+    exit 1
+  fi
+  # Store the modified files in SS-2 and pack all into P-1
+  "$elfshaker" --verbose store SS-2
+  "$elfshaker" --verbose pack P-1
+  "$elfshaker" --verbose update-index
+  # Then extract from the pack and verify the checksums
+  "$elfshaker" --verbose extract --reset -P P-1 SS-1
+  if [[ "$sha1_ss1" != $(cat ./foo ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+  "$elfshaker" --verbose extract --reset -P P-1 SS-2
+  if [[ "$sha1_ss2" != $(cat ./foo ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+}
+
+# Same as above, but objects have different sizes, which will cause
+# them to be reordered when emitting the compressed pack.
+test_pack_two_snapshots_object_sort_works() {
+  rand_megs 1 > ./foo
+  rand_megs 2 > ./bar
+  sha1_ss1=$(cat ./foo ./bar | sha1sum)
+  # Store the two files in SS-1
+  "$elfshaker" --verbose update-index
+  "$elfshaker" --verbose store SS-1
+  # Modify the files
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_ss2=$(cat ./foo ./bar | sha1sum)
+  if [[ "$sha1_ss1" == "$sha1_ss2" ]]; then
+    echo 'I/O error!'
+    exit 1
+  fi
+  # Store the modified files in SS-2 and pack all into P-1
+  "$elfshaker" --verbose store SS-2
+  "$elfshaker" --verbose pack P-1
+  "$elfshaker" --verbose update-index
+  # Then extract from the pack and verify the checksums
+  "$elfshaker" --verbose extract --reset -P P-1 SS-1
+  if [[ "$sha1_ss1" != $(cat ./foo ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+  "$elfshaker" --verbose extract --reset -P P-1 SS-2
+  if [[ "$sha1_ss2" != $(cat ./foo ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -189,6 +279,9 @@ main() {
   run_test test_store_and_extract_different_works
   run_test test_store_twice_works
   run_test test_store_finds_new_files
+  run_test test_pack_simple_works
+  run_test test_pack_two_snapshots_works
+  run_test test_pack_two_snapshots_object_sort_works
 }
 
 main "$@"

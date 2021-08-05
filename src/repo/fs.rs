@@ -2,7 +2,13 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use rand::RngCore;
-use std::{fs, fs::File, io, io::Read, path::Path};
+use std::{
+    fs,
+    fs::File,
+    io,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 /// Ensures that the file is writable OR does not exist!
 pub fn ensure_file_writable(p: impl AsRef<Path>) -> io::Result<()> {
@@ -57,15 +63,21 @@ pub fn ensure_dir(path: &Path) -> io::Result<()> {
 ///
 /// NOTE: [`temp_dir`] and [`dest`] must be on the same filesystem!
 pub fn write_file_atomic(mut r: impl Read, temp_dir: &Path, dest: &Path) -> io::Result<()> {
-    let temp_filename = {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        hex::encode(&bytes)
-    };
-    let temp_path = temp_dir.join(temp_filename);
+    let temp_path = create_temp_path(temp_dir);
     {
         let mut temp_file = File::create(&temp_path)?;
         io::copy(&mut r, &mut temp_file)?;
     }
     fs::rename(temp_path, dest)
+}
+
+/// Returns a unique path suitable for a temporary file.
+pub fn create_temp_path(temp_dir: &Path) -> PathBuf {
+    // Pick filename from a 128-bit random distribution.
+    let temp_filename = {
+        let mut bytes = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        hex::encode(&bytes)
+    };
+    temp_dir.join(temp_filename)
 }

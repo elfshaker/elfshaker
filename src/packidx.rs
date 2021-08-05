@@ -309,6 +309,11 @@ impl PackIndex {
         &self.snapshots
     }
 
+    /// Returns true if the pack index is empty.
+    pub fn is_empty(&self) -> bool {
+        self.snapshots.is_empty()
+    }
+
     pub fn find_snapshot(&self, tag: &str) -> Option<Snapshot> {
         let first_snapshot = self.snapshots.first()?;
         if first_snapshot.tag == tag {
@@ -338,6 +343,63 @@ impl PackIndex {
         None
     }
 
+    /// Converts all snapshots' file lists (but the first) to the delta/changeset format.
+    pub fn use_file_list_deltas(&mut self) -> Result<(), PackError> {
+        self.snapshots = Snapshot::compute_deltas(self.snapshots().iter())?;
+        Ok(())
+    }
+
+    /// Applies a new ordering to the objects indexes ([`PackIndex::objects`]).
+    /// This operation also changes the [`PackedFile`] entries, by updating the indices into the [`PackIndex::objects`] array,
+    /// and the recorded offsets of the objects.
+    ///
+    /// # Arguments
+    /// * `indices` - The new set of indices for the objects. This slice must contain the same number of indices as the number of object
+    /// entries in the [`PackIndex`]. Any index can only appear once, otherwise, the behavior of this function is undetermined.
+    pub fn permute_objects(&mut self, indices: &[usize]) -> Result<(), PackError> {
+        assert_eq!(self.objects().len(), indices.len());
+        // Reorder the objects
+        apply_permutation(&mut self.objects, &indices);
+        // Update object offsets
+        let mut offset = 0;
+        for object in &mut self.objects {
+            object.offset = offset;
+            offset += object.size;
+        }
+
+        // To preserve the identity of the objects in the snapshots,
+        // we need a set of indices that yields the permutes the object
+        // list back to the original order. We can then use that to
+        // update [`PackedFile::object_index`] to the correct new value.
+        let mut reverse_indices: Vec<_> = (0..indices.len()).collect();
+        reverse_indices.sort_unstable_by_key(|&i| indices[i]);
+        let update_file_index = |file: &mut PackedFile| {
+            // The object index is the only part that has changed (due to reordering the objects when sorting).
+            file.object_index = reverse_indices[file.object_index as usize] as u32;
+        };
+
+        // Process the snapshots, updating the object indices.
+        for snapshot in &mut self.snapshots {
+            match snapshot.list {
+                PackedFileList::Complete(ref mut files) => {
+                    for file in files {
+                        update_file_index(file);
+                    }
+                }
+                PackedFileList::Delta(ref mut changeset) => {
+                    for file in &mut changeset.added {
+                        update_file_index(file);
+                    }
+                    for file in &mut changeset.removed {
+                        update_file_index(file);
+                    }
+                }
+            };
+        }
+
+        Ok(())
+    }
+
     /// Creates a list of PackEntry for the given files.
     pub fn entries<I>(&self, files: I) -> Result<Vec<PackEntry>, PackError>
     where
@@ -358,6 +420,7 @@ impl PackIndex {
             })
             .collect::<Result<Vec<_>, PackError>>()
     }
+
     /// Returns the full list of [`PackEntry`].
     pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<PackEntry>, PackError> {
         let snapshot = self.find_snapshot(tag).ok_or(PackError::SnapshotNotFound)?;
@@ -472,5 +535,70 @@ impl fmt::Debug for PackIndex {
             paths: self.tree().file_count(),
         };
         fmt::Debug::fmt(&index, f)
+    }
+}
+
+/// Transforms the input sequence using the specified indices.
+///
+/// # Arguments
+/// * `xs` - The input sequence of elements.
+/// * `indices` - A set of indices, with `indices[i]=j` interpreted as `xs[i]` goes to `xs[j]`.
+fn apply_permutation<T>(xs: &mut [T], indices: &[usize]) {
+    assert_eq!(xs.len(), indices.len());
+    let mut indices = indices.to_vec();
+    for i in 0..indices.len() {
+        let mut current = i;
+        while i != indices[current] {
+            let next = indices[current];
+            xs.swap(current, next);
+            indices[current] = current;
+            current = next;
+        }
+        indices[current] = current;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_permutation_reverse_works() {
+        let xs = &mut [10, 20, 30, 40];
+        let indices = &[3, 2, 1, 0];
+        apply_permutation(xs, indices);
+        assert_eq!(&[40, 30, 20, 10], xs);
+    }
+
+    #[test]
+    fn apply_permutation_identity_works() {
+        let xs = &mut [10, 20, 30, 40];
+        let indices = &[0, 1, 2, 3];
+        apply_permutation(xs, indices);
+        assert_eq!(&[10, 20, 30, 40], xs);
+    }
+
+    #[test]
+    fn apply_permutation_shift_left_works() {
+        let xs = &mut [10, 20, 30, 40];
+        let indices = &[1, 2, 3, 0];
+        apply_permutation(xs, indices);
+        assert_eq!(&[20, 30, 40, 10], xs);
+    }
+
+    #[test]
+    fn apply_permutation_shift_right_works() {
+        let xs = &mut [10, 20, 30, 40];
+        let indices = &[3, 0, 1, 2];
+        apply_permutation(xs, indices);
+        assert_eq!(&[40, 10, 20, 30], xs);
+    }
+
+    #[test]
+    fn apply_permutation_random_works() {
+        let xs = &mut [10, 20, 30, 40];
+        let indices = &[2, 1, 0, 3];
+        apply_permutation(xs, indices);
+        assert_eq!(&[30, 20, 10, 40], xs);
     }
 }

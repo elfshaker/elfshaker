@@ -5,7 +5,7 @@ use super::constants::*;
 
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     ffi::OsStr,
     fs,
     fs::File,
@@ -21,11 +21,15 @@ use walkdir::{DirEntry, WalkDir};
 
 use super::constants::REPO_DIR;
 use super::error::Error;
-use super::fs::{ensure_dir, ensure_file_writable, read_or_none, set_readonly, write_file_atomic};
+use super::fs::{
+    create_temp_path, ensure_dir, ensure_file_writable, read_or_none, set_readonly,
+    write_file_atomic,
+};
 use super::pack::{Pack, PackId, SnapshotId};
 use crate::batch;
 use crate::log::measure_ok;
 use crate::packidx::{ObjectChecksum, ObjectIndex, PackEntry, PackError, PackIndex};
+use crate::progress::ProgressReporter;
 
 /// A struct specifying the the extract options.
 #[derive(Clone, Debug)]
@@ -76,6 +80,14 @@ impl Default for ExtractOptions {
             force: false,
         }
     }
+}
+
+/// A struct specifying the the packing options.
+#[derive(Clone, Debug)]
+pub struct PackOptions {
+    pub compression_window_log: u32,
+    pub compression_level: i32,
+    pub num_workers: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -257,6 +269,7 @@ impl Repository {
         }
         Pack::open(&self.path, pack)
     }
+
     /// Checks-out the specified snapshot.
     ///
     /// # Arguments
@@ -340,10 +353,9 @@ impl Repository {
                 .map(|file| set_readonly(&file, false))
                 .and_then(|_| fs::remove_file(&path_buf))
             {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-                _ => {}
-            };
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                r => r,
+            }?;
         }
         if !opts.force() {
             for path in &updated_paths {
@@ -445,19 +457,111 @@ impl Repository {
         let mut unpacked_dir = self.path.join(&*Repository::data_dir());
         unpacked_dir.push(UNPACKED_DIR);
         ensure_dir(&unpacked_dir)?;
+        // Create temp dir
+        let temp_dir = self.temp_dir();
+        ensure_dir(&temp_dir)?;
+
         info!("Writing files to disk...");
         for checksum in &new_checksums {
             let file_index = input_checksums[checksum];
             let file_path = &files[file_index];
             let file = File::open(file_path)?;
             // Store object
-            self.write_loose_object(file, checksum)?;
+            self.write_loose_object(file, &temp_dir, checksum)?;
         }
 
         info!("Updating unpacked index...");
         self.update_unpacked_index(&index)?;
         info!("Updating HEAD...");
         self.update_head(&snapshot)?;
+        Ok(())
+    }
+
+    /// Creates a pack file.
+    ///
+    /// # Arguments
+    ///
+    /// * `pack` - The name of the pack file to create
+    /// * `index` - The index for the new pack
+    /// * `opts` - Additional options to use during pack creation
+    pub fn create_pack(
+        &mut self,
+        pack: &PackId,
+        index: &PackIndex,
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+    ) -> Result<(), Error> {
+        assert!(!matches!(pack, PackId::Unpacked));
+        let pack_name = match pack {
+            PackId::Packed(name) => name,
+            PackId::Unpacked => unreachable!(),
+        };
+
+        // Construct output file path.
+        let pack_path = {
+            let mut pack_path = self.path.to_owned();
+            pack_path.push(&*Repository::data_dir());
+            pack_path.push(PACKS_DIR);
+            ensure_dir(&pack_path)?;
+            pack_path.push(format!("{}.{}", pack_name, PACK_EXTENSION));
+            pack_path
+        };
+
+        // Create a temporary file to use during compression.
+        let temp_dir = self.temp_dir();
+        ensure_dir(&temp_dir)?;
+        let temp_path = create_temp_path(&temp_dir);
+
+        // And a writer to that temporary file.
+        let pack_writer = io::BufWriter::new(File::create(&temp_path)?);
+
+        // Gather a list of all objects to compress.
+        // The `index.objects()` list should be pre-sorted for optimal compression.
+        let object_paths = index
+            .objects()
+            .iter()
+            .map(|o| build_loose_object_path(&self.path, o.checksum()))
+            .collect::<Vec<_>>();
+
+        // Compress all the object files.
+        let _ = batch::compress_files(
+            pack_writer,
+            &object_paths,
+            &batch::CompressionOptions {
+                window_log: opts.compression_window_log,
+                level: opts.compression_level,
+                num_workers: opts.num_workers,
+            },
+            reporter,
+        )?;
+
+        // Serialize the index
+        let mut index_bytes: Vec<u8> = vec![];
+        rmp_serde::encode::write(&mut index_bytes, &index).expect("Serialization failed!");
+
+        // And write it atomically to the packs/ dir.
+        let index_path = {
+            let mut index_path = pack_path.clone();
+            index_path.set_file_name(format!("{}.{}", pack_name, PACK_INDEX_EXTENSION));
+            index_path
+        };
+        write_file_atomic(index_bytes.as_slice(), &temp_dir, &index_path)?;
+
+        // Finally, move tha .pack file itself to the packs/ dir.
+        fs::rename(&temp_path, &pack_path)?;
+
+        Ok(())
+    }
+
+    /// Deletes ALL unpacked snapshots and objects.
+    pub fn remove_unpacked_all(&mut self) -> Result<(), Error> {
+        let mut unpacked_dir = self.path().join(&*Repository::data_dir());
+        unpacked_dir.push(UNPACKED_DIR);
+
+        match fs::remove_dir_all(&unpacked_dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            r => r,
+        }?;
         Ok(())
     }
 
@@ -511,43 +615,32 @@ impl Repository {
         from_entries: &[PackEntry],
         to_entries: &[PackEntry],
     ) -> (Vec<PackEntry>, Vec<PackEntry>) {
-        // Object cheksum to index in from_entries.
-        let checksum2fromidx: BTreeMap<_, _> = from_entries
+        // Create lookup based on path+checksum.
+        // The reason we're not using a `HashSet<PackEntry>` here is that
+        // we only care about the file path and checksum,
+        // but not, for example, the offset of the object in the pack file.
+        let from_lookup: HashMap<_, _> = from_entries
             .iter()
-            .enumerate()
-            .map(|(i, e)| (e.object_index().checksum(), i))
+            .map(|e| ((e.path(), e.object_index().checksum()), e))
             .collect();
-        let checksum2toidx: BTreeMap<_, _> = to_entries
+        let to_lookup: HashMap<_, _> = to_entries
             .iter()
-            .enumerate()
-            .map(|(i, e)| (e.object_index().checksum(), i))
+            .map(|e| ((e.path(), e.object_index().checksum()), e))
             .collect();
 
         let mut added = vec![];
         let mut removed = vec![];
 
-        // Check which from entries are missing in to_entries or under a different path,
-        // and mark them for removal
-        for (checksum, &from_idx) in &checksum2fromidx {
-            match checksum2toidx.get(checksum) {
-                Some(&to_idx) => {
-                    if from_entries[from_idx].path() != to_entries[to_idx].path() {
-                        removed.push(from_entries[from_idx].clone());
-                    }
-                }
-                None => removed.push(from_entries[from_idx].clone()),
+        // Check which "from" entries are missing in to_entries and mark them as removed
+        for (key, &entry) in &from_lookup {
+            if !to_lookup.contains_key(key) {
+                removed.push((*entry).clone());
             }
         }
-        // Check which to entries were added or moved,
-        // and add them for extraction
-        for (checksum, &to_idx) in &checksum2toidx {
-            match checksum2fromidx.get(checksum) {
-                Some(&from_idx) => {
-                    if from_entries[from_idx].path() != to_entries[to_idx].path() {
-                        added.push(to_entries[to_idx].clone());
-                    }
-                }
-                None => added.push(to_entries[to_idx].clone()),
+        // Check which "to" entries were added and mark them as added
+        for (key, &entry) in &to_lookup {
+            if !from_lookup.contains_key(key) {
+                added.push((*entry).clone());
             }
         }
 
@@ -583,6 +676,7 @@ impl Repository {
     fn write_loose_object(
         &self,
         mut reader: impl Read,
+        temp_dir: &Path,
         checksum: &ObjectChecksum,
     ) -> io::Result<()> {
         let obj_path = build_loose_object_path(&self.path, checksum);
@@ -594,7 +688,7 @@ impl Repository {
 
         // Write to disk
         fs::create_dir_all(obj_path.parent().unwrap())?;
-        write_file_atomic(&mut reader, &self.temp_dir(), &obj_path)?;
+        write_file_atomic(&mut reader, temp_dir, &obj_path)?;
         Ok(())
     }
 }

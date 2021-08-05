@@ -24,3 +24,7 @@ pub const UNPACKED_INDEX_FILE: &str = "unpacked.idx";
 pub const TEMP_DIR: &str = "trash";
 /// Reserved pack name used to indicate the unpacked set of snapshots.
 pub const UNPACKED_ID: &str = "unpacked";
+// 2^30 = 1024MiB window log
+pub const DEFAULT_WINDOW_LOG_MAX: u32 = 30;
+/// Valid pack headers have this value set in the [`PackHeader::magic`] field.
+pub const PACK_HEADER_MAGIC: u64 = 848629801635942891;

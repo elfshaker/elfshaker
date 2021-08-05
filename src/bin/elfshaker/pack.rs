@@ -52,6 +52,17 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let mut repo = open_repo_from_cwd()?;
     let mut index = repo.unpacked_index()?;
 
+    // Parse --frames
+    let frames: u32 = match matches.value_of("frames").unwrap().parse()? {
+        0 => {
+            let unpacked_size = index.objects().iter().map(|o| o.size()).sum();
+            let frames = get_frame_size_hint(unpacked_size);
+            info!("--frames=0: using suggested number of frames = {}", frames);
+            frames
+        }
+        n => n,
+    };
+
     // No point in creating an empty pack.
     if index.is_empty() {
         return Err("There are no unpacked snapshots!".into());
@@ -80,12 +91,15 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             // We don't expose the windowLog option yet.
             compression_window_log: DEFAULT_COMPRESSION_WINDOW_LOG,
             num_workers: threads,
+            num_frames: frames,
         },
         &reporter,
     )?;
 
     // Finally, delete the unpacked snapshots
     repo.remove_unpacked_all()?;
+
+    println!("Created pack '{}'", pack);
 
     Ok(())
 }
@@ -121,10 +135,30 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                     compression_level_range.end())))
                 .default_value("22")
         )
+        .arg(
+            Arg::with_name("frames")
+                .takes_value(true)
+                .long("frames")
+                .help(
+                    "The number of frames to emit in the pack file. \
+                    A lower number of frames limits the number of decompression \
+                    processes that can run concurrently. A higher number of \
+                    frames can result in poorer compression. Specify 0 to \
+                    auto-detect the appropriate number of frames to emit.")
+                .default_value("0")
+        )
 }
 
 /// Extends the lifetime of the string to 'static.
 /// The memory will only be reclaimed at process exit.
 fn leak_static_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
+}
+
+/// This is the built-in heuristic that tells us how many frames to use based on the data size.
+/// 1 frame / 512 MiB
+const FRAME_PER_DATA_SIZE: u64 = 512 * 1024 * 1024;
+fn get_frame_size_hint(unpacked_size: u64) -> u32 {
+    // Divide by FRAME_PER_DATA_SIZE, rounding up
+    ((unpacked_size + FRAME_PER_DATA_SIZE - 1) / FRAME_PER_DATA_SIZE) as u32
 }

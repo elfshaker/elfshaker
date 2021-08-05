@@ -247,6 +247,36 @@ test_pack_two_snapshots_object_sort_works() {
   fi
 }
 
+test_pack_two_snapshots_multiframe_works() {
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_ss1=$(cat ./foo ./bar | sha1sum)
+  # Store the two files in SS-1
+  "$elfshaker" update-index
+  "$elfshaker" store SS-1
+  # Modify the files
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_ss2=$(cat ./foo ./bar | sha1sum)
+  # Store the modified files in SS-2 and pack all into P-1
+  "$elfshaker" store SS-2
+  # When the number of frames is too large (> #objects), elfshaker should
+  # silently emit less frames and not crash
+  "$elfshaker" pack --frames 999 P-1
+  "$elfshaker" update-index
+  # Then extract from the pack and verify the checksums
+  "$elfshaker" extract --reset --verify -P P-1 SS-1
+  if [[ "$sha1_ss1" != $(cat ./foo ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+  "$elfshaker" extract --reset  --verify -P P-1 SS-2
+  if [[ "$sha1_ss2" != $(cat ./foo ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -282,6 +312,7 @@ main() {
   run_test test_pack_simple_works
   run_test test_pack_two_snapshots_works
   run_test test_pack_two_snapshots_object_sort_works
+  run_test test_pack_two_snapshots_multiframe_works
 }
 
 main "$@"

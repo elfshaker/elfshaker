@@ -43,8 +43,14 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     opts.set_reset(is_reset);
     opts.set_force(is_force);
 
-    if let Err(e) = repo.extract(new_head.clone(), opts) {
-        match e {
+    match repo.extract(new_head.clone(), opts) {
+        Ok(result) => {
+            println!("A \t{} files", result.added_file_count);
+            println!("D \t{} files", result.removed_file_count);
+            println!("M \t{} files", result.modified_file_count);
+            println!("Extracted '{}'", new_head);
+        }
+        Err(e) => match e {
             RepoError::PackError(PackError::SnapshotNotFound) => {
                 error!(
                     "Snapshot was expected to be available in {}, but was not found \
@@ -56,9 +62,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
                 error!("Some files in the repository have been removed or modified unexpectedly! \
                         You can use --force to skip this check, but this might result in DATA LOSS!");
             }
-            _ => {}
-        }
-        return Err(Box::new(e));
+            e => return Err(Box::new(e)),
+        },
     }
 
     Ok(())

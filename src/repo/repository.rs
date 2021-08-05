@@ -10,7 +10,7 @@ use std::{
     fs,
     fs::File,
     io,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -19,13 +19,14 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use walkdir::{DirEntry, WalkDir};
 
+use super::algo::partition_by_u64;
 use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
     create_temp_path, ensure_dir, ensure_file_writable, read_or_none, set_readonly,
     write_file_atomic,
 };
-use super::pack::{Pack, PackId, SnapshotId};
+use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::batch;
 use crate::log::measure_ok;
 use crate::packidx::{ObjectChecksum, ObjectIndex, PackEntry, PackError, PackIndex};
@@ -88,6 +89,14 @@ pub struct PackOptions {
     pub compression_window_log: u32,
     pub compression_level: i32,
     pub num_workers: u32,
+    pub num_frames: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExtractResult {
+    pub modified_file_count: u32,
+    pub added_file_count: u32,
+    pub removed_file_count: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -275,7 +284,11 @@ impl Repository {
     /// # Arguments
     ///
     /// * `snapshot_id` - The snapshot to extract.
-    pub fn extract(&mut self, snapshot_id: SnapshotId, opts: ExtractOptions) -> Result<(), Error> {
+    pub fn extract(
+        &mut self,
+        snapshot_id: SnapshotId,
+        opts: ExtractOptions,
+    ) -> Result<ExtractResult, Error> {
         // Open the pack and find the snapshot specified in SnapshotId.
         let source_pack;
         let mut unpacked_index = None;
@@ -323,22 +336,11 @@ impl Repository {
         let (updated_paths, removed_paths) = {
             let new_paths: HashSet<_> = new_entries.iter().map(|e| e.path()).collect();
             let old_paths: HashSet<_> = old_entries.iter().map(|e| e.path()).collect();
-            // Paths which will
+            // Paths which will be deleted
             let updated: Vec<_> = new_paths.intersection(&old_paths).copied().collect();
             let removed: Vec<_> = old_paths.difference(&new_paths).copied().collect();
             (updated, removed)
         };
-
-        if let Some(head) = self.head() {
-            info!(
-                "Extract {} -> {} (+{} files, -{} files, *{} files)",
-                head,
-                snapshot_id,
-                new_entries.len() - updated_paths.len(),
-                removed_paths.len(),
-                updated_paths.len()
-            );
-        }
 
         let mut path_buf = PathBuf::new();
         for path in &removed_paths {
@@ -366,13 +368,23 @@ impl Repository {
             }
         }
 
+        info!(
+            "Checksum verification is {}!",
+            if opts.verify() { "on (slower)" } else { "off" }
+        );
+
         if let Some(pack) = source_pack {
             pack.extract(&new_entries, &self.path, opts.verify())?;
         } else {
             self.extract_from_unpacked(&new_entries, opts.verify())?;
         }
         self.update_head(&snapshot_id)?;
-        Ok(())
+
+        Ok(ExtractResult {
+            added_file_count: (new_entries.len() - updated_paths.len()) as u32,
+            removed_file_count: removed_paths.len() as u32,
+            modified_file_count: updated_paths.len() as u32,
+        })
     }
     /// The name of the directory containing the elfshaker repository data.
     pub fn data_dir() -> Cow<'static, str> {
@@ -512,28 +524,61 @@ impl Repository {
         ensure_dir(&temp_dir)?;
         let temp_path = create_temp_path(&temp_dir);
 
-        // And a writer to that temporary file.
-        let pack_writer = io::BufWriter::new(File::create(&temp_path)?);
-
         // Gather a list of all objects to compress.
         // The `index.objects()` list should be pre-sorted for optimal compression.
-        let object_paths = index
-            .objects()
-            .iter()
-            .map(|o| build_loose_object_path(&self.path, o.checksum()))
-            .collect::<Vec<_>>();
+        let object_partitions =
+            partition_by_u64(index.objects(), opts.num_frames, |o| o.size() as u64);
 
-        // Compress all the object files.
-        let _ = batch::compress_files(
-            pack_writer,
-            &object_paths,
-            &batch::CompressionOptions {
+        info!("Creating {} frames...", object_partitions.len());
+
+        let mut frames = vec![];
+        let mut frame_bufs = vec![];
+
+        for (frame_index, objects) in object_partitions.iter().enumerate() {
+            let paths = objects
+                .iter()
+                .map(|o| build_loose_object_path(self.path(), o.checksum()))
+                .collect::<Vec<_>>();
+
+            let mut buf = vec![];
+            let compress_opts = batch::CompressionOptions {
                 window_log: opts.compression_window_log,
                 level: opts.compression_level,
                 num_workers: opts.num_workers,
-            },
-            reporter,
-        )?;
+            };
+            // Compress all the object files.
+            let (decompressed_size, compressed_buffer) =
+                batch::compress_files(&mut buf, &paths, &compress_opts, &ProgressReporter::dummy())
+                    .map(move |bytes| (bytes, buf))?;
+
+            frames.push(PackFrame {
+                frame_size: compressed_buffer.len() as u64,
+                decompressed_size,
+            });
+            frame_bufs.push(compressed_buffer);
+
+            // Number of processed frames
+            let done = frame_index + 1;
+            // And report the change.
+            reporter.checkpoint(done, Some(object_partitions.len() - done));
+        }
+
+        // Report that all frames are done.
+        reporter.checkpoint(object_partitions.len(), Some(0));
+
+        // Create and serialize header
+        let header = PackHeader::new(frames);
+        let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
+
+        // And a writer to that temporary file.
+        let mut pack_writer = io::BufWriter::new(File::create(&temp_path)?);
+        // Write header and frames
+        write_skippable_frame(&mut pack_writer, &header_bytes)?;
+        for frame_buf in frame_bufs {
+            pack_writer.write_all(&frame_buf)?;
+        }
+        pack_writer.flush()?;
+        drop(pack_writer);
 
         // Serialize the index
         let mut index_bytes: Vec<u8> = vec![];

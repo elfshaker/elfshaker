@@ -20,6 +20,7 @@ use zstd::{Decoder, Encoder};
 
 use elfshaker::packidx::{ObjectIndex, PackError, PackIndex, PackedFile, PackedFileList, Snapshot};
 use elfshaker::pathidx::{PathError, PathIndex, PathTree};
+use elfshaker::repo::{partition_by_u64, write_skippable_frame, PackFrame, PackHeader};
 
 #[derive(Clone, Debug)]
 struct InputFileEntry {
@@ -147,9 +148,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pack_index = PackIndex::new(tree, object_index, snapshots);
     rmp_serde::encode::write(&mut pack_index_file, &pack_index)?;
 
-    let pack_file = File::create(output)?;
-    let object_paths = objects.iter().map(|x| &x.content_path).collect::<Vec<_>>();
-    create_pack(pack_file, compression_level, &object_paths)?;
+    let object_path_partitions: Vec<Vec<_>> = partition_by_u64(&objects, 16, |o| o.size as u64)
+        .into_iter()
+        .map(|x| x.into_iter().map(|o| &o.content_path).collect())
+        .collect();
+
+    let frame_bufs: Vec<_> = object_path_partitions
+        .into_iter()
+        .map(|p| {
+            let mut buf = vec![];
+            let decompressed_size = create_pack_frame(&mut buf, compression_level, &p)?;
+            Ok((buf, decompressed_size))
+        })
+        .collect::<io::Result<_>>()?;
+
+    let header = PackHeader::new(
+        frame_bufs
+            .iter()
+            .map(|(compressed_buffer, decompressed_size)| PackFrame {
+                frame_size: compressed_buffer.len() as u64,
+                decompressed_size: *decompressed_size,
+            })
+            .collect(),
+    );
+    let header_bytes = rmp_serde::encode::to_vec(&header)?;
+
+    let mut output_file = std::io::BufWriter::new(File::create(&output)?);
+    // Write header and frames
+    write_skippable_frame(&mut output_file, &header_bytes)?;
+    for (frame_buf, _) in frame_bufs {
+        output_file.write_all(&frame_buf)?;
+    }
+    output_file.flush()?;
+    drop(output_file);
 
     // Validation
     if let Some(validate_tag) = validate_tag {
@@ -330,7 +361,11 @@ fn create_snapshots_from_paths(
 }
 
 /// Concats the contents of the files at the provided paths and Zstandard compresses it.
-fn create_pack<W, P>(pack_file: W, compression_level: i32, objects_paths: &[P]) -> io::Result<()>
+fn create_pack_frame<W, P>(
+    pack_file: W,
+    compression_level: i32,
+    objects_paths: &[P],
+) -> io::Result<u64>
 where
     W: Write,
     P: AsRef<Path>,
@@ -339,8 +374,8 @@ where
     // NbWorkers requires the zstdmt features to be enabled.
     encoder.set_parameter(CParameter::NbWorkers(num_cpus::get_physical() as u32))?;
     encoder.set_parameter(CParameter::EnableLongDistanceMatching(true))?;
-    // 2^30 = 1024MiB window log
-    encoder.set_parameter(CParameter::WindowLog(30))?;
+    // 2^27 = 128MiB window log
+    encoder.set_parameter(CParameter::WindowLog(27))?;
 
     println!("Writing pack file...");
 
@@ -363,7 +398,7 @@ where
     encoder.finish()?;
     println!("Processed {} bytes!", processed_bytes);
 
-    Ok(())
+    Ok(processed_bytes)
 }
 
 fn walk_follow_symlinks<P: AsRef<Path>>(

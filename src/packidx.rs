@@ -51,7 +51,7 @@ pub const LOOSE_OBJECT_OFFSET: u64 = std::u64::MAX;
 /// Contains a size and an offset (relative to the decompressed stream).
 ///
 /// The checksum can be used to validate the contents of the object.
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
 pub struct ObjectIndex {
     checksum: ObjectChecksum,
     offset: u64,
@@ -257,7 +257,7 @@ impl Snapshot {
 
 /// Holds a path and object index, enough information to
 /// extract any packed file. This is a useful representation to have at runtime.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PackEntry {
     path: OsString,
     object_index: ObjectIndex,
@@ -315,32 +315,35 @@ impl PackIndex {
     }
 
     pub fn find_snapshot(&self, tag: &str) -> Option<Snapshot> {
-        let first_snapshot = self.snapshots.first()?;
-        if first_snapshot.tag == tag {
-            if matches!(first_snapshot.list, PackedFileList::Delta(_)) {
-                panic!("{:?}", PackError::CompleteListNeeded);
-            }
-            return Some(first_snapshot.clone());
+        let snapshot_idx = self.snapshots.iter().position(|s| s.tag == tag)?;
+        let base_idx = match self.snapshots[0..=snapshot_idx]
+            .iter()
+            .rposition(|s| matches!(s.list, PackedFileList::Complete(_)))
+        {
+            Some(x) => x,
+            None => panic!("{:?}", PackError::CompleteListNeeded),
+        };
+
+        let base_snapshot = &self.snapshots[base_idx];
+        if base_snapshot.tag == tag {
+            return Some(base_snapshot.clone());
         }
-        let mut set = Snapshot::create_set(first_snapshot).unwrap();
-        for snapshot in self.snapshots.iter().skip(1) {
+
+        let mut set = Snapshot::create_set(base_snapshot).unwrap();
+
+        for snapshot in self.snapshots[base_idx + 1..=snapshot_idx].iter() {
             match snapshot.list {
-                PackedFileList::Complete(_) => {
-                    set = snapshot.create_set().unwrap();
-                }
                 PackedFileList::Delta(ref d) => {
                     Snapshot::apply_changes(&mut set, d);
                 }
-            }
-            if snapshot.tag == tag {
-                return Some(Snapshot {
-                    tag: tag.into(),
-                    list: PackedFileList::Complete(set.into_iter().collect()),
-                });
+                PackedFileList::Complete(_) => unreachable!(),
             }
         }
 
-        None
+        Some(Snapshot {
+            tag: tag.into(),
+            list: PackedFileList::Complete(set.into_iter().collect()),
+        })
     }
 
     /// Converts all snapshots' file lists (but the first) to the delta/changeset format.

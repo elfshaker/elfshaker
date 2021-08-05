@@ -20,6 +20,8 @@ pub enum Error {
     CorruptHead,
     /// The .pack.idx is corrupt
     CorruptPackIndex,
+    /// The .pack file is corrupt.
+    CorruptPack,
     /// Multiple or none snapshots match the specified description
     AmbiguousSnapshotMatch,
     /// The working directory contains unexpected files
@@ -40,6 +42,9 @@ impl Display for Error {
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
             Self::CorruptRepositoryIndex => {
                 write!(f, "The repository index is corrupt or missing!")
+            }
+            Self::CorruptPack => {
+                write!(f, "The pack file is corrupt!")
             }
             Self::CorruptPackIndex => write!(f, "The pack index is corrupt!"),
             Self::AmbiguousSnapshotMatch => {

@@ -10,6 +10,8 @@ pub struct ProgressReporter<'a> {
     callback: Option<Box<dyn Fn(&Checkpoint) + Sync + 'a>>,
 }
 
+unsafe impl<'a> Send for ProgressReporter<'a> {}
+
 impl<'a> ProgressReporter<'a> {
     pub fn new<F>(f: F) -> Self
     where

@@ -14,11 +14,12 @@ use std::{fmt::Display, str::FromStr};
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 
-use log::info;
+use log::{info, warn};
 
 use zstd::stream::raw::DParameter;
 use zstd::Decoder;
 
+use super::algo::run_in_parallel;
 use super::constants::{
     DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC, PACK_INDEX_EXTENSION,
     UNPACKED_ID,
@@ -438,11 +439,13 @@ impl Pack {
     /// * `entries` - The list of entries to extract. These *must* be entries contained in the pack index.
     /// * `output_dir` - The directory relative to which the files will be extracted.
     /// * `verify` - Enable/disable checksum verification.
+    #[allow(unused_mut)]
     pub(crate) fn extract<P>(
         mut self,
         entries: &[PackEntry],
         output_dir: P,
         verify: bool,
+        num_workers: u32,
     ) -> Result<(), Error>
     where
         P: AsRef<Path>,
@@ -452,7 +455,15 @@ impl Pack {
         }
 
         let num_frames = self.header.frames.len();
+        assert_ne!(0, num_workers);
         assert_ne!(0, num_frames);
+        if num_frames < num_workers as usize {
+            warn!(
+                "Requested {} workers, but there are only {} frames!",
+                num_workers, num_frames
+            );
+        }
+        let num_workers = std::cmp::min(num_workers, num_frames as u32);
 
         // Assign entries to the frames they reside in.
         // The resulting entries will have offsets relative to their containing frame.
@@ -473,10 +484,7 @@ impl Pack {
             bytes_to_decompress as f64 / 1024f64 / 1024f64
         );
 
-        // Record start time
-        let start_time = std::time::Instant::now();
-        // Process the frames
-        let results = self
+        let tasks = self
             .frame_readers
             .into_iter()
             .zip(frames.into_iter())
@@ -484,15 +492,33 @@ impl Pack {
             .filter(|(_, entries)| !entries.is_empty())
             .map(|(frame_reader, entries)| {
                 let output_dir: PathBuf = output_dir.as_ref().into();
-                extract_files(frame_reader, &entries, output_dir, verify)
+                move || extract_files(frame_reader, &entries, output_dir, verify)
             });
+
+        // Record start time
+        let start_time = std::time::Instant::now();
+        // Run in parallel
+        let results = run_in_parallel(tasks, num_workers);
         // Collect stats
-        let stats = results.sum::<Result<ExtractStats, Error>>()?;
+        let stats = results
+            .sum::<Result<ExtractStats, Error>>()?
+            // Convert the statistics into fractions, since summing the time per thread doesn't make much sense.
+            .fractions();
         // Log statistics about the decompression performance
         let real_time = std::time::Instant::now() - start_time;
         info!(
-            "Decompression statistics ({:?})\n\tSeeking: {:.1}s\n\tObject decompression: {:.1}s\n\tVerification: {:.1}s\n\tWriting to disk: {:.1}s\n\tOther: {:.1}s",
-            real_time, stats.seek_time, stats.object_time, stats.verify_time, stats.write_time, stats.other_time(),
+            "Decompression statistics ({:?})\n\
+            \tSeeking: {:.1}%\n\
+            \tObject decompression: {:.1}%\n\
+            \tVerification: {:.1}%\n\
+            \tWriting to disk: {:.1}%\n\
+            \tOther: {:.1}%",
+            real_time,
+            stats.seek_time * 100f64,
+            stats.object_time * 100f64,
+            stats.verify_time * 100f64,
+            stats.write_time * 100f64,
+            stats.other_time() * 100f64,
         );
         Ok(())
     }
@@ -599,6 +625,17 @@ struct ExtractStats {
 impl ExtractStats {
     fn other_time(&self) -> f64 {
         self.total_time - (self.seek_time + self.object_time + self.verify_time + self.write_time)
+    }
+    /// Convert the statistics into fractions, taken relative to `self.total_time`.
+    fn fractions(&self) -> Self {
+        let norm_factor = 1f64 / self.total_time;
+        Self {
+            total_time: norm_factor * self.total_time,
+            seek_time: norm_factor * self.seek_time,
+            object_time: norm_factor * self.object_time,
+            verify_time: norm_factor * self.verify_time,
+            write_time: norm_factor * self.write_time,
+        }
     }
 }
 

@@ -19,7 +19,7 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use walkdir::{DirEntry, WalkDir};
 
-use super::algo::partition_by_u64;
+use super::algo::{partition_by_u64, run_in_parallel};
 use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
@@ -41,6 +41,8 @@ pub struct ExtractOptions {
     reset: bool,
     /// Toggle checks guarding against overwriting user-modified files.
     force: bool,
+    /// Number of decompression threads (this is an upper-limit).
+    num_workers: u32,
 }
 
 impl ExtractOptions {
@@ -68,6 +70,14 @@ impl ExtractOptions {
     pub fn set_force(&mut self, value: bool) {
         self.force = value;
     }
+    /// Number of decompression threads (this is an upper-limit).
+    pub fn num_workers(&self) -> u32 {
+        self.num_workers
+    }
+    /// Number of decompression threads (this is an upper-limit).
+    pub fn set_num_workers(&mut self, value: u32) {
+        self.num_workers = value;
+    }
 }
 
 impl Default for ExtractOptions {
@@ -79,6 +89,8 @@ impl Default for ExtractOptions {
             reset: false,
             // Safety checks on by default is safer :)
             force: false,
+            // Default to single-thread decompression.
+            num_workers: 1,
         }
     }
 }
@@ -374,7 +386,7 @@ impl Repository {
         );
 
         if let Some(pack) = source_pack {
-            pack.extract(&new_entries, &self.path, opts.verify())?;
+            pack.extract(&new_entries, &self.path, opts.verify(), opts.num_workers())?;
         } else {
             self.extract_from_unpacked(&new_entries, opts.verify())?;
         }
@@ -529,42 +541,61 @@ impl Repository {
         let object_partitions =
             partition_by_u64(index.objects(), opts.num_frames, |o| o.size() as u64);
 
-        info!("Creating {} frames...", object_partitions.len());
+        let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
+            / object_partitions.len() as u32;
+
+        let task_opts = &batch::CompressionOptions {
+            window_log: opts.compression_window_log,
+            level: opts.compression_level,
+            num_workers: workers_per_task,
+        };
+
+        // Keep count of done compression tasks
+        let done_task_count = std::sync::atomic::AtomicUsize::new(0);
+        let total_task_count = object_partitions.len();
+
+        info!(
+            "Starting {} compression tasks, processing {} at a time using {} worker threads for each...",
+            total_task_count, opts.num_workers, workers_per_task
+        );
+
+        let tasks = object_partitions.into_iter().map(|objects| {
+            let base_path = self.path.to_path_buf();
+            let done_task_count_ref = &done_task_count;
+            move || {
+                let paths = objects
+                    .iter()
+                    .map(|o| build_loose_object_path(&base_path, o.checksum()))
+                    .collect::<Vec<_>>();
+
+                let mut buf = vec![];
+                // Compress all the object files.
+                let r =
+                    batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
+                        .map(move |bytes| (bytes, buf));
+                // Update done count.
+                let done =
+                    done_task_count_ref.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+                // And report the change.
+                reporter.checkpoint(done, Some(total_task_count - done));
+                r
+            }
+        });
 
         let mut frames = vec![];
         let mut frame_bufs = vec![];
 
-        for (frame_index, objects) in object_partitions.iter().enumerate() {
-            let paths = objects
-                .iter()
-                .map(|o| build_loose_object_path(self.path(), o.checksum()))
-                .collect::<Vec<_>>();
-
-            let mut buf = vec![];
-            let compress_opts = batch::CompressionOptions {
-                window_log: opts.compression_window_log,
-                level: opts.compression_level,
-                num_workers: opts.num_workers,
-            };
-            // Compress all the object files.
-            let (decompressed_size, compressed_buffer) =
-                batch::compress_files(&mut buf, &paths, &compress_opts, &ProgressReporter::dummy())
-                    .map(move |bytes| (bytes, buf))?;
-
+        for frame_result in run_in_parallel(tasks, opts.num_workers) {
+            let (decompressed_size, compressed_buffer) = frame_result?;
             frames.push(PackFrame {
                 frame_size: compressed_buffer.len() as u64,
                 decompressed_size,
             });
             frame_bufs.push(compressed_buffer);
-
-            // Number of processed frames
-            let done = frame_index + 1;
-            // And report the change.
-            reporter.checkpoint(done, Some(object_partitions.len() - done));
         }
 
-        // Report that all frames are done.
-        reporter.checkpoint(object_partitions.len(), Some(0));
+        // Report that all compression tasks are done.
+        reporter.checkpoint(total_task_count, Some(0));
 
         // Create and serialize header
         let header = PackHeader::new(frames);

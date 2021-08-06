@@ -4,7 +4,7 @@
 use std::{error::Error, str::FromStr};
 
 use clap::{App, Arg, ArgMatches};
-use log::{error, warn};
+use log::{error, info, warn};
 
 use super::utils::{find_pack_with_snapshot, open_repo_from_cwd};
 use elfshaker::packidx::PackError;
@@ -18,6 +18,19 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let is_reset = matches.is_present("reset");
     let is_verify = matches.is_present("verify");
     let is_force = matches.is_present("force");
+
+    // Parse --threads
+    let threads: u32 = match matches.value_of("threads").unwrap().parse()? {
+        0 => {
+            let phys_cores = num_cpus::get_physical();
+            info!(
+                "-T|--threads=0: defaulting to number of physical cores (OS reports {} cores)",
+                phys_cores
+            );
+            phys_cores as u32
+        }
+        n => n,
+    };
 
     let mut repo = open_repo_from_cwd()?;
 
@@ -42,6 +55,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     opts.set_verify(is_verify);
     opts.set_reset(is_reset);
     opts.set_force(is_force);
+    opts.set_num_workers(threads);
 
     match repo.extract(new_head.clone(), opts) {
         Ok(result) => {
@@ -102,4 +116,11 @@ pub(crate) fn get_app() -> App<'static, 'static> {
         .arg(Arg::with_name("force")
                 .long("force")
                 .help("Disables certain runtime checks that aim to detect unexpected file modification and prevent data loss."))
+        .arg(Arg::with_name("threads")
+                .short("T")
+                .long("threads")
+                .takes_value(true)
+                .help("Use the specified number of worker threads for decompression. \
+                      The number of threads used is proportional to the memory needed for decompression.")
+                .default_value("0"))
 }

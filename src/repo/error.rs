@@ -18,6 +18,8 @@ pub enum Error {
     CorruptRepositoryIndex,
     /// Bad elfshaker_data/HEAD (missing HEAD is okay and means that nothing has been extracted so far)
     CorruptHead,
+    /// The references snapshot/pack is missing.
+    BrokenHeadRef,
     /// The .pack.idx is corrupt
     CorruptPackIndex,
     /// The .pack file is corrupt.
@@ -40,6 +42,7 @@ impl Display for Error {
             Self::PathError(patherr) => patherr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
+            Self::BrokenHeadRef => write!(f, "The pack or snapshot referenced by HEAD is missing!"),
             Self::CorruptRepositoryIndex => {
                 write!(f, "The repository index is corrupt or missing!")
             }

@@ -76,6 +76,14 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
                 error!("Some files in the repository have been removed or modified unexpectedly! \
                         You can use --force to skip this check, but this might result in DATA LOSS!");
             }
+            RepoError::BrokenHeadRef => {
+                error!(
+                    "The index for the current snapshot '{}' could not be found! \
+                    You can use --reset to extract all files from '{}', instead of attempting an incremental update.",
+                    repo.head().as_ref().unwrap(),
+                    new_head
+                )
+            }
             e => return Err(Box::new(e)),
         },
     }

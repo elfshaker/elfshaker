@@ -323,7 +323,13 @@ impl Repository {
                 Self::compute_entry_diff(&head_entries, &entries)
             } else {
                 let head_pack = if let PackId::Packed(name) = head.pack() {
-                    Some(self.open_pack(name)?)
+                    Some(self.open_pack(name).map_err(|e| {
+                        if matches!(e, Error::PackNotFound) {
+                            Error::BrokenHeadRef
+                        } else {
+                            e
+                        }
+                    })?)
                 } else {
                     None
                 };
@@ -335,7 +341,13 @@ impl Repository {
                     }
                     &unpacked_index.as_ref().unwrap()
                 };
-                let head_entries = head_index.entries_from_snapshot(head.tag())?;
+                let head_entries = head_index.entries_from_snapshot(head.tag()).map_err(|e| {
+                    if matches!(e, PackError::SnapshotNotFound) {
+                        Error::BrokenHeadRef
+                    } else {
+                        Error::PackError(e)
+                    }
+                })?;
                 Self::compute_entry_diff(&head_entries, &entries)
             }
         } else {

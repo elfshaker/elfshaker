@@ -45,6 +45,7 @@ fn get_app() -> App<'static, 'static> {
         .arg(
             Arg::with_name("verbose")
                 .long("verbose")
-                .help("Enables verbose description of the execution process."),
+                .help("Enables verbose description of the execution process.")
+                .global(true),
         )
 }

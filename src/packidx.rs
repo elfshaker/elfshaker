@@ -382,23 +382,7 @@ impl PackIndex {
         };
 
         // Process the snapshots, updating the object indices.
-        for snapshot in &mut self.snapshots {
-            match snapshot.list {
-                PackedFileList::Complete(ref mut files) => {
-                    for file in files {
-                        update_file_index(file);
-                    }
-                }
-                PackedFileList::Delta(ref mut changeset) => {
-                    for file in &mut changeset.added {
-                        update_file_index(file);
-                    }
-                    for file in &mut changeset.removed {
-                        update_file_index(file);
-                    }
-                }
-            };
-        }
+        map_entries_in_place(&mut self.snapshots, update_file_index);
 
         Ok(())
     }
@@ -437,21 +421,20 @@ impl PackIndex {
     }
 
     /// Create and add a new snapshot compatible with the unpacked
-    /// index format using the list of tuples of (filepath, checksum, filesize).
+    /// index format. The list of [`PackEntry`] is the files to record in the snapshot.
     pub fn push_snapshot(&mut self, tag: &str, input: &[PackEntry]) -> Result<(), PackError> {
         if self.snapshots().iter().any(|s| s.tag == tag) {
             return Err(PackError::SnapshotAlreadyExists);
         }
 
-        // Expand all snapshots into String -> [PackEntry]
-        let mut snapshots: Vec<(String, Vec<PackEntry>)> = self
-            .snapshots
-            .iter()
-            .map(|s| Ok((s.tag.clone(), self.entries_from_snapshot(&s.tag)?)))
-            .collect::<Result<_, PackError>>()?;
+        let (new_tree, old2new) = extend_tree(self.tree.clone(), input.iter().map(|e| e.path()))?;
+        let rev_lookup: HashMap<_, _> = new_tree
+            .create_lookup()
+            .into_iter()
+            .map(|(a, b)| (b, a))
+            .collect();
 
-        let existing_objects: HashSet<&_> = self.objects().iter().map(|o| &o.checksum).collect();
-
+        let existing_objects: HashSet<&_> = self.objects.iter().map(|o| &o.checksum).collect();
         // Compute and extend with the set of objects which are not available in the unpacked storage
         let new_objects: Vec<_> = input
             .iter()
@@ -459,66 +442,39 @@ impl PackIndex {
             .map(|x| x.object_index().clone())
             .collect();
 
-        // Operating on a clone is safer, since the below operation might fail half-way.
-        // If we were extending self.tree directly, a failure would corrupt the tree.
-        let mut new_tree = self.tree.clone();
-        for path in input.iter().map(|e| e.path()) {
-            new_tree.create_file(path).map_err(PackError::PathError)?;
-        }
-        snapshots.push((tag.to_owned(), input.into()));
-        let path_lookup = new_tree
-            .create_lookup()
-            .into_iter()
-            .map(|(i, p)| (p, i))
-            .collect();
-        let object_lookup: HashMap<ObjectChecksum, u32> = self
+        // Add the new set of objects.
+        self.objects.extend_from_slice(&new_objects);
+
+        let object_indices: HashMap<_, _> = self
             .objects
             .iter()
-            .chain(new_objects.iter())
             .enumerate()
-            .map(|(i, o)| (*o.checksum(), i as u32))
+            .map(|(i, o)| (o.checksum(), i))
             .collect();
-        let new_snapshots = self.to_snapshots(&path_lookup, &object_lookup, &snapshots)?;
 
+        let files: Vec<_> = input
+            .iter()
+            .map(|e| {
+                PackedFile::new(
+                    rev_lookup[e.path()],
+                    object_indices[e.object_index().checksum()] as u32,
+                )
+            })
+            .collect();
+
+        // Add the new set of objects
         self.objects.extend_from_slice(&new_objects);
-        self.snapshots = new_snapshots;
+        // Update the path indices of the entries in the old snapshots
+        map_entries_in_place(&mut self.snapshots, |f| {
+            f.tree_index = old2new[&f.tree_index]
+        });
+        // Finally, push the new snapshot
+        self.snapshots
+            .push(Snapshot::new(tag, PackedFileList::Complete(files)));
+        // And replace the path tree
         self.tree = new_tree;
 
         Ok(())
-    }
-
-    fn to_snapshots(
-        &self,
-        path_lookup: &HashMap<OsString, u32>,
-        object_lookup: &HashMap<ObjectChecksum, u32>,
-        snapshots: &[(String, Vec<PackEntry>)],
-    ) -> Result<Vec<Snapshot>, PackError> {
-        snapshots
-            .iter()
-            .map(|s| {
-                let list =
-                    s.1.iter()
-                        .map(|e| self.entry_to_packed_file(e, path_lookup, object_lookup))
-                        .collect::<Result<Vec<_>, PackError>>()?;
-                Ok(Snapshot::new(&s.0, PackedFileList::Complete(list)))
-            })
-            .collect::<Result<Vec<Snapshot>, PackError>>()
-    }
-
-    /// Converts between the [`PackEntry`] (runtime) and [`PackedFile`] (on-disk) representation.
-    fn entry_to_packed_file(
-        &self,
-        entry: &PackEntry,
-        path_lookup: &HashMap<OsString, u32>,
-        object_lookup: &HashMap<ObjectChecksum, u32>,
-    ) -> Result<PackedFile, PackError> {
-        let tree_index = path_lookup
-            .get(entry.path())
-            .ok_or(PackError::PathNotFound)?;
-        let object_index = object_lookup
-            .get(entry.object_index().checksum())
-            .ok_or(PackError::ObjectNotFound)?;
-        Ok(PackedFile::new(*tree_index, *object_index))
     }
 }
 
@@ -539,6 +495,64 @@ impl fmt::Debug for PackIndex {
         };
         fmt::Debug::fmt(&index, f)
     }
+}
+
+/// Update the entries in the snapshots by applying the provided function.
+fn map_entries_in_place<F>(snapshots: &mut [Snapshot], f: F)
+where
+    F: Fn(&mut PackedFile),
+{
+    for snapshot in snapshots {
+        match snapshot.list {
+            PackedFileList::Complete(ref mut files) => {
+                for file in files {
+                    f(file);
+                }
+            }
+            PackedFileList::Delta(ref mut changeset) => {
+                for file in &mut changeset.added {
+                    f(file);
+                }
+                for file in &mut changeset.removed {
+                    f(file);
+                }
+            }
+        };
+    }
+}
+
+/// Adds the given paths to the [`PathTree`].
+/// Also returns a [`HashMap<u32, u32>`] that can be used to determine how the existing indices changed.
+fn extend_tree<I, P>(
+    mut tree: PathTree,
+    paths: I,
+) -> Result<(PathTree, HashMap<u32, u32>), PackError>
+where
+    I: Iterator<Item = P>,
+    P: AsRef<OsStr>,
+{
+    let original_lookup = tree.create_lookup();
+    for path in paths {
+        tree.create_file(path.as_ref())
+            .map_err(PackError::PathError)?;
+    }
+    // We need to run new_tree.update_index() after mutation, before any read operations
+    tree.update_index();
+
+    // Maps the updated paths to the new indexes
+    let new_rev_lookup: HashMap<_, u32> = tree
+        .create_lookup()
+        .into_iter()
+        .map(|(i, p)| (p, i))
+        .collect();
+
+    // Now, we need to figure out how to map the old paths to new_paths
+    let old2new: HashMap<u32, u32> = original_lookup
+        .into_iter()
+        .map(|(old_idx, path)| (old_idx, new_rev_lookup[&path]))
+        .collect();
+
+    Ok((tree, old2new))
 }
 
 /// Transforms the input sequence using the specified indices.

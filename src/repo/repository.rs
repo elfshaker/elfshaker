@@ -132,6 +132,11 @@ impl RepositoryIndex {
             .unwrap_or(&[])
     }
 
+    /// Returns the names of the packs containing the snapshot.
+    pub fn available_snapshots(&self) -> Cow<[&str]> {
+        self.snapshots.keys().map(|tag| &tag as &str).collect()
+    }
+
     /// The list of known packs containing at least 1 snapshot.
     pub fn available_packs(&self) -> Cow<Vec<PackId>> {
         // Derive the pack names from the index

@@ -2,6 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 mod extract;
+mod find;
 mod list;
 mod pack;
 mod show;
@@ -40,6 +41,7 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
         (list::SUBCOMMAND, Some(matches)) => list::run(matches),
         (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
         (show::SUBCOMMAND, Some(matches)) => show::run(matches),
+        (find::SUBCOMMAND, Some(matches)) => find::run(matches),
         _ => {
             app.print_long_help()?;
             println!();
@@ -56,6 +58,7 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(list::get_app())
         .subcommand(pack::get_app())
         .subcommand(show::get_app())
+        .subcommand(find::get_app())
         .arg(
             Arg::with_name("verbose")
                 .long("verbose")

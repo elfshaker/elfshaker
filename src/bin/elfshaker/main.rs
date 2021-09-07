@@ -4,6 +4,7 @@
 mod extract;
 mod list;
 mod pack;
+mod show;
 mod store;
 mod update_index;
 mod utils;
@@ -38,6 +39,7 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
         (store::SUBCOMMAND, Some(matches)) => store::run(matches),
         (list::SUBCOMMAND, Some(matches)) => list::run(matches),
         (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
+        (show::SUBCOMMAND, Some(matches)) => show::run(matches),
         _ => {
             app.print_long_help()?;
             println!();
@@ -53,6 +55,7 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(store::get_app())
         .subcommand(list::get_app())
         .subcommand(pack::get_app())
+        .subcommand(show::get_app())
         .arg(
             Arg::with_name("verbose")
                 .long("verbose")

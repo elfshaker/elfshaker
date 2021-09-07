@@ -392,16 +392,7 @@ impl Repository {
             }
         }
 
-        info!(
-            "Checksum verification is {}!",
-            if opts.verify() { "on (slower)" } else { "off" }
-        );
-
-        if let Some(pack) = source_pack {
-            pack.extract(&new_entries, &self.path, opts.verify(), opts.num_workers())?;
-        } else {
-            self.extract_from_unpacked(&new_entries, opts.verify())?;
-        }
+        self.extract_entries(source_pack, &new_entries, self.path.clone(), opts)?;
         self.update_head(&snapshot_id)?;
 
         Ok(ExtractResult {
@@ -410,6 +401,33 @@ impl Repository {
             modified_file_count: updated_paths.len() as u32,
         })
     }
+
+    /// Extract the specified entries to a given path.
+    ///
+    /// # Arguments
+    ///
+    /// * `pack` - The pack containing the entries. If [`None`], entries will be
+    ///     assumed to be unpacked.
+    /// * `entries` - The list of entries to extract.
+    /// * `path` - The destination path.
+    /// * `verify` - Set to true to verify object checksums after extraction.
+    pub fn extract_entries<P>(
+        &mut self,
+        pack: Option<Pack>,
+        entries: &[PackEntry],
+        path: P,
+        opts: ExtractOptions,
+    ) -> Result<(), Error>
+    where
+        P: AsRef<Path>,
+    {
+        if let Some(pack) = pack {
+            pack.extract(&entries, path.as_ref(), opts.verify(), opts.num_workers())
+        } else {
+            self.extract_from_unpacked(&entries, path.as_ref(), opts.verify())
+        }
+    }
+
     /// The name of the directory containing the elfshaker repository data.
     pub fn data_dir() -> Cow<'static, str> {
         Cow::Borrowed(REPO_DIR)
@@ -666,12 +684,17 @@ impl Repository {
         self.head = Some(snapshot_id.clone());
         Ok(())
     }
-    fn extract_from_unpacked(&mut self, entries: &[PackEntry], verify: bool) -> Result<(), Error> {
+    fn extract_from_unpacked(
+        &mut self,
+        entries: &[PackEntry],
+        path: &Path,
+        verify: bool,
+    ) -> Result<(), Error> {
         let mut dest_paths = vec![];
         let mut dest_path = PathBuf::new();
         for entry in entries {
             dest_path.clear();
-            dest_path.push(&self.path);
+            dest_path.push(path);
             dest_path.push(entry.path());
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;

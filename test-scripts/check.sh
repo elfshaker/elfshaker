@@ -277,6 +277,32 @@ test_pack_two_snapshots_multiframe_works() {
   fi
 }
 
+test_show_from_pack_works() {
+  "$elfshaker" update-index
+  "$elfshaker" extract --reset --verify -P "$pack" "$snapshot_a"
+  file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | tail -n+2 | head -n1 | awk '{print $NF}')"
+  sha1_extract="$(sha1sum < "$file_path")"
+  sha1_show="$("$elfshaker" --verbose show -P "$pack" "$snapshot_a" "$file_path" | sha1sum)"
+  if [[ "$sha1_extract" != "$sha1_show" ]]; then
+    echo 'Outputs of extract and show do not match!'
+    exit 1
+  fi
+}
+
+test_show_from_unpacked_works() {
+  "$elfshaker" update-index
+  "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
+  "$elfshaker" store "$snapshot_a"
+  "$elfshaker" update-index
+  file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | tail -n+2 | head -n1 | awk '{print $NF}')"
+  sha1_extract="$(sha1sum < "$file_path")"
+  sha1_show="$("$elfshaker" --verbose show -P unpacked "$snapshot_a" "$file_path" | sha1sum)"
+  if [[ "$sha1_extract" != "$sha1_show" ]]; then
+    echo 'Outputs of extract and show do not match!'
+    exit 1
+  fi
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -313,6 +339,8 @@ main() {
   run_test test_pack_two_snapshots_works
   run_test test_pack_two_snapshots_object_sort_works
   run_test test_pack_two_snapshots_multiframe_works
+  run_test test_show_from_pack_works
+  run_test test_show_from_unpacked_works
 }
 
 main "$@"

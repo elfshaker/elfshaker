@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+
+# Improves compression ratio
+COMPILER_FLAGS='-ffunction-sections -fdata-sections -mno-outline '
+# Reproducible builds
+FILE_PREFIX="$(dirname "$(realpath "$1")")"
+COMPILER_FLAGS+="-no-canonical-prefixes -ffile-prefix-map=$FILE_PREFIX='' "
+# Prevent paths leaking through __PRETTY_FUNCTION__
+COMPILER_FLAGS+="-Wno-builtin-macro-redefined '-D__PRETTY_FUNCTION__=__func__' "
+
+cmake "$1" \
+    -GNinja \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=On \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_C_FLAGS="$COMPILER_FLAGS" \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
+    -DCMAKE_INSTALL_PREFIX="$PWD"/install \
+    -DCMAKE_C_COMPILER_LAUNCHER='ccache' \
+    -DCMAKE_CXX_COMPILER_LAUNCHER='ccache' \
+    -DLLVM_ENABLE_PROJECTS='clang' \
+    -DLLVM_OPTIMIZED_TABLEGEN=On \
+    -DLLVM_USE_LINKER=/usr/bin/ld.lld-11 \
+    -DLLVM_CCACHE_BUILD=On \
+    -DLLVM_ENABLE_WARNINGS=Off \
+    -DLLVM_ENABLE_ZLIB=Off \
+    -DLLVM_INCLUDE_BENCHMARKS=Off \
+    -DLLVM_INCLUDE_EXAMPLES=Off \
+    -DLLVM_ENABLE_ASSERTIONS=On \
+    -DLLVM_ENABLE_BINDINGS=Off \
+    -DLLVM_APPEND_VC_REV=Off \
+    -DLLVM_INCLUDE_TESTS=Off \
+    -DCLANG_INCLUDE_TESTS=Off \
+    -DLLVM_BUILD_TESTS=Off

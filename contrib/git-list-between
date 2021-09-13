@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+
+print_help() {
+    echo 'Usage: git-list-between BRANCH MM/DD/YYYY MM/DD/YYYY [[--] <path>...]'
+}
+
+list() {
+    ARGS=(
+        # Don't follow the other side of merges.
+        --first-parent
+        # Commit order.
+        --topo-order
+        --reverse
+        '--abbrev=15'
+        "--since=$DATE_LOWER"
+        "--until=$DATE_UPPER"
+        "$BRANCH"
+    )
+    TZ=UTC git log "${ARGS[@]}" "$@"
+}
+
+main() {
+    BRANCH="$1"
+    DATE_LOWER="$2"' 00:00:00 UTC'
+    DATE_UPPER="$3"' 00:00:00 UTC'
+    EXTRA_ARGS=("${@:4}")
+
+    # Validate args
+    git rev-parse "$BRANCH" 1>/dev/null \
+        && date -d "$DATE_LOWER" 1>/dev/null \
+        && date -d "$DATE_UPPER" 1>/dev/null \
+        || {
+            print_help
+            exit 1
+        }
+
+    # Read the list of commits without passing EXTRA_ARGS
+    # This prevents the list from being filtered by a PATHSPEC...
+    readarray -t COMMIT_LIST < <(list '--format=format:%H')
+    # Create a hashmap [SHA=>index] that contains the indexes of the commits in
+    # the selected time span.
+    declare -A INDEX_LOOKUP=()
+    for i in "${!COMMIT_LIST[@]}"; do
+        INDEX_LOOKUP["${COMMIT_LIST[$i]}"]=$i
+    done
+
+    # Construct the final list by passing EXTRA_ARGS, allowing the user to filter
+    # the commits by a PATHSPEC..., use the index of the commit in the unfiltered
+    # log, and format the output
+    while read -r SHA ABBREV DATE TIME; do
+        INDEX="${INDEX_LOOKUP["$SHA"]}"
+        printf '%s %s-%05dT%s-%s\n' "$SHA" "$DATE" "$((INDEX+1))" "$TIME" "$ABBREV"
+    done < <(list \
+        '--date=format-local:%Y%m%d %H%M%S' \
+        '--format=format:%H %h %cd' \
+        "${EXTRA_ARGS[@]}")
+}
+
+case "${1:--h}" in
+    -h | --help)
+        print_help
+        [ $# -ne 0 ]
+        exit $?
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

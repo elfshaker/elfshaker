@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+
+print_help() {
+    echo 'Usage: manyclangs-run [ELFSHAKER] [COMITTISH] [COMMAND]...'
+    echo ''
+    echo 'Extracts the snapshot matching COMITTISH to the specified ELFSHAKER directory and runs COMMAND.'
+    echo 'If the first token of COMMAND is a path to a file in the ELFSHAKER directory, that path will be resolved as an absolute path to that file.'
+    echo ''
+    echo 'The commit is matched to a snapshot by searching for a snapshot with a tag containing a part of the truncated commit SHA.'
+    echo 'ELFSHAKER/build/bin is removed, and ELFSHAKER/build/link.sh is run after extraction and before COMMAND.'
+    echo ''
+    echo 'If any step of finding a matching snapshot, extraction, or ./link.sh fails, the script exists with code 125 (git bisect skip).'
+    echo 'Otherwise, the exit code is the code returned by COMMAND.'
+}
+
+main() {
+    ELFSHAKER_DIR="$1"
+    COMITTISH="$2"
+    COMMAND=(${@:3})
+
+    SHA="$(git rev-parse --short=10 "$COMITTISH")"
+    (cd "$ELFSHAKER_DIR" && elfshaker find "$SHA") | {
+        read -r SNAPSHOT PACK || exit 125
+        TIMEFORMAT="elfshaker extracted $SHA in %R seconds"
+        time (
+            (cd "$ELFSHAKER_DIR" && elfshaker extract -P "$PACK" "$SNAPSHOT" || exit 125)
+            (cd "$ELFSHAKER_DIR/build"; rm -r ./bin || true; mkdir ./bin; bash ./link.sh || exit 125)
+        )
+
+        # Resolve path to binary (could be relative to $ELFSHAKER_DIR or not)
+        COMMAND[0]="$(cd "$ELFSHAKER_DIR" && which "${COMMAND[0]}" | xargs realpath --no-symlinks)"
+        "${COMMAND[@]}"
+    }
+}
+
+case "${1:--h}" in
+    -h | --help)
+        print_help
+        [ $# -ne 0 ]
+        exit $?
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

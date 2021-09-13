@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+
+awk_inplace() {
+    for LAST in "$@"; do :; done
+    TMP="$(mktemp)"
+    awk "$@" > "$TMP"
+    mv "$TMP" "$LAST"
+}
+
+patch_clang_version() {
+    # Here we patch the clang version to include the commit SHA by defining LLVM_REVISION and CLANG_REVISION
+    # We insert the #defines after the last #include (which seems reasonably safe, but could be confused by an #if #include #endif for example
+    git checkout -- ../clang/lib/Basic/Version.cpp
+    awk_inplace -c -v commit="\"$1\"" 'FNR==NR{ if (/#include/) p=NR; next} 1; FNR==p{ print "#define LLVM_REVISION " commit; print "#define CLANG_REVISION LLVM_REVISION"; }' ../clang/lib/Basic/Version.cpp ../clang/lib/Basic/Version.cpp
+}
+
+patch_llvm_version() {
+    # We do a similar thing for LLVM tools -- define LLVM_VERSION_INFO manually
+    git checkout -- ../llvm/lib/Support/CommandLine.cpp
+    awk_inplace -c -v commit="\"$1\"" 'FNR==NR{ if (/#include/) p=NR; next} 1; FNR==p{ print "#define LLVM_VERSION_INFO " commit }' ../llvm/lib/Support/CommandLine.cpp ../llvm/lib/Support/CommandLine.cpp
+}
+
+create_link_script() {
+    # Save all link lines as functions
+    ninja -t rules | grep 'CXX_EXECUTABLE_LINKER\|CXX_STATIC_LIBRARY' \
+        | grep -Ev '\-test|\-fuzzer' \
+        | xargs ninja -t compdb \
+        | compdb2line build-lines-with-output \
+        | awk '{print $1"(){"; $1=""; print $0; print "}"}'
+    # Save all symlinks in bin/
+    find ./bin/ -maxdepth 1 -type l | while read -r SYMLINK; do
+        LINK_NAME="$(basename "$SYMLINK")"
+        LINK_TARGET="$(readlink "$SYMLINK")"
+        echo "$LINK_NAME(){ $LINK_TARGET; ln -sf $LINK_TARGET $SYMLINK; }"
+    done
+    cat << EOF
+mkdir ./bin |& true
+if [ \$# -eq 0 ]; then
+    compgen -A function | while read -r FUNC; do { "\$FUNC" & } done
+else
+    for ARG in "\$@"; do { "\$ARG" & } done
+fi
+wait
+EOF
+}
+
+main() {
+    patch_clang_version "$(git rev-parse HEAD)"
+    # patch_llvm_version invalidates llvm-tblgen and causes builds to run slower!
+    # patch_llvm_version "$(git rev-parse HEAD)"
+
+    CCACHE_FILECLONE=1 CCACHE_SLOPPINESS=time_macros ninja
+
+    create_link_script > ./link.sh
+}
+
+main "$@"

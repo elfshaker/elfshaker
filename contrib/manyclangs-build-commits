@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+
+### Example:
+### Building a series of commits in distinct worktrees under d-aarch64/
+###
+### export CCACHE_DIR="$(git rev-parse --show-toplevel)/ccache" CCACHE_MAXSIZE=50G
+### git-list-between 03/01/2021 04/01/2021 llvm clang | awk '{print $1}' | cmake-build-commits d-aarch64 llvm clang
+print_help() {
+    echo 'Usage: manyclangs-build-commits [WORKTREES] [PATHSPEC]...'
+    echo ''
+    echo 'Builds the commits read in on the standard input in separate worktrees under WORKTREES.'
+    echo 'Only the directories matched by PATHSPEC are checked out before each build.'
+}
+
+# create_build COMMIT
+# Checks out COMMIT and builds it, then stores a copy in $WORKTREES/$COMMIT
+create_build() {
+    COMMIT="$1"
+    CHECKOUT_PATHSPEC=(${@:2})
+    # Checksum all CMakeLists.txt
+    CMAKELISTS_SHA1_OLD="$(sha1sum <(find . -name 'CMakeLists.txt' -exec sha1sum {} +) | awk '{print $1}')"
+    echo "Processing commit $COMMIT... ($(pwd))"
+    git reset --soft "$COMMIT"
+    # Do the checkout; --no-overlay also removes old files
+    git -c core.checkStat=minimal -c advice.detachedHead=false checkout --no-overlay --progress "$COMMIT" -- "${CHECKOUT_PATHSPEC[@]}"
+    # Print commit
+    git show --format=fuller -s
+    # Checksum again to compare
+    CMAKELISTS_SHA1_NEW="$(sha1sum <(find . -name 'CMakeLists.txt' -exec sha1sum {} +) | awk '{print $1}')"
+    echo "$COMMIT" > ./COMMIT
+    ccache -z
+    BUILD_LOGS="$(mktemp -d)"
+    # Do not fail script if build fails
+    set +e
+    (
+        # Exit subshell early
+        set -e
+        mkdir -p ./build
+        cd ./build
+        if [[ "$CMAKELISTS_SHA1_OLD" == "$CMAKELISTS_SHA1_NEW" && -d ./CMakeFiles && ! -f ./.FAILED ]]; then
+            echo 'Build configuration is unchanged.'
+        else
+            rm -r ./.FAILED ./CMakeFiles ./CMakeCache.txt || true
+            "$SOURCE_DIR"/manyclangs-cmake ../llvm
+        fi
+
+        "$SOURCE_DIR"/manyclangs-build . |& tee -a "$BUILD_LOGS/build.log"
+
+        # Add license information
+        cp ../llvm/LICENSE.TXT ./LICENSE-llvm.txt
+        cp ../clang/LICENSE.TXT ./LICENSE-clang.txt
+        {
+            echo 'These builds were done as part of the elfshaker/manyclangs project,'
+            echo 'please see https://github.com/elfshaker/manyclangs for more information'
+        } > ./README
+    )
+    BUILD_STATUS="$?"
+    set -e
+    ccache -s
+    # Create a copy of the current tree
+    (cd "$ROOT_DIR" && "$SOURCE_DIR"/git-checkout-worktree "$WORKTREES/$BUILD_WORKTREE" "$WORKTREES/$COMMIT")
+    # Clean failed builds and store logs
+    if [[ "$BUILD_STATUS" != "0" ]]; then
+        echo "Build of $COMMIT failed with exit code: $BUILD_STATUS!"
+        cp "$ROOT_DIR/$WORKTREES/$COMMIT/build/CMakeFiles/CMake"*.log "$BUILD_LOGS"/ || true
+        rm -r "$ROOT_DIR/$WORKTREES/$COMMIT/build/"*
+        cp "$BUILD_LOGS"/* "$ROOT_DIR/$WORKTREES/$COMMIT/build/" || true
+        # Create .FAILED to re-run cmake later
+        touch "$ROOT_DIR/$WORKTREES/$BUILD_WORKTREE/build/.FAILED"
+    fi
+    rm -r "$BUILD_LOGS"
+}
+
+main() {
+    SOURCE_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+
+    # The directory containing the worktrees to create
+    WORKTREES="$1"
+    CHECKOUT_PATHSPEC=(${@:2})
+    ROOT_DIR="$(pwd)"
+    # Worktree used for building. Ensures consistent paths.
+    BUILD_WORKTREE="build-$(openssl rand -hex 8)"
+
+    # Do the initial checkout
+    git worktree add --no-checkout -B "$WORKTREES/$BUILD_WORKTREE" "$WORKTREES/$BUILD_WORKTREE"
+    cd "$WORKTREES/$BUILD_WORKTREE"
+    read -r COMMIT
+    git checkout "$COMMIT" -- "${CHECKOUT_PATHSPEC[@]}"
+    time create_build "$COMMIT" "${CHECKOUT_PATHSPEC[@]}"
+
+    while read -r COMMIT; do
+        time create_build "$COMMIT" "${CHECKOUT_PATHSPEC[@]}"
+    done
+}
+
+case "${1:--h}" in
+    -h | --help)
+        print_help
+        [ $# -ne 0 ]
+        exit $?
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

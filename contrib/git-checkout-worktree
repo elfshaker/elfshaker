@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+
+print_help() {
+    echo 'Usage: git-checkout-worktree [SRC] [DEST] [COMMIT] [PATHSPEC]...'
+    echo ''
+    echo 'Uses reflink copies to reduce the storage requirements of a git worktree add operation.'
+}
+
+main() {
+    # Path to source worktree
+    SRC_WORKTREE="$1"
+    # Path to new worktree
+    DEST_WORKTREE="$2"
+    # Optional; Commit to checkout at dest
+    COMMIT="${3-}"
+    # Required if COMMIT is specified; Pathspec to checkout
+    CHECKOUT_PATHSPEC=("${*:4}")
+
+    # Copy SRC_WORKTREE to DEST_WORKTREE, and checkout COMMIT on the second.
+    git worktree add --no-checkout -B "$DEST_WORKTREE" "$DEST_WORKTREE"
+    cp --reflink=auto -a "$SRC_WORKTREE"/* "$DEST_WORKTREE"
+    OLD_IDX="$(cd "$SRC_WORKTREE" && git rev-parse --git-path index)"
+    NEW_IDX="$(cd "$DEST_WORKTREE" && git rev-parse --git-path index)"
+    cp --reflink=auto "$OLD_IDX" "$NEW_IDX"
+
+    if [ -n "$COMMIT" ]; then
+        git reset --soft "$COMMIT"
+        git -c core.checkStat=minimal -c advice.detachedHead=false checkout --no-overlay --progress "$COMMIT" -- "${CHECKOUT_PATHSPEC[@]}"
+    else
+        git reset --soft "$(cd "$SRC_WORKTREE" && git rev-parse HEAD)"
+    fi
+}
+
+case "${1:--h}" in
+    -h | --help)
+        print_help
+        [ $# -ne 0 ]
+        exit $?
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

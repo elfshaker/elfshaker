@@ -6,7 +6,7 @@ use log::info;
 use std::{error::Error, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
-use elfshaker::repo::{PackId, PackOptions, SnapshotId};
+use elfshaker::repo::{PackId, PackOptions, Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "pack";
 
@@ -47,6 +47,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         }
         n => n,
     };
+
+    let is_update_supressed = matches.is_present("no-update-index");
 
     // Open the repo and unpacked index
     let mut repo = open_repo_from_cwd()?;
@@ -109,7 +111,16 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Finally, delete the unpacked snapshots
     repo.remove_unpacked_all()?;
 
-    println!("Created pack '{}'", pack);
+    if is_update_supressed {
+        eprintln!(
+            "Created pack '{}'. Remember to run update-index to update the repository index!",
+            pack
+        );
+    } else {
+        info!("Updating the repository index...");
+        Repository::update_index(repo.path())?;
+        eprintln!("Created pack '{}'.", pack);
+    }
 
     Ok(())
 }
@@ -156,6 +167,11 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                     frames can result in poorer compression. Specify 0 to \
                     auto-detect the appropriate number of frames to emit.")
                 .default_value("0")
+        )
+        .arg(
+            Arg::with_name("no-update-index")
+                .long("no-update-index")
+                .help("Does not update the repository index automatically."),
         )
 }
 

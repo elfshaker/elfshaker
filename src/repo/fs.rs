@@ -8,27 +8,18 @@ use std::{
     io,
     io::Read,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
-/// Ensures that the file is writable OR does not exist!
-pub fn ensure_file_writable(p: impl AsRef<Path>) -> io::Result<()> {
-    let o = match File::open(p) {
-        Ok(file) => file,
-        Err(ref e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    let mut p = o.metadata()?.permissions();
-    p.set_readonly(false);
-    o.set_permissions(p)?;
-    Ok(())
-}
-
-/// Sets the readonly permission on the file.
-pub fn set_readonly(f: &File, readonly: bool) -> io::Result<()> {
-    let mut perm = f.metadata()?.permissions();
-    perm.set_readonly(readonly);
-    f.set_permissions(perm)?;
-    Ok(())
+/// Returns the most recent of [`fs::Metadata::created`] and
+/// [`fs::Metadata::modified`], or [`None`], if neither succeeds.
+pub fn get_last_modified(metadata: fs::Metadata) -> Option<SystemTime> {
+    metadata
+        .created()
+        .ok()
+        .into_iter()
+        .chain(metadata.modified().ok().into_iter())
+        .max()
 }
 
 /// Reads a file, returning a byte slice. Returns [`None`], if the file does not exist.

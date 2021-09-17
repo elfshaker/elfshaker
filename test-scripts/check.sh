@@ -315,6 +315,28 @@ test_head_updated_after_packing() {
   fi
 }
 
+test_touched_file_dirties_repo() {
+  "$elfshaker" update-index
+  "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
+  sleep 1
+  find . -not -path "./elfshaker_data/*" -exec touch {} +
+  if [ "$elfshaker" extract --verbose --verify -P "$pack" "$snapshot_b" ]; then
+    echo 'Failed to detect files changes!'
+    exit 1
+  fi
+}
+
+test_dirty_repo_can_be_forced() {
+  "$elfshaker" update-index
+  "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
+  sleep 1
+  find . -not -path "./elfshaker_data/*" -exec touch {} +
+  if [ ! "$elfshaker" extract --verbose --force --verify -P "$pack" "$snapshot_b" ]; then
+    echo 'Could not use --force to skip dirty repository checks!'
+    exit 1
+  fi
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -354,6 +376,8 @@ main() {
   run_test test_show_from_pack_works
   run_test test_show_from_unpacked_works
   run_test test_head_updated_after_packing
+  run_test test_touched_file_dirties_repo
+  run_test test_dirty_repo_can_be_forced
 }
 
 main "$@"

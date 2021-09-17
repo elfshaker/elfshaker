@@ -13,6 +13,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    time::SystemTime,
 };
 
 use log::{error, info, warn};
@@ -22,10 +23,7 @@ use walkdir::{DirEntry, WalkDir};
 use super::algo::{partition_by_u64, run_in_parallel};
 use super::constants::REPO_DIR;
 use super::error::Error;
-use super::fs::{
-    create_temp_path, ensure_dir, ensure_file_writable, read_or_none, set_readonly,
-    write_file_atomic,
-};
+use super::fs::{create_temp_path, ensure_dir, get_last_modified, read_or_none, write_file_atomic};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::batch;
 use crate::log::measure_ok;
@@ -171,6 +169,8 @@ pub struct Repository {
     path: PathBuf,
     /// The ID of the currently extracted snapshot or None, if nothing has been extracted yet.
     head: Option<SnapshotId>,
+    /// The time HEAD was last modified.
+    head_time: Option<SystemTime>,
     /// Maps (snapshot -> packs)
     index: RepositoryIndex,
 }
@@ -247,14 +247,7 @@ impl Repository {
             return Err(Error::RepositoryNotFound);
         }
 
-        let head = {
-            if let Some(bytes) = read_or_none(data_dir.join(HEAD_FILE))? {
-                let text = std::str::from_utf8(&bytes).map_err(|_| Error::CorruptHead)?;
-                Some(SnapshotId::from_str(&text).map_err(|_| Error::CorruptHead)?)
-            } else {
-                None
-            }
-        };
+        let (head, head_time) = Self::read_head(&data_dir.join(HEAD_FILE))?;
 
         if let Some(id) = head.as_ref() {
             info!("Current HEAD: {}/{}", id.pack(), id.tag());
@@ -273,9 +266,28 @@ impl Repository {
         Ok(Repository {
             path: path.as_ref().into(),
             head,
+            head_time,
             index,
         })
     }
+
+    // Reads the state of HEAD. If the file does not exist, returns None values.
+    // If ctime/mtime cannot be determined, returns None.
+    fn read_head(path: &Path) -> Result<(Option<SnapshotId>, Option<SystemTime>), Error> {
+        let mut file = match File::open(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
+            result => result,
+        }?;
+
+        let metadata = file.metadata()?;
+        let time = get_last_modified(metadata);
+        let mut buf = vec![];
+        file.read_to_end(&mut buf)?;
+        let text = std::str::from_utf8(&buf).map_err(|_| Error::CorruptHead)?;
+        let snapshot = SnapshotId::from_str(text).map_err(|_| Error::CorruptHead)?;
+        Ok((Some(snapshot), time))
+    }
+
     /// The base path of the repository.
     pub fn path(&self) -> &Path {
         &self.path
@@ -306,6 +318,11 @@ impl Repository {
         snapshot_id: SnapshotId,
         opts: ExtractOptions,
     ) -> Result<ExtractResult, Error> {
+        if self.head.is_some() && self.head_time.is_none() && !opts.force() {
+            warn!("The OS/filesystem does not support file creation timestamps!");
+            return Err(Error::DirtyWorkDir);
+        }
+
         // Open the pack and find the snapshot specified in SnapshotId.
         let source_pack;
         let mut unpacked_index = None;
@@ -372,29 +389,23 @@ impl Repository {
         };
 
         let mut path_buf = PathBuf::new();
+        if !opts.force() {
+            for entry in &old_entries {
+                path_buf.clear();
+                path_buf.push(&self.path);
+                path_buf.push(entry.path());
+                self.check_for_changes(&path_buf)?;
+            }
+        }
         for path in &removed_paths {
             path_buf.clear();
             path_buf.push(&self.path);
             path_buf.push(path);
-            if !opts.force() {
-                Self::ensure_safe_to_delete(&path_buf)?;
-            }
             // Delete the file
-            match File::open(&path_buf)
-                .map(|file| set_readonly(&file, false))
-                .and_then(|_| fs::remove_file(&path_buf))
-            {
+            match fs::remove_file(&path_buf) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 r => r,
             }?;
-        }
-        if !opts.force() {
-            for path in &updated_paths {
-                path_buf.clear();
-                path_buf.push(&self.path);
-                path_buf.push(path);
-                Self::ensure_safe_to_delete(&path_buf)?;
-            }
         }
 
         self.extract_entries(source_pack, &new_entries, self.path.clone(), opts)?;
@@ -704,12 +715,10 @@ impl Repository {
             dest_path.push(entry.path());
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;
-            let _ = ensure_file_writable(&dest_path)?;
             fs::copy(
                 build_loose_object_path(&self.path, entry.object_index().checksum()),
                 &dest_path,
             )?;
-            set_readonly(&File::open(&dest_path)?, true)?;
         }
 
         if verify {
@@ -764,16 +773,30 @@ impl Repository {
         (added, removed)
     }
 
-    fn ensure_safe_to_delete(path: &Path) -> Result<(), Error> {
-        if let Ok(metadata) = fs::metadata(&path) {
-            if !metadata.permissions().readonly() {
-                warn!("Expected file {:?} to be readonly!", path);
-                // If the file is not readonly that means that the repo has been modified unexpectedly!
-                return Err(Error::DirtyWorkDir);
-            }
-        } else {
-            warn!("Expected file {:?} to be present!", path);
-            // If the file is missing that also means it has been modified!
+    fn check_for_changes(&self, path: &Path) -> Result<(), Error> {
+        assert!(
+            self.head_time.is_some(),
+            "check_for_changes cannot be called when HEAD time is unknown!"
+        );
+        let last_modified = fs::metadata(&path)
+            // The modification date of the file is unknown, there is no other
+            // option to fallback on, so we mark the directory as dirty.
+            .map_err(|_| {
+                warn!("Expected file {:?} to be present!", path);
+                // If the file is missing that also means it has been modified!
+                return Error::DirtyWorkDir;
+            })
+            // If the modification date of the file is unknown, there is no
+            // other option to fallback on, so we mark the directory as dirty.
+            .and_then(|metadata| get_last_modified(metadata).ok_or(Error::DirtyWorkDir))?;
+
+        if self.head_time.unwrap() < last_modified {
+            warn!(
+                "File {} is more recent than the current HEAD!",
+                path.to_string_lossy()
+            );
+            // If the file is more recent that means that the repo has
+            // been modified unexpectedly!
             return Err(Error::DirtyWorkDir);
         }
         Ok(())
@@ -992,5 +1015,53 @@ mod tests {
         assert!(removed
             .iter()
             .any(|e| path_b == e.path() && path_b_old_checksum == *e.object_index().checksum()));
+    }
+
+    #[test]
+    fn extract_requires_force_if_no_timestamps() {
+        let mut repo = Repository {
+            head: Some(SnapshotId::from_str("pack/snapshot").unwrap()),
+            head_time: None,
+            index: RepositoryIndex::default(),
+            path: "/some/path".into(),
+        };
+        let snapshot = SnapshotId::from_str("pack/snapshot-2").unwrap();
+        let err1 = repo
+            .extract(snapshot.clone(), ExtractOptions::default())
+            .unwrap_err();
+        let err2 = repo
+            .extract(
+                snapshot.clone(),
+                ExtractOptions {
+                    force: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(err1, Error::DirtyWorkDir));
+        assert!(!matches!(err2, Error::DirtyWorkDir));
+    }
+
+    #[test]
+    fn extract_does_not_require_force_or_timestamp_when_none_head() {
+        let mut repo = Repository {
+            head: None,
+            head_time: None,
+            index: RepositoryIndex::default(),
+            path: "/some/path".into(),
+        };
+        let snapshot = SnapshotId::from_str("pack/snapshot").unwrap();
+        let err = repo
+            .extract(
+                snapshot.clone(),
+                ExtractOptions {
+                    force: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(!matches!(err, Error::DirtyWorkDir));
     }
 }

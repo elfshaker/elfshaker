@@ -25,7 +25,6 @@ use super::constants::{
     UNPACKED_ID,
 };
 use super::error::Error;
-use super::fs::{ensure_file_writable, set_readonly};
 use super::repository::Repository;
 use crate::log::measure_ok;
 use crate::packidx::{ObjectChecksum, ObjectIndex, PackEntry, PackError, PackIndex};
@@ -541,10 +540,8 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
 /// of adjusting file permissions.
 fn write_object(buf: &[u8], path: &Path) -> Result<(), Error> {
     fs::create_dir_all(path.parent().unwrap())?;
-    let _ = ensure_file_writable(path)?;
     let mut f = File::create(path)?;
     f.write_all(&buf)?;
-    set_readonly(&f, true)?;
     Ok(())
 }
 

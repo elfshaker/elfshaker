@@ -303,6 +303,18 @@ test_show_from_unpacked_works() {
   fi
 }
 
+test_head_updated_after_packing() {
+  "$elfshaker" update-index
+  rand_megs 1 > ./foo
+  "$elfshaker" store test-snapshot
+  "$elfshaker" pack test-pack
+  "$elfshaker" update-index
+  if [[ "$(cat elfshaker_data/HEAD)" != "test-pack/test-snapshot" ]]; then
+    echo 'HEAD was expected to point to the newly-created pack!'
+    exit 1
+  fi
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -341,6 +353,7 @@ main() {
   run_test test_pack_two_snapshots_multiframe_works
   run_test test_show_from_pack_works
   run_test test_show_from_unpacked_works
+  run_test test_head_updated_after_packing
 }
 
 main "$@"

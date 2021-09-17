@@ -677,7 +677,7 @@ impl Repository {
     }
 
     /// Updates the HEAD snapshot id.
-    fn update_head(&mut self, snapshot_id: &SnapshotId) -> Result<(), Error> {
+    pub fn update_head(&mut self, snapshot_id: &SnapshotId) -> Result<(), Error> {
         let data_dir = self.path.join(&*Self::data_dir());
         let snapshot_string = format!("{}", snapshot_id);
         ensure_dir(&self.temp_dir())?;
@@ -689,6 +689,7 @@ impl Repository {
         self.head = Some(snapshot_id.clone());
         Ok(())
     }
+
     fn extract_from_unpacked(
         &mut self,
         entries: &[PackEntry],

@@ -6,7 +6,7 @@ use log::info;
 use std::{error::Error, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
-use elfshaker::repo::{PackId, PackOptions};
+use elfshaker::repo::{PackId, PackOptions, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "pack";
 
@@ -96,6 +96,16 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         &reporter,
     )?;
 
+    if let Some(head) = repo.head() {
+        if *head.pack() == PackId::Unpacked {
+            info!("Updating HEAD to point to the newly-created pack...");
+            // The current HEAD was referencing a snapshot in the unpacked store.
+            // Now that the snapshots has been packed, we need to update HEAD
+            // to reference the packed snapshot.
+            let new_head = SnapshotId::new(pack.clone(), head.tag()).unwrap();
+            repo.update_head(&new_head)?;
+        }
+    }
     // Finally, delete the unpacked snapshots
     repo.remove_unpacked_all()?;
 

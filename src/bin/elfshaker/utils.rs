@@ -12,31 +12,77 @@ use std::sync::{
     Arc,
 };
 
+/// Do not print to `stderr` in case of a panic caused by a broken pipe.
+///
+/// A broken pipe panic happens when a println! (and friends) fails. It fails
+/// when the pipe is closed by the reader (happens with elfshaker find | head
+/// -n5). When that happens, the default Rust panic hook prints out the
+/// following message: thread 'main' panicked at 'failed printing to stdout:
+/// Broken pipe (os error 32)', src/libstd/io/stdio.rs:692:8 note: Run with
+/// `RUST_BACKTRACE=1` for a backtrace.
+///
+/// What this function does is inject a hook earlier in the panic handling chain
+/// to detect this specific panic occurring and simply not print anything.
+pub(crate) fn silence_broken_pipe() {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        if let Some(message) = panic_info.payload().downcast_ref::<String>() {
+            if message.contains("Broken pipe") {
+                return;
+            }
+        }
+        hook(panic_info);
+    }));
+}
+
 /// Prints the values as a table. The first set of values
-/// is used for the table header.
-pub(crate) fn print_table<R, C, I>(rows: R)
+/// is used for the table header. The table header is always
+/// printed to stderr.
+pub(crate) fn print_table<R, C, I>(header: Option<C>, rows: R)
 where
     R: Iterator<Item = C>,
     C: IntoIterator<Item = I>,
     I: std::fmt::Display,
 {
-    let strings = rows
-        .map(|row| {
-            row.into_iter()
-                .map(|item| format!("{}", item))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let format = |row: C| {
+        row.into_iter()
+            .map(|item| format!("{}", item))
+            .collect::<Vec<_>>()
+    };
+    let header_strings = header.map(format);
+    let strings: Vec<_> = rows.map(format).collect();
 
     if strings.is_empty() {
+        for header in header_strings {
+            for item in header.iter() {
+                eprint!("{} ", item);
+            }
+            eprintln!();
+        }
         return;
     }
 
     let columns = strings[0].len();
+    // Measure all columns
     let column_sizes = (0..columns)
-        .map(|i| strings.iter().map(|row| row[i].len()).max().unwrap())
+        .map(|i| {
+            let all_strings = header_strings.iter().chain(strings.iter());
+            all_strings.map(|row| row[i].len()).max().unwrap()
+        })
         .collect::<Vec<_>>();
-    for row in &strings {
+
+    // Print header to stderr
+    for header in header_strings {
+        assert_eq!(columns, header.len());
+        for (i, item) in header.iter().enumerate() {
+            let pad = column_sizes[i] - item.len();
+            eprint!("{} {:pad$}", item, "", pad = pad);
+        }
+        eprintln!();
+    }
+
+    // Print rows to stdout
+    for row in strings {
         assert_eq!(columns, row.len());
         for (i, item) in row.iter().enumerate() {
             let pad = column_sizes[i] - item.len();
@@ -116,11 +162,11 @@ pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressRep
             let percentage = (100 * checkpoint.done / (checkpoint.done + remaining)) as isize;
             if percentage - current.load(Ordering::Acquire) >= step as isize {
                 current.store(percentage, Ordering::Release);
-                println!("{}... {}%", message, percentage);
+                eprintln!("{}... {}%", message, percentage);
                 std::io::stdout().flush().unwrap();
             }
         } else {
-            print!("{}... {} of ?", message, checkpoint.done);
+            eprint!("{}... {} of ?", message, checkpoint.done);
             std::io::stdout().flush().unwrap();
         }
     })

@@ -18,6 +18,11 @@ use std::error::Error;
 const ERROR_EXIT_CODE: i32 = 1;
 
 fn main() {
+    // Do not print diagnostic output when the program panics due to a broken pipe.
+    // A broken pipe happens when the reader end of a pipe closes the pipe.
+    // For example: elfshaker find ... | head ...
+    utils::silence_broken_pipe();
+
     let mut app = get_app();
     let matches = app.clone().get_matches();
     let is_verbose = matches.is_present("verbose");

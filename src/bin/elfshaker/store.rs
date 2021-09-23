@@ -15,7 +15,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let files_from = matches.value_of("files-from");
     let files_from0 = matches.value_of("files-from0");
     let snapshot = matches.value_of("snapshot").unwrap();
-    let snapshot = SnapshotId::unpacked(snapshot)?;
+    let snapshot = SnapshotId::loose(snapshot)?;
     let is_update_supressed = matches.is_present("no-update-index");
 
     if files_from.is_some() && files_from0.is_some() {
@@ -34,7 +34,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     };
 
     let mut repo = open_repo_from_cwd()?;
-    repo.snapshot(&snapshot, files.into_iter())?;
+    repo.create_snapshot(&snapshot, files.into_iter())?;
 
     if is_update_supressed {
         eprintln!("Snapshot {} created successfully! Remember to run update-index to update the repository index!", snapshot);

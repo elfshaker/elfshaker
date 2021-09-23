@@ -1,6 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
+//! Tools for logging.
 use lazy_static::lazy_static;
 use log::{set_logger, set_max_level, Level, LevelFilter, Log, Metadata, Record};
 use std::sync::RwLock;
@@ -11,6 +12,7 @@ lazy_static! {
     static ref LOGGER: Box<Logger> = Box::new(Logger::static_init());
 }
 
+/// The [`Log`] implementation used by elfshaker.
 pub struct Logger {
     level: Level,
     init_at: Instant,
@@ -70,6 +72,7 @@ impl Log for Logger {
     fn flush(&self) {}
 }
 
+/// Measures the time it took to run the specified block.
 pub fn measure<F, T>(f: F) -> (Duration, T)
 where
     F: FnOnce() -> T,
@@ -80,6 +83,7 @@ where
     (elapsed, result)
 }
 
+/// Measures the time it took to run the specified block.
 pub fn measure_ok<F, T, E>(f: F) -> Result<(Duration, T), E>
 where
     F: FnOnce() -> Result<T, E>,
@@ -90,6 +94,7 @@ where
     Ok((elapsed, result))
 }
 
+/// Measures the time it took to run the specified block.
 pub fn measure_some<F, T>(f: F) -> Option<(Duration, T)>
 where
     F: FnOnce() -> Option<T>,

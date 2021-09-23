@@ -1,59 +1,60 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
+//! Implements a data structure called [`PathTree`] which can
+//! efficiently store many paths. It works by deduplicating common path
+//! components and interning them such that a full path can be identified by a
+//! single 32-bit integer.
+
 use std::cell::RefCell;
 use std::cmp::{Ord, Ordering};
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
-use std::num::NonZeroU32;
 use std::path::Path;
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 
-/// Error type used in the pathidx module.
-#[derive(Debug, Clone)]
-pub enum PathError {
-    InvalidIndex,
-    InvalidPath,
-}
+/// An opaque reference to a [`Path`] stored in a [`PathPool`].
+#[derive(Hash, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub struct PathHandle(u32);
 
-impl std::error::Error for PathError {}
-
-impl std::fmt::Display for PathError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            PathError::InvalidIndex => write!(f, "The index is invalid and needs to be updated!"),
-            PathError::InvalidPath => write!(f, "Ill-formed path!"),
-        }
-    }
-}
-
-pub trait PathIndex {
+/// PathPool exists to intern strings representing paths. It enables an
+/// efficient representation of specific paths using a [`PathHandle`].
+pub trait PathPool {
     /// The number of unique file paths in the tree.
     fn file_count(&self) -> usize;
     /// Stores the specified file path.
-    fn create_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), PathError>;
-
-    /// Updates the file index.
+    fn create_file<P: AsRef<Path>>(&mut self, path: P);
+    /// Returns true if [`PathPool::commit_changes`] needs to be called due to a previous
+    /// mutating change.
+    fn is_dirty(&self) -> bool;
+    /// Updates the internal structures of `self` after mutating changes to the
+    /// tree, ensuring that any mutating changes have been committed.
     ///
-    /// The file index is undefined unless update_index() is run after
-    /// the tree has been mutated.
-    fn update_index(&mut self);
-    /// Finds the index corresponding to the given path.
-    fn find_index<S: AsRef<OsStr>, I: Iterator<Item = S>>(
+    /// [`PathPool::commit_changes`] must be run after a mutation and old [`PathHandle`]s
+    /// should be discarded.
+    fn commit_changes(&mut self);
+    /// Returns the handle corresponding to the given path.
+    fn find<S: AsRef<OsStr>, I: Iterator<Item = S>>(
         &self,
         path_components: I,
-    ) -> Result<Option<u32>, PathError>;
-    /// Creates a index-to-path hash map.
-    fn create_lookup(&self) -> HashMap<u32, OsString>;
+    ) -> Option<PathHandle>;
+    /// Creates a handle-to-path hash map.
+    fn create_lookup(&self) -> HashMap<PathHandle, OsString>;
 }
 
-/// A structure for efficient storage of file paths.
+/// A structure for efficient storage of file paths, implementing the PathPool
+/// trait. It has an efficient representation in memory and can be serialized to
+/// disk. Conceptually the data structure is a trie over path components.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PathTree {
     file_count: usize,
     root: TreeNodeRc,
+    // Flag indicating whether the tree was mutated and [`commit_changes`] needs
+    // to be run.
+    #[serde(skip)]
+    is_dirty: bool,
 }
 
 impl PathTree {
@@ -64,6 +65,7 @@ impl PathTree {
             root: Rc::new(RefCell::new(TreeNode::Directory(DirectoryNode::new(
                 "".as_ref(),
             )))),
+            is_dirty: false,
         }
     }
 
@@ -104,8 +106,9 @@ impl PathTree {
     /// The relative order of traversed file nodes is guaranteed to be the same
     /// as the order of paths traversed by `traverse()`.
     ///
-    /// This is because the file indexes are synthesised from the items are ordered by traverse()
-    /// and assigned using traverse_mut(). These indexes are not serialised and hence must match.
+    /// This is because the path handles are synthesized from the items are
+    /// ordered by traverse() and assigned using traverse_mut(). These handles
+    /// are not written to disk and hence the order or traversal must match.
     fn traverse_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&TreeNodeRc),
@@ -136,19 +139,27 @@ impl Clone for PathTree {
         Self {
             file_count: self.file_count,
             root: Rc::new((*self.root).clone()),
+            is_dirty: self.is_dirty,
         }
     }
 }
 
-impl PathIndex for PathTree {
+impl PathPool for PathTree {
     fn file_count(&self) -> usize {
         self.file_count
     }
 
-    fn create_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), PathError> {
+    fn is_dirty(&self) -> bool {
+        self.is_dirty
+    }
+
+    fn create_file<P: AsRef<Path>>(&mut self, path: P) {
         let mut path_components = path.as_ref().components().collect::<Vec<_>>();
-        let filename = path_components.pop();
-        let filename = filename.ok_or(PathError::InvalidPath)?;
+        assert!(
+            !path_components.is_empty(),
+            "Cannot add the path to the pool: the path is empty!"
+        );
+        let filename = path_components.pop().unwrap();
 
         let dir = DirectoryNode::create_dir_all(&self.root, path_components.into_iter());
         let mut dir_ref = dir.borrow_mut();
@@ -157,62 +168,68 @@ impl PathIndex for PathTree {
                 self.file_count += 1;
             }
         }
-
-        Ok(())
     }
 
-    fn update_index(&mut self) {
-        // To update the index, we simply iterate the tree
-        // in pre-order and assign consequetive numeric indexes to
-        // the file nodes, starting a 1.
-        // 0 is the in-memory representation used for an uninitialised index.
-        let mut last_index = NonZeroU32::new(1).unwrap();
-        let last_index_ref = &mut last_index;
+    fn commit_changes(&mut self) {
+        // To update the tree, we simply iterate over it in pre-order and assign
+        // consecutive numeric values to the path handles, starting at 1. 0 is
+        // the in-memory representation used for an uninitialised handle.
+        let mut last_handle = PathHandle(1);
+        let last_handle_ref = &mut last_handle;
         self.traverse_mut(|node| {
             let mut node_ref = node.borrow_mut();
             if let TreeNode::File(ref mut file) = *node_ref {
-                file.index = Some(*last_index_ref);
-                *last_index_ref = NonZeroU32::new(last_index_ref.get() + 1).unwrap();
+                file.handle = Some(*last_handle_ref);
+                *last_handle_ref = PathHandle(last_handle_ref.0 + 1);
             }
         });
+        self.is_dirty = false;
     }
 
-    fn find_index<S: AsRef<OsStr>, I: Iterator<Item = S>>(
+    fn find<S: AsRef<OsStr>, I: Iterator<Item = S>>(
         &self,
         path_components: I,
-    ) -> Result<Option<u32>, PathError> {
+    ) -> Option<PathHandle> {
+        assert!(
+            !self.is_dirty,
+            "Tree is dirty, run commit_changes after mutating!"
+        );
         let mut path_components = path_components.collect::<Vec<_>>();
-        let filename = path_components.pop();
-        let filename = filename.ok_or(PathError::InvalidPath)?;
+        assert!(
+            !path_components.is_empty(),
+            "Cannot add the path to the pool: the path is empty!"
+        );
+        let filename = path_components.pop().unwrap();
 
         let dir = DirectoryNode::open_dir_all(&self.root, path_components.into_iter());
-        if dir.is_none() {
-            return Ok(None);
-        }
+        dir.as_ref()?;
         let dir = dir.unwrap();
 
         let dir_ref = dir.borrow();
         if let TreeNode::Directory(ref dir) = *dir_ref {
             let node = dir.open(filename.as_ref());
-            // Just take the index from the file node.
-            return Ok(node
+            // Just take the handle from the file node.
+            return node
                 .map(|x| match &*x.borrow() {
-                    TreeNode::File(file) => file.index,
+                    TreeNode::File(file) => file.handle,
                     _ => unreachable!(),
                 })
-                .flatten()
-                .map(|x| x.get()));
+                .flatten();
         }
 
-        Ok(None)
+        None
     }
 
-    fn create_lookup(&self) -> HashMap<u32, OsString> {
+    fn create_lookup(&self) -> HashMap<PathHandle, OsString> {
+        assert!(
+            !self.is_dirty,
+            "Tree is dirty, run commit_changes after mutating!"
+        );
         let mut map = HashMap::new();
 
         let mut i = 1;
         self.traverse_paths(|x| {
-            map.insert(i, x.into());
+            map.insert(PathHandle(i), x.into());
             i += 1;
         });
 
@@ -220,7 +237,7 @@ impl PathIndex for PathTree {
     }
 }
 
-/// A node in the path index tree.
+/// A node in the path tree.
 ///
 /// Note: Path names are stored as UTF-8 encoded strings.
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -254,7 +271,7 @@ impl Clone for DirectoryNode {
 struct FileNode {
     name: OsString,
     #[serde(skip)]
-    index: Option<NonZeroU32>,
+    handle: Option<PathHandle>,
 }
 
 impl TreeNode {
@@ -377,7 +394,7 @@ impl FileNode {
     fn new(name: &OsStr) -> Self {
         Self {
             name: name.into(),
-            index: None,
+            handle: None,
         }
     }
 

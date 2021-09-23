@@ -57,12 +57,12 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     opts.set_force(is_force);
     opts.set_num_workers(threads);
 
-    match repo.extract(new_head.clone(), opts) {
+    match repo.extract_snapshot(new_head.clone(), opts) {
         Ok(result) => {
-            println!("A \t{} files", result.added_file_count);
-            println!("D \t{} files", result.removed_file_count);
-            println!("M \t{} files", result.modified_file_count);
-            println!("Extracted '{}'", new_head);
+            eprintln!("A \t{} files", result.added_file_count);
+            eprintln!("D \t{} files", result.removed_file_count);
+            eprintln!("M \t{} files", result.modified_file_count);
+            eprintln!("Extracted '{}'", new_head);
         }
         Err(e) => match e {
             RepoError::PackError(PackError::SnapshotNotFound) => {

@@ -27,7 +27,7 @@ use super::fs::{create_temp_path, ensure_dir, get_last_modified, read_or_none, w
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::batch;
 use crate::log::measure_ok;
-use crate::packidx::{ObjectChecksum, ObjectIndex, PackEntry, PackError, PackIndex};
+use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 
 /// A struct specifying the the extract options.
@@ -109,6 +109,8 @@ pub struct ExtractResult {
     pub removed_file_count: u32,
 }
 
+/// The repository index is a data structure that can be rebuild from the
+/// available pack file indexes and is used to speed-up snapshot lookups.
 #[derive(Serialize, Deserialize)]
 pub struct RepositoryIndex {
     snapshots: HashMap<String, Vec<PackId>>,
@@ -164,6 +166,8 @@ impl Default for RepositoryIndex {
     }
 }
 
+/// Contains methods for interfacing with elfshaker repositories, including
+/// methods to create snapshots and pack files, and to extract files from them.
 pub struct Repository {
     /// The path containing the [`Repository::data_dir`] directory.
     path: PathBuf,
@@ -176,7 +180,8 @@ pub struct Repository {
 }
 
 impl Repository {
-    /// Rebuilds the repository index. Use this if the repository fails to open.
+    /// Rebuilds the repository index by collating the snapshots from all
+    /// pack files found in the [`PACKS_DIR`] directory.
     pub fn update_index(repo_dir: &Path) -> Result<RepositoryIndex, Error> {
         info!("Opening repository {:?}...", repo_dir);
         let mut packs_dir = repo_dir.to_owned();
@@ -209,13 +214,13 @@ impl Repository {
             let pack_index = Pack::parse_index(std::io::BufReader::new(File::open(pack_path)?))?;
             let snapshots = pack_index.snapshots();
             for snapshot in snapshots {
-                let id = SnapshotId::new(PackId::Packed(pack_name.to_owned()), snapshot.tag())?;
+                let id = SnapshotId::new(PackId::Pack(pack_name.to_owned()), snapshot.tag())?;
                 index.add_snapshot(&id);
             }
         }
 
-        for snapshot in Self::read_unpacked_index(repo_dir)?.snapshots() {
-            let id = SnapshotId::unpacked(snapshot.tag())?;
+        for snapshot in Self::read_loose_index(repo_dir)?.snapshots() {
+            let id = SnapshotId::loose(snapshot.tag())?;
             index.add_snapshot(&id);
         }
 
@@ -301,7 +306,7 @@ impl Repository {
     }
     /// Open the pack.
     pub fn open_pack(&self, pack: &str) -> Result<Pack, Error> {
-        let pack_id = PackId::Packed(pack.to_owned());
+        let pack_id = PackId::Pack(pack.to_owned());
         if !self.index().available_packs().iter().any(|p| *p == pack_id) {
             return Err(Error::PackNotFound);
         }
@@ -313,7 +318,7 @@ impl Repository {
     /// # Arguments
     ///
     /// * `snapshot_id` - The snapshot to extract.
-    pub fn extract(
+    pub fn extract_snapshot(
         &mut self,
         snapshot_id: SnapshotId,
         opts: ExtractOptions,
@@ -324,45 +329,51 @@ impl Repository {
         }
 
         // Open the pack and find the snapshot specified in SnapshotId.
-        let source_pack;
-        let mut unpacked_index = None;
-        let pack_index = if let PackId::Packed(name) = snapshot_id.pack() {
-            source_pack = Some(self.open_pack(name)?);
-            source_pack.as_ref().unwrap().index()
+        let source_name: Option<String> = snapshot_id.pack().clone().into();
+
+        let source_pack: Option<_> =
+            source_name.map_or(Ok(None), |name| self.open_pack(&name).map(Some))?;
+
+        let source_index = source_pack
+            .as_ref()
+            .map(|p| Cow::Borrowed(p.index()))
+            .ok_or(PackError::SnapshotNotFound)
+            .or_else(|_| -> Result<Cow<PackIndex>, Error> {
+                Ok(Cow::Owned(self.loose_index()?))
+            })?;
+
+        let entries = source_index.entries_from_snapshot(snapshot_id.tag())?;
+        let (new_entries, old_entries) = if opts.reset || !self.head().is_some() {
+            // Extract all, remove nothing
+            (entries, vec![])
         } else {
-            source_pack = None;
-            unpacked_index = Some(self.unpacked_index()?);
-            unpacked_index.as_ref().unwrap()
-        };
-
-        let entries = pack_index.entries_from_snapshot(snapshot_id.tag())?;
-
-        let (new_entries, old_entries) = if !opts.reset && self.head().is_some() {
             let head = self.head().as_ref().unwrap();
             // HEAD and new snapshot packs might differ
             if snapshot_id.pack() == head.pack() {
-                let head_entries = pack_index.entries_from_snapshot(head.tag())?;
+                let head_entries = source_index.entries_from_snapshot(head.tag())?;
                 Self::compute_entry_diff(&head_entries, &entries)
             } else {
-                let head_pack = if let PackId::Packed(name) = head.pack() {
-                    Some(self.open_pack(name).map_err(|e| {
+                let head_pack_name: Option<String> = head.pack().clone().into();
+                let head_pack = head_pack_name
+                    .map(|name| self.open_pack(&name))
+                    .transpose()
+                    .map_err(|e| {
                         if matches!(e, Error::PackNotFound) {
                             Error::BrokenHeadRef
                         } else {
                             e
                         }
-                    })?)
-                } else {
-                    None
-                };
-                let head_index = if let Some(ref head_pack) = head_pack {
-                    head_pack.index()
-                } else {
-                    if unpacked_index.is_none() {
-                        unpacked_index = Some(self.unpacked_index()?)
-                    }
-                    &unpacked_index.as_ref().unwrap()
-                };
+                    })?;
+
+                let head_index = head_pack
+                    .as_ref()
+                    .map(|pack| Cow::Borrowed(pack.index()))
+                    .map(Result::<Cow<PackIndex>, Error>::Ok)
+                    .unwrap_or_else(|| match source_pack {
+                        Some(_) => Ok(source_index),
+                        None => Ok(Cow::Owned(self.loose_index()?)),
+                    })?;
+
                 let head_entries = head_index.entries_from_snapshot(head.tag()).map_err(|e| {
                     if matches!(e, PackError::SnapshotNotFound) {
                         Error::BrokenHeadRef
@@ -372,16 +383,13 @@ impl Repository {
                 })?;
                 Self::compute_entry_diff(&head_entries, &entries)
             }
-        } else {
-            // Extract all, remove nothing
-            (entries, vec![])
         };
 
         // There is no point in deleting files which will be overwritten by the extract, so
         // we identify and ignore them beforehand.
         let (updated_paths, removed_paths) = {
-            let new_paths: HashSet<_> = new_entries.iter().map(|e| e.path()).collect();
-            let old_paths: HashSet<_> = old_entries.iter().map(|e| e.path()).collect();
+            let new_paths: HashSet<_> = new_entries.iter().map(|e| &e.path).collect();
+            let old_paths: HashSet<_> = old_entries.iter().map(|e| &e.path).collect();
             // Paths which will be deleted
             let updated: Vec<_> = new_paths.intersection(&old_paths).copied().collect();
             let removed: Vec<_> = old_paths.difference(&new_paths).copied().collect();
@@ -393,7 +401,7 @@ impl Repository {
             for entry in &old_entries {
                 path_buf.clear();
                 path_buf.push(&self.path);
-                path_buf.push(entry.path());
+                path_buf.push(&entry.path);
                 self.check_for_changes(&path_buf)?;
             }
         }
@@ -423,14 +431,14 @@ impl Repository {
     /// # Arguments
     ///
     /// * `pack` - The pack containing the entries. If [`None`], entries will be
-    ///     assumed to be unpacked.
+    ///     assumed to be loose.
     /// * `entries` - The list of entries to extract.
     /// * `path` - The destination path.
     /// * `verify` - Set to true to verify object checksums after extraction.
     pub fn extract_entries<P>(
         &mut self,
         pack: Option<Pack>,
-        entries: &[PackEntry],
+        entries: &[FileEntry],
         path: P,
         opts: ExtractOptions,
     ) -> Result<(), Error>
@@ -438,9 +446,9 @@ impl Repository {
         P: AsRef<Path>,
     {
         if let Some(pack) = pack {
-            pack.extract(&entries, path.as_ref(), opts.verify(), opts.num_workers())
+            pack.extract_entries(&entries, path.as_ref(), opts.verify(), opts.num_workers())
         } else {
-            self.extract_from_unpacked(&entries, path.as_ref(), opts.verify())
+            self.copy_loose_entries(&entries, path.as_ref(), opts.verify())
         }
     }
 
@@ -449,14 +457,18 @@ impl Repository {
         Cow::Borrowed(REPO_DIR)
     }
 
-    pub fn unpacked_index(&self) -> Result<PackIndex, Error> {
-        Self::read_unpacked_index(&self.path)
+    /// The loose index is the same format as a standard pack index. It
+    /// references objects which are not in packs, under
+    /// elfshaker_data/loose/<checksum fragment>.
+    /// Offsets are all zero, since they do not live in a concatenated data stream.
+    pub fn loose_index(&self) -> Result<PackIndex, Error> {
+        Self::read_loose_index(&self.path)
     }
 
-    fn read_unpacked_index(repo_dir: &Path) -> Result<PackIndex, Error> {
+    fn read_loose_index(repo_dir: &Path) -> Result<PackIndex, Error> {
         let mut index_path = repo_dir.join(&*Repository::data_dir());
-        index_path.push(UNPACKED_DIR);
-        index_path.push(UNPACKED_INDEX_FILE);
+        index_path.push(LOOSE_DIR);
+        index_path.push(LOOSE_INDEX_FILE);
 
         let index = read_or_none(index_path)?.map(|b| Pack::parse_index(&b[..]));
         Ok(match index {
@@ -465,10 +477,10 @@ impl Repository {
         })
     }
 
-    fn update_unpacked_index(&mut self, index: &PackIndex) -> Result<(), Error> {
+    fn update_loose_index(&mut self, index: &PackIndex) -> Result<(), Error> {
         let mut index_path = self.path.join(&*Repository::data_dir());
-        index_path.push(UNPACKED_DIR);
-        index_path.push(UNPACKED_INDEX_FILE);
+        index_path.push(LOOSE_DIR);
+        index_path.push(LOOSE_INDEX_FILE);
 
         let mut buf = vec![];
         // This should not fail, unless there is an error in the implementation.
@@ -478,12 +490,12 @@ impl Repository {
         Ok(())
     }
 
-    pub fn snapshot<I, P>(&mut self, snapshot: &SnapshotId, files: I) -> Result<(), Error>
+    pub fn create_snapshot<I, P>(&mut self, snapshot: &SnapshotId, files: I) -> Result<(), Error>
     where
         I: Iterator<Item = P>,
         P: AsRef<Path>,
     {
-        assert!(matches!(snapshot.pack(), PackId::Unpacked));
+        assert!(matches!(snapshot.pack(), PackId::Loose));
 
         let files: Vec<_> = clean_file_list(self.path.as_ref(), files)?.collect();
         info!("Computing checksums for {} files...", files.len());
@@ -491,42 +503,41 @@ impl Repository {
         let (duration, checksums) = measure_ok(|| batch::compute_checksums(&files))?;
         info!("Checksum computation took {:?}", duration);
         // Compare with index
-        info!("Reading unpacked index...");
-        let mut index = self.unpacked_index()?;
+        info!("Reading loose snapshot index...");
+        let mut index = self.loose_index()?;
         if index.snapshots().iter().any(|s| s.tag() == snapshot.tag()) {
             return Err(PackError::SnapshotAlreadyExists.into());
         }
         // input_checksums maps checksums to the first file on disk with that checksum.
         let input_checksums: HashMap<&_, usize> =
             checksums.iter().enumerate().map(|(x, y)| (y, x)).collect();
-        // unpacked_checksums contains the checksums in the unpacked.idx
-        let unpacked_checksums: HashSet<&_> =
-            index.objects().iter().map(|o| o.checksum()).collect();
+        // loose_checksums contains the checksums in the loose.idx
+        let loose_checksums: HashSet<&_> = index.objects().iter().map(|o| &o.checksum).collect();
         let new_checksums: Vec<&_> = input_checksums
             .keys()
-            .filter(|&x| !unpacked_checksums.contains(x))
+            .filter(|&x| !loose_checksums.contains(x))
             .copied()
             .collect();
         info!("Need to store {} new objects!", new_checksums.len());
-        // Compute the entries for the new snapshot and update the unpacked index
+        // Compute the entries for the new snapshot and update the loose index
         let pack_entries = checksums
             .iter()
             .enumerate()
             .map(|(file_index, checksum)| {
                 let file_path = &files[file_index];
                 let file_size = fs::metadata(file_path)?.len();
-                Ok(PackEntry::new(
-                    file_path.as_ref(),
-                    ObjectIndex::loose(*checksum, file_size),
+                Ok(FileEntry::new(
+                    file_path.into(),
+                    ObjectEntry::loose(*checksum, file_size),
                 ))
             })
             .collect::<Result<Vec<_>, Error>>()?;
         index.push_snapshot(snapshot.tag(), &pack_entries)?;
 
         // Copy files
-        let mut unpacked_dir = self.path.join(&*Repository::data_dir());
-        unpacked_dir.push(UNPACKED_DIR);
-        ensure_dir(&unpacked_dir)?;
+        let mut loose_dir = self.path.join(&*Repository::data_dir());
+        loose_dir.push(LOOSE_DIR);
+        ensure_dir(&loose_dir)?;
         // Create temp dir
         let temp_dir = self.temp_dir();
         ensure_dir(&temp_dir)?;
@@ -540,8 +551,8 @@ impl Repository {
             self.write_loose_object(file, &temp_dir, checksum)?;
         }
 
-        info!("Updating unpacked index...");
-        self.update_unpacked_index(&index)?;
+        info!("Updating loose snapshot index...");
+        self.update_loose_index(&index)?;
         info!("Updating HEAD...");
         self.update_head(&snapshot)?;
         Ok(())
@@ -561,10 +572,10 @@ impl Repository {
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {
-        assert!(!matches!(pack, PackId::Unpacked));
+        assert!(!matches!(pack, PackId::Loose));
         let pack_name = match pack {
-            PackId::Packed(name) => name,
-            PackId::Unpacked => unreachable!(),
+            PackId::Pack(name) => name,
+            PackId::Loose => unreachable!(),
         };
 
         // Construct output file path.
@@ -585,7 +596,7 @@ impl Repository {
         // Gather a list of all objects to compress.
         // The `index.objects()` list should be pre-sorted for optimal compression.
         let object_partitions =
-            partition_by_u64(index.objects(), opts.num_frames, |o| o.size() as u64);
+            partition_by_u64(index.objects(), opts.num_frames, |o| o.size as u64);
 
         let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
             / object_partitions.len() as u32;
@@ -600,10 +611,7 @@ impl Repository {
         let done_task_count = std::sync::atomic::AtomicUsize::new(0);
         let total_task_count = object_partitions.len();
 
-        info!(
-            "Starting {} compression tasks, processing {} at a time using {} worker threads for each...",
-            total_task_count, opts.num_workers, workers_per_task
-        );
+        info!("Creating {} compressed frames...", total_task_count);
 
         let tasks = object_partitions.into_iter().map(|objects| {
             let base_path = self.path.to_path_buf();
@@ -611,7 +619,7 @@ impl Repository {
             move || {
                 let paths = objects
                     .iter()
-                    .map(|o| build_loose_object_path(&base_path, o.checksum()))
+                    .map(|o| build_loose_object_path(&base_path, &o.checksum))
                     .collect::<Vec<_>>();
 
                 let mut buf = vec![];
@@ -637,19 +645,21 @@ impl Repository {
                 frame_size: compressed_buffer.len() as u64,
                 decompressed_size,
             });
+            // Note: storing the whole file in memory at this point.
+            // Could write them out, except that the header needs to be prepended.
             frame_bufs.push(compressed_buffer);
         }
 
         // Report that all compression tasks are done.
         reporter.checkpoint(total_task_count, Some(0));
 
-        // Create and serialize header
+        // Create and serialize header.
         let header = PackHeader::new(frames);
         let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
 
         // And a writer to that temporary file.
         let mut pack_writer = io::BufWriter::new(File::create(&temp_path)?);
-        // Write header and frames
+        // Write header and frames.
         write_skippable_frame(&mut pack_writer, &header_bytes)?;
         for frame_buf in frame_bufs {
             pack_writer.write_all(&frame_buf)?;
@@ -657,7 +667,7 @@ impl Repository {
         pack_writer.flush()?;
         drop(pack_writer);
 
-        // Serialize the index
+        // Serialize the index.
         let mut index_bytes: Vec<u8> = vec![];
         rmp_serde::encode::write(&mut index_bytes, &index).expect("Serialization failed!");
 
@@ -675,12 +685,12 @@ impl Repository {
         Ok(())
     }
 
-    /// Deletes ALL unpacked snapshots and objects.
-    pub fn remove_unpacked_all(&mut self) -> Result<(), Error> {
-        let mut unpacked_dir = self.path().join(&*Repository::data_dir());
-        unpacked_dir.push(UNPACKED_DIR);
+    /// Deletes ALL loose snapshots and objects.
+    pub fn remove_loose_all(&mut self) -> Result<(), Error> {
+        let mut loose_dir = self.path().join(&*Repository::data_dir());
+        loose_dir.push(LOOSE_DIR);
 
-        match fs::remove_dir_all(&unpacked_dir) {
+        match fs::remove_dir_all(&loose_dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             r => r,
         }?;
@@ -701,9 +711,9 @@ impl Repository {
         Ok(())
     }
 
-    fn extract_from_unpacked(
+    fn copy_loose_entries(
         &mut self,
-        entries: &[PackEntry],
+        entries: &[FileEntry],
         path: &Path,
         verify: bool,
     ) -> Result<(), Error> {
@@ -712,18 +722,18 @@ impl Repository {
         for entry in entries {
             dest_path.clear();
             dest_path.push(path);
-            dest_path.push(entry.path());
+            dest_path.push(&entry.path);
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;
             fs::copy(
-                build_loose_object_path(&self.path, entry.object_index().checksum()),
+                build_loose_object_path(&self.path, &entry.object.checksum),
                 &dest_path,
             )?;
         }
 
         if verify {
             let checksums = batch::compute_checksums(&dest_paths)?;
-            let expected_checksums = entries.iter().map(|e| e.object_index().checksum());
+            let expected_checksums = entries.iter().map(|e| &e.object.checksum);
             for (expected, actual) in expected_checksums.zip(checksums) {
                 if *expected != actual {
                     return Err(PackError::ChecksumMismatch.into());
@@ -738,20 +748,20 @@ impl Repository {
     /// `to_entries` which are not present in `from_entries`. `removed` contains the entries
     /// from `from_entries` which are not present in `to_entries`.
     fn compute_entry_diff(
-        from_entries: &[PackEntry],
-        to_entries: &[PackEntry],
-    ) -> (Vec<PackEntry>, Vec<PackEntry>) {
+        from_entries: &[FileEntry],
+        to_entries: &[FileEntry],
+    ) -> (Vec<FileEntry>, Vec<FileEntry>) {
         // Create lookup based on path+checksum.
-        // The reason we're not using a `HashSet<PackEntry>` here is that
+        // The reason we're not using a `HashSet<FileEntry>` here is that
         // we only care about the file path and checksum,
         // but not, for example, the offset of the object in the pack file.
         let from_lookup: HashMap<_, _> = from_entries
             .iter()
-            .map(|e| ((e.path(), e.object_index().checksum()), e))
+            .map(|e| ((&e.path, &e.object.checksum), e))
             .collect();
         let to_lookup: HashMap<_, _> = to_entries
             .iter()
-            .map(|e| ((e.path(), e.object_index().checksum()), e))
+            .map(|e| ((&e.path, &e.object.checksum), e))
             .collect();
 
         let mut added = vec![];
@@ -784,7 +794,7 @@ impl Repository {
             .map_err(|_| {
                 warn!("Expected file {:?} to be present!", path);
                 // If the file is missing that also means it has been modified!
-                return Error::DirtyWorkDir;
+                Error::DirtyWorkDir
             })
             // If the modification date of the file is unknown, there is no
             // other option to fallback on, so we mark the directory as dirty.
@@ -808,7 +818,7 @@ impl Repository {
         temp_dir
     }
 
-    /// Atomically writes an object to the unpacked object store.
+    /// Atomically writes an object to the loose object store.
     ///
     /// # Arguments
     ///
@@ -822,7 +832,7 @@ impl Repository {
         let obj_path = build_loose_object_path(&self.path, checksum);
         if obj_path.exists() {
             // No need to do anything. Object writes are atomic, so if an object
-            // with the same checksum alerady exists, there is no need to do anything.
+            // with the same checksum already exists, there is no need to do anything.
             return Ok(());
         }
 
@@ -848,14 +858,14 @@ fn is_pack_index(entry: &DirEntry) -> bool {
 fn build_loose_object_path(repo_path: &Path, checksum: &ObjectChecksum) -> PathBuf {
     let checksum_str = hex::encode(&checksum[..]);
     let mut obj_path = repo_path.join(&*Repository::data_dir());
-    // $REPO_DIR/$UNPACKED
-    obj_path.push(UNPACKED_DIR);
+    // $REPO_DIR/$LOOSE
+    obj_path.push(LOOSE_DIR);
 
-    // $REPO_DIR/$UNPACKED/FA/
+    // $REPO_DIR/$LOOSE/FA/
     obj_path.push(&checksum_str[..2]);
-    // $REPO_DIR/$UNPACKED/FA/F0/
+    // $REPO_DIR/$LOOSE/FA/F0/
     obj_path.push(&checksum_str[2..4]);
-    // $REPO_DIR/$UNPACKED/FA/F0/FAF0F0F0FAFAF0F0F0FAFAF0F0
+    // $REPO_DIR/$LOOSE/FA/F0/FAF0F0F0FAFAF0F0F0FAFAF0F0
     obj_path.push(&checksum_str[4..]);
     obj_path
 }
@@ -890,13 +900,13 @@ where
         })
         .collect::<io::Result<Vec<PathBuf>>>()?
         .into_iter()
-        .filter(|p| !is_data_dir(&p));
+        .filter(|p| !is_elfshaker_data_path(&p));
 
     Ok(files)
 }
 
 /// Checks if the relative path is rooted at the data directory.
-fn is_data_dir(p: &Path) -> bool {
+fn is_elfshaker_data_path(p: &Path) -> bool {
     assert!(p.is_relative());
     match p.components().next() {
         Some(c) => c.as_os_str() == &*Repository::data_dir(),
@@ -919,7 +929,7 @@ mod tests {
             format!(
                 "/repo/{}/{}/fa/f0/deadbeefbadc0de0faf0deadbeefbadc0de0",
                 Repository::data_dir(),
-                UNPACKED_DIR
+                LOOSE_DIR
             ),
             path.to_str().unwrap(),
         );
@@ -928,17 +938,17 @@ mod tests {
     #[test]
     fn data_dir_detected() {
         let path = format!("{}", Repository::data_dir());
-        assert!(is_data_dir(path.as_ref()));
+        assert!(is_elfshaker_data_path(path.as_ref()));
     }
     #[test]
     fn data_dir_detected_as_parent() {
         let path = format!("{}/something", Repository::data_dir());
-        assert!(is_data_dir(path.as_ref()));
+        assert!(is_elfshaker_data_path(path.as_ref()));
     }
     #[test]
     fn data_dir_not_detected_incorrectly() {
         let path = "some/path/something";
-        assert!(!is_data_dir(path.as_ref()));
+        assert!(!is_elfshaker_data_path(path.as_ref()));
     }
 
     #[test]
@@ -946,19 +956,19 @@ mod tests {
         let path = "/path/to/A";
         let old_checksum = [0; 20];
         let new_checksum = [1; 20];
-        let old_entries = [PackEntry::new(
-            path.as_ref(),
-            ObjectIndex::loose(old_checksum, 1),
+        let old_entries = [FileEntry::new(
+            path.into(),
+            ObjectEntry::loose(old_checksum, 1),
         )];
-        let new_entries = [PackEntry::new(
-            path.as_ref(),
-            ObjectIndex::loose(new_checksum, 1),
+        let new_entries = [FileEntry::new(
+            path.into(),
+            ObjectEntry::loose(new_checksum, 1),
         )];
         let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
         assert_eq!(1, added.len());
-        assert_eq!(path, added[0].path());
+        assert_eq!(path, added[0].path);
         assert_eq!(1, removed.len());
-        assert_eq!(path, removed[0].path());
+        assert_eq!(path, removed[0].path);
     }
 
     #[test]
@@ -969,19 +979,19 @@ mod tests {
         let path_b_old_checksum = [0; 20];
         let path_a_new_checksum = [1; 20];
         let old_entries = [
-            PackEntry::new(path_a.as_ref(), ObjectIndex::loose(path_a_old_checksum, 1)),
-            PackEntry::new(path_b.as_ref(), ObjectIndex::loose(path_b_old_checksum, 1)),
+            FileEntry::new(path_a.into(), ObjectEntry::loose(path_a_old_checksum, 1)),
+            FileEntry::new(path_b.into(), ObjectEntry::loose(path_b_old_checksum, 1)),
         ];
-        let new_entries = [PackEntry::new(
-            path_a.as_ref(),
-            ObjectIndex::loose(path_a_new_checksum, 1),
+        let new_entries = [FileEntry::new(
+            path_a.into(),
+            ObjectEntry::loose(path_a_new_checksum, 1),
         )];
         let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
         assert_eq!(1, added.len());
-        assert_eq!(path_a, added[0].path());
+        assert_eq!(path_a, added[0].path);
         assert_eq!(2, removed.len());
-        assert!(removed.iter().any(|e| path_a == e.path()));
-        assert!(removed.iter().any(|e| path_b == e.path()));
+        assert!(removed.iter().any(|e| path_a == e.path));
+        assert!(removed.iter().any(|e| path_b == e.path));
     }
 
     #[test]
@@ -993,28 +1003,28 @@ mod tests {
         let path_b_old_checksum = [1; 20];
         let path_b_new_checksum = [0; 20];
         let old_entries = [
-            PackEntry::new(path_a.as_ref(), ObjectIndex::loose(path_a_old_checksum, 1)),
-            PackEntry::new(path_b.as_ref(), ObjectIndex::loose(path_b_old_checksum, 1)),
+            FileEntry::new(path_a.into(), ObjectEntry::loose(path_a_old_checksum, 1)),
+            FileEntry::new(path_b.into(), ObjectEntry::loose(path_b_old_checksum, 1)),
         ];
         let new_entries = [
-            PackEntry::new(path_a.as_ref(), ObjectIndex::loose(path_a_new_checksum, 1)),
-            PackEntry::new(path_b.as_ref(), ObjectIndex::loose(path_b_new_checksum, 1)),
+            FileEntry::new(path_a.into(), ObjectEntry::loose(path_a_new_checksum, 1)),
+            FileEntry::new(path_b.into(), ObjectEntry::loose(path_b_new_checksum, 1)),
         ];
         let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
         assert_eq!(2, added.len());
         assert!(added
             .iter()
-            .any(|e| path_a == e.path() && path_a_new_checksum == *e.object_index().checksum()));
+            .any(|e| path_a == e.path && path_a_new_checksum == e.object.checksum));
         assert!(added
             .iter()
-            .any(|e| path_b == e.path() && path_b_new_checksum == *e.object_index().checksum()));
+            .any(|e| path_b == e.path && path_b_new_checksum == e.object.checksum));
         assert_eq!(2, removed.len());
         assert!(removed
             .iter()
-            .any(|e| path_a == e.path() && path_a_old_checksum == *e.object_index().checksum()));
+            .any(|e| path_a == e.path && path_a_old_checksum == e.object.checksum));
         assert!(removed
             .iter()
-            .any(|e| path_b == e.path() && path_b_old_checksum == *e.object_index().checksum()));
+            .any(|e| path_b == e.path && path_b_old_checksum == e.object.checksum));
     }
 
     #[test]
@@ -1027,10 +1037,10 @@ mod tests {
         };
         let snapshot = SnapshotId::from_str("pack/snapshot-2").unwrap();
         let err1 = repo
-            .extract(snapshot.clone(), ExtractOptions::default())
+            .extract_snapshot(snapshot.clone(), ExtractOptions::default())
             .unwrap_err();
         let err2 = repo
-            .extract(
+            .extract_snapshot(
                 snapshot.clone(),
                 ExtractOptions {
                     force: true,
@@ -1053,7 +1063,7 @@ mod tests {
         };
         let snapshot = SnapshotId::from_str("pack/snapshot").unwrap();
         let err = repo
-            .extract(
+            .extract_snapshot(
                 snapshot.clone(),
                 ExtractOptions {
                     force: true,

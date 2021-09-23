@@ -14,20 +14,20 @@ use std::{fmt::Display, str::FromStr};
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 
-use log::{info, warn};
+use log::info;
 
 use zstd::stream::raw::DParameter;
 use zstd::Decoder;
 
 use super::algo::run_in_parallel;
 use super::constants::{
-    DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC, PACK_INDEX_EXTENSION,
-    UNPACKED_ID,
+    DEFAULT_WINDOW_LOG_MAX, LOOSE_ID, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC,
+    PACK_INDEX_EXTENSION,
 };
 use super::error::Error;
 use super::repository::Repository;
 use crate::log::measure_ok;
-use crate::packidx::{ObjectChecksum, ObjectIndex, PackEntry, PackError, PackIndex};
+use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
 
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
 const EXTRA_ID_CHARS: &[char] = &['-', '_'];
@@ -60,10 +60,11 @@ impl Display for IdError {
 
 impl std::error::Error for IdError {}
 
+/// Identifies a pack file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PackId {
-    Packed(String),
-    Unpacked,
+    Pack(String),
+    Loose,
 }
 
 impl PackId {
@@ -80,10 +81,10 @@ impl FromStr for PackId {
         if !PackId::is_valid(s) {
             return Err(IdError::InvalidPack(s.to_owned()));
         }
-        if s == UNPACKED_ID {
-            Ok(PackId::Unpacked)
+        if s == LOOSE_ID {
+            Ok(PackId::Loose)
         } else {
-            Ok(PackId::Packed(s.to_owned()))
+            Ok(PackId::Pack(s.to_owned()))
         }
     }
 }
@@ -91,17 +92,26 @@ impl FromStr for PackId {
 impl Display for PackId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            PackId::Packed(s) => write!(f, "{}", s),
-            PackId::Unpacked => write!(f, "unpacked"),
+            PackId::Pack(s) => write!(f, "{}", s),
+            PackId::Loose => write!(f, "loose"),
         }
     }
 }
 
-impl std::convert::From<Option<&str>> for PackId {
-    fn from(opt: Option<&str>) -> Self {
+impl From<Option<String>> for PackId {
+    fn from(opt: Option<String>) -> Self {
         match opt {
-            Some(s) => Self::Packed(s.to_owned()),
-            None => Self::Unpacked,
+            Some(s) => Self::Pack(s),
+            None => Self::Loose,
+        }
+    }
+}
+
+impl From<PackId> for Option<String> {
+    fn from(pack: PackId) -> Option<String> {
+        match pack {
+            PackId::Pack(name) => Some(name),
+            PackId::Loose => None,
         }
     }
 }
@@ -125,12 +135,12 @@ impl SnapshotId {
         })
     }
 
-    pub fn unpacked(tag: &str) -> Result<Self, IdError> {
+    pub fn loose(tag: &str) -> Result<Self, IdError> {
         if !Self::is_valid(tag) {
             return Err(IdError::InvalidSnapshot(tag.to_owned()));
         }
         Ok(Self {
-            pack: PackId::Unpacked,
+            pack: PackId::Loose,
             tag: tag.to_owned(),
         })
     }
@@ -439,9 +449,9 @@ impl Pack {
     /// * `output_dir` - The directory relative to which the files will be extracted.
     /// * `verify` - Enable/disable checksum verification.
     #[allow(unused_mut)]
-    pub(crate) fn extract<P>(
+    pub(crate) fn extract_entries<P>(
         mut self,
-        entries: &[PackEntry],
+        entries: &[FileEntry],
         output_dir: P,
         verify: bool,
         num_workers: u32,
@@ -457,7 +467,7 @@ impl Pack {
         assert_ne!(0, num_workers);
         assert_ne!(0, num_frames);
         if num_frames < num_workers as usize {
-            warn!(
+            info!(
                 "Requested {} workers, but there are only {} frames!",
                 num_workers, num_frames
             );
@@ -466,15 +476,15 @@ impl Pack {
 
         // Assign entries to the frames they reside in.
         // The resulting entries will have offsets relative to their containing frame.
-        let frames = assign_to_frames(&self.header.frames, entries)?;
+        let frame_to_entries = assign_to_frames(&self.header.frames, entries)?;
 
         // Compute and log total amount of seeking and decompression needed.
-        let bytes_to_decompress = frames
+        let bytes_to_decompress = frame_to_entries
             .iter()
             .flat_map(|entries| {
                 entries
                     .iter()
-                    .map(|e| e.object_index().offset() + e.object_index().size())
+                    .map(|e| e.object.offset + e.object.size)
                     .max()
             })
             .sum::<u64>();
@@ -486,7 +496,7 @@ impl Pack {
         let tasks = self
             .frame_readers
             .into_iter()
-            .zip(frames.into_iter())
+            .zip(frame_to_entries.into_iter())
             // Skip frames we are not interested in
             .filter(|(_, entries)| !entries.is_empty())
             .map(|(frame_reader, entries)| {
@@ -564,43 +574,45 @@ fn compute_frame_offsets(frames: &[PackFrame]) -> Vec<u64> {
     frame_offsets
 }
 
-/// Returns a list of the data offsets, computed
-/// using the order and decompressed sizes of the given frames.
-fn compute_data_offsets(frames: &[PackFrame]) -> Vec<u64> {
-    let mut data_offsets: Vec<_> = vec![0; frames.len()];
-    for i in 1..data_offsets.len() {
-        data_offsets[i] = frames[i - 1].decompressed_size + data_offsets[i - 1];
+/// Returns a list of the data offsets, computed using the order and
+/// decompressed sizes of the given frames.
+fn compute_frame_decompressed_offset(frames: &[PackFrame]) -> Vec<u64> {
+    let mut frame_decompressed_offset: Vec<_> = vec![0; frames.len()];
+    for i in 1..frame_decompressed_offset.len() {
+        frame_decompressed_offset[i] =
+            frames[i - 1].decompressed_size + frame_decompressed_offset[i - 1];
     }
-    data_offsets
+    frame_decompressed_offset
 }
 
-/// Groups and transforms the list of [`PackEntry`]-s taken from a pack index (and with absolute offsets into the decompressed stream)
-/// into sets of entries per frame, with adjusted (relative) offsets to that corresponding Zstandard frame.
-/// Objects are assumed to not be split across two frames.
+/// Groups and transforms the list of [`FileEntry`]-s taken from a pack index
+/// (and with absolute offsets into the decompressed stream) into sets of
+/// entries per frame, with adjusted (relative) offsets to that corresponding
+/// Zstandard frame. Objects are assumed to not be split across two frames.
 fn assign_to_frames(
     frames: &[PackFrame],
-    entries: &[PackEntry],
-) -> Result<Vec<Vec<PackEntry>>, Error> {
-    let data_offsets: Vec<_> = compute_data_offsets(frames);
+    entries: &[FileEntry],
+) -> Result<Vec<Vec<FileEntry>>, Error> {
+    let frame_decompressed_offset: Vec<_> = compute_frame_decompressed_offset(frames);
 
     // Figure out frame belonging of the objects,
     // using the frame offset and the object offset.
-    let mut frames: Vec<Vec<PackEntry>> = (0..frames.len()).map(|_| vec![]).collect();
+    let mut frames: Vec<Vec<FileEntry>> = (0..frames.len()).map(|_| vec![]).collect();
     for entry in entries {
-        let frame_index = data_offsets
+        let frame_index = frame_decompressed_offset
             .iter()
-            // Find the index of the frame containing the object (objects are assumed to not be split across two frames)
-            .rposition(|&x| x <= entry.object_index().offset())
+            // Find the index of the frame containing the object (objects are
+            // assumed to not be split across two frames)
+            .rposition(|&x| x <= entry.object.offset)
             .ok_or(Error::CorruptPack)?;
         // Compute the offset relative to that frame.
-        let local_offset = entry.object_index().offset() - data_offsets[frame_index];
-        let local_entry = PackEntry::new(
-            entry.path(),
-            ObjectIndex::new(
-                *entry.object_index().checksum(),
-                // Replace the offset
-                local_offset,
-                entry.object_index().size(),
+        let local_offset = entry.object.offset - frame_decompressed_offset[frame_index];
+        let local_entry = FileEntry::new(
+            entry.path.clone(),
+            ObjectEntry::new(
+                entry.object.checksum,
+                local_offset, // Replace global offset -> local offset
+                entry.object.size,
             ),
         );
         frames[frame_index].push(local_entry);
@@ -667,15 +679,15 @@ impl std::iter::Sum<ExtractStats> for ExtractStats {
 /// Checksum verification can be toggled on/off.
 fn extract_files(
     mut reader: PackReader,
-    entries: &[PackEntry],
+    entries: &[FileEntry],
     output_dir: impl AsRef<Path>,
     verify: bool,
 ) -> Result<ExtractStats, Error> {
-    let mut entries: Vec<PackEntry> = entries.to_vec();
+    let mut entries: Vec<FileEntry> = entries.to_vec();
     // Sort objects to allow for forward-only seeking
     entries.sort_by(|x, y| {
-        let offset_x = x.object_index().offset();
-        let offset_y = y.object_index().offset();
+        let offset_x = x.object.offset;
+        let offset_y = y.object.offset;
         offset_x.cmp(&offset_y)
     });
 
@@ -687,26 +699,25 @@ fn extract_files(
         let mut path_buf = PathBuf::new();
         let mut pos = 0;
         for entry in entries {
-            let path = entry.path();
-            let object = entry.object_index();
+            let object = entry.object;
             // Seek forward
-            let discard_bytes = object.offset() - pos;
+            let discard_bytes = object.offset - pos;
             // Check if we need to read a new object.
             // The current position in stream can be AFTER the object offset only
             // if the previous and this object are the same. This is because the objects
             // are sorted by offset, and the current position is set to the offset at the
             // end of each object, after that object is consumed.
-            if pos <= object.offset() {
+            if pos <= object.offset {
                 stats.seek_time += measure_ok(|| reader.seek(discard_bytes))?.0.as_secs_f64();
                 // Resize buf
-                buf.resize(object.size() as usize, 0);
+                buf.resize(object.size as usize, 0);
                 // Read object
                 stats.object_time += measure_ok(|| reader.read_exact(&mut buf[..]))?
                     .0
                     .as_secs_f64();
-                pos = object.offset() + object.size();
+                pos = object.offset + object.size;
                 if verify {
-                    stats.verify_time += measure_ok(|| verify_object(&buf[..], object.checksum()))?
+                    stats.verify_time += measure_ok(|| verify_object(&buf[..], &object.checksum))?
                         .0
                         .as_secs_f64();
                 }
@@ -714,7 +725,7 @@ fn extract_files(
             // Output path
             path_buf.clear();
             path_buf.push(&output_dir);
-            path_buf.push(path);
+            path_buf.push(&entry.path);
             stats.write_time += measure_ok(|| write_object(&buf[..], &path_buf))?
                 .0
                 .as_secs_f64();
@@ -733,10 +744,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unpacked_snapshot_id_parses() {
+    fn loose_snapshot_id_parses() {
         assert_eq!(
-            SnapshotId::unpacked("my-snapshot").unwrap(),
-            SnapshotId::from_str("unpacked/my-snapshot").unwrap()
+            SnapshotId::loose("my-snapshot").unwrap(),
+            SnapshotId::from_str("loose/my-snapshot").unwrap()
         );
     }
     #[test]
@@ -778,8 +789,8 @@ mod tests {
             decompressed_size: 1000,
         }];
         let entries = [
-            PackEntry::new("A".as_ref(), ObjectIndex::new([0; 20], 50, 200)),
-            PackEntry::new("B".as_ref(), ObjectIndex::new([1; 20], 50, 200)),
+            FileEntry::new("A".into(), ObjectEntry::new([0; 20], 50, 200)),
+            FileEntry::new("B".into(), ObjectEntry::new([1; 20], 50, 200)),
         ];
         let result = assign_to_frames(&frames, &entries).unwrap();
         assert_eq!(1, result.len());
@@ -798,16 +809,16 @@ mod tests {
             },
         ];
         let entries = [
-            PackEntry::new("A".as_ref(), ObjectIndex::new([0; 20], 800, 200)),
-            PackEntry::new("B".as_ref(), ObjectIndex::new([1; 20], 1200, 200)),
+            FileEntry::new("A".into(), ObjectEntry::new([0; 20], 800, 200)),
+            FileEntry::new("B".into(), ObjectEntry::new([1; 20], 1200, 200)),
         ];
         let frame_1_entries = [
             // Offset is same
-            PackEntry::new("A".as_ref(), ObjectIndex::new([0; 20], 800, 200)),
+            FileEntry::new("A".into(), ObjectEntry::new([0; 20], 800, 200)),
         ];
         let frame_2_entries = [
             // Offset 1200 -> 200
-            PackEntry::new("B".as_ref(), ObjectIndex::new([1; 20], 200, 200)),
+            FileEntry::new("B".into(), ObjectEntry::new([1; 20], 200, 200)),
         ];
         let result = assign_to_frames(&frames, &entries).unwrap();
         assert_eq!(2, result.len());

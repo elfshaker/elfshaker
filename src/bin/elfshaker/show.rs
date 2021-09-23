@@ -22,20 +22,20 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     };
     let snapshot = SnapshotId::new(pack, snapshot)?;
     let source_pack;
-    let unpacked_index;
-    let pack_index = if let PackId::Packed(name) = snapshot.pack() {
+    let loose_index;
+    let pack_index = if let PackId::Pack(name) = snapshot.pack() {
         source_pack = Some(repo.open_pack(name)?);
         source_pack.as_ref().unwrap().index()
     } else {
         source_pack = None;
-        unpacked_index = Some(repo.unpacked_index()?);
-        unpacked_index.as_ref().unwrap()
+        loose_index = Some(repo.loose_index()?);
+        loose_index.as_ref().unwrap()
     };
 
     let entries: HashMap<_, _> = pack_index
         .entries_from_snapshot(snapshot.tag())?
         .into_iter()
-        .map(|e| (e.path().to_owned(), e))
+        .map(|e| (e.path.clone(), e))
         .collect();
 
     // Attempt to find all entries by the paths specified on the command line.
@@ -64,7 +64,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
         // Dump the contents of all entries to stdout.
         for e in &selected_entries {
-            let path = temp_dir.join(e.path());
+            let path = temp_dir.join(&e.path);
             std::io::copy(&mut std::fs::File::open(path)?, &mut std::io::stdout())?;
         }
         Ok(())

@@ -119,7 +119,7 @@ test_store_works() {
   "$elfshaker" --verbose extract --verify --reset -P "$pack" "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
   "$elfshaker" --verbose update-index
-  verify_snapshot unpacked "$snapshot_b"
+  verify_snapshot loose "$snapshot_b"
 }
 
 test_store_and_extract_different_works() {
@@ -137,7 +137,7 @@ test_store_twice_works() {
   "$elfshaker" --verbose store "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b-again"
   "$elfshaker" --verbose update-index
-  diff_output=$(diff <("$elfshaker" list -P unpacked "$snapshot_b" | sort) <("$elfshaker" list -P unpacked "$snapshot_b-again" | sort))
+  diff_output=$(diff <("$elfshaker" list -P loose "$snapshot_b" | sort) <("$elfshaker" list -P loose "$snapshot_b-again" | sort))
   if [[ -n "${diff_output// }" ]]; then
     echo "'$diff_output'"
     exit 1
@@ -151,7 +151,7 @@ test_store_finds_new_files() {
   test_file=$(mktemp -p .)
   "$elfshaker" --verbose store "$snapshot_b-mod"
   "$elfshaker" --verbose update-index
-  "$elfshaker" list -P unpacked "$snapshot_b-mod" | grep $(basename "$test_file") || {
+  "$elfshaker" list -P loose "$snapshot_b-mod" | grep $(basename "$test_file") || {
     echo 'Failed to store newly created file!'
     exit 1
   }
@@ -280,7 +280,7 @@ test_pack_two_snapshots_multiframe_works() {
 test_show_from_pack_works() {
   "$elfshaker" update-index
   "$elfshaker" extract --reset --verify -P "$pack" "$snapshot_a"
-  file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | tail -n+2 | head -n1 | awk '{print $NF}')"
+  file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
   sha1_extract="$(sha1sum < "$file_path")"
   sha1_show="$("$elfshaker" --verbose show -P "$pack" "$snapshot_a" "$file_path" | sha1sum)"
   if [[ "$sha1_extract" != "$sha1_show" ]]; then
@@ -289,14 +289,14 @@ test_show_from_pack_works() {
   fi
 }
 
-test_show_from_unpacked_works() {
+test_show_from_loose_works() {
   "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
   "$elfshaker" store "$snapshot_a"
   "$elfshaker" update-index
-  file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | tail -n+2 | head -n1 | awk '{print $NF}')"
+  file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
   sha1_extract="$(sha1sum < "$file_path")"
-  sha1_show="$("$elfshaker" --verbose show -P unpacked "$snapshot_a" "$file_path" | sha1sum)"
+  sha1_show="$("$elfshaker" --verbose show -P loose "$snapshot_a" "$file_path" | sha1sum)"
   if [[ "$sha1_extract" != "$sha1_show" ]]; then
     echo 'Outputs of extract and show do not match!'
     exit 1
@@ -351,7 +351,7 @@ main() {
 
   list_output=$(mktemp)
   # Grab 2 snapshots from the pack
-  "$elfshaker" list -P "$pack" | sed '1d' > "$list_output"
+  "$elfshaker" list -P "$pack" 2>/dev/null | sed '1d' > "$list_output"
   snapshot_a=$(head -n 1 "$list_output" | awk '{print $1;}')
   snapshot_b=$(tail -n 1 "$list_output" | awk '{print $1;}')
   rm "$list_output"
@@ -374,7 +374,7 @@ main() {
   run_test test_pack_two_snapshots_object_sort_works
   run_test test_pack_two_snapshots_multiframe_works
   run_test test_show_from_pack_works
-  run_test test_show_from_unpacked_works
+  run_test test_show_from_loose_works
   run_test test_head_updated_after_packing
   run_test test_touched_file_dirties_repo
   run_test test_dirty_repo_can_be_forced

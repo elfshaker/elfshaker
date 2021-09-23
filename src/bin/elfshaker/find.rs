@@ -16,7 +16,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
     for snapshot in index
         .available_snapshots()
-        .into_iter()
+        .iter()
         .filter(|tag| tag.contains(term))
     {
         for pack in index.find_packs(snapshot) {
@@ -24,7 +24,10 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    print_table(table.iter());
+    print_table(
+        Some(&["SNAPSHOT".to_owned(), "PACK".to_owned()]),
+        table.iter(),
+    );
     Ok(())
 }
 

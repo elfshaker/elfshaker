@@ -10,15 +10,17 @@ use elfshaker::repo::{PackId, PackOptions, Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "pack";
 
-/// Window log is currently not configurable; We use a hopefully reasonable value of 28 == 256MiB window log.
-/// A configurable window log will require the user to specify the value during extract operations as well as pack operations.
+/// Window log is currently not configurable; We use a hopefully reasonable
+/// value of 28 == 256MiB window log. A configurable window log will require the
+/// user to specify the value during extract operations as well as pack
+/// operations.
 const DEFAULT_COMPRESSION_WINDOW_LOG: u32 = 28;
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Parse pack name
     let pack = matches.value_of("pack").unwrap();
     let pack = PackId::from_str(pack)?;
-    if matches!(pack, PackId::Unpacked) {
+    if matches!(pack, PackId::Loose) {
         return Err(format!("'{}' is a reserved name!", pack).into());
     }
 
@@ -50,15 +52,15 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let is_update_supressed = matches.is_present("no-update-index");
 
-    // Open the repo and unpacked index
+    // Open the repo and loose index
     let mut repo = open_repo_from_cwd()?;
-    let mut index = repo.unpacked_index()?;
+    let mut index = repo.loose_index()?;
 
     // Parse --frames
     let frames: u32 = match matches.value_of("frames").unwrap().parse()? {
         0 => {
-            let unpacked_size = index.objects().iter().map(|o| o.size()).sum();
-            let frames = get_frame_size_hint(unpacked_size);
+            let loose_size = index.objects().iter().map(|o| o.size).sum();
+            let frames = get_frame_size_hint(loose_size);
             info!("--frames=0: using suggested number of frames = {}", frames);
             frames
         }
@@ -67,24 +69,27 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     // No point in creating an empty pack.
     if index.is_empty() {
-        return Err("There are no unpacked snapshots!".into());
+        return Err("There are no loose snapshots!".into());
     }
 
-    // Here we produce the index for the resulting pack file from the unpacked index.
-    // Use deltas for the differences between the snapshot file lists.
+    // Here we produce the index for the resulting pack file from the loose
+    // index. Use deltas for the differences between the snapshot file lists.
     index.use_file_list_deltas()?;
     // Reorder objects in a way that is suitable for compression.
     let mut object_indices: Vec<_> = (0..index.objects().len()).collect();
     // Sorting by object sizes has proven to be a good heuristic; we could allow
-    // user-configurable heuristics in the future.
-    object_indices.sort_unstable_by_key(|&o| index.objects()[o].size());
+    // user-configurable heuristics in the future. Another useful heuristic
+    // would be to group by name as well as size, e.g. key on (sum(size of
+    // objects of given name), name).
+    object_indices.sort_unstable_by_key(|&o| index.objects()[o].size);
     // Apply the new indices.
     index.permute_objects(&object_indices)?;
 
     // Print progress every 5%
     let reporter = create_percentage_print_reporter("Compressing objects", 5);
 
-    // Create a pack using the ordered "unpacked" index.
+    eprintln!("Compressing objects...");
+    // Create a pack using the ordered "loose" index.
     repo.create_pack(
         &pack,
         &index,
@@ -99,17 +104,17 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     )?;
 
     if let Some(head) = repo.head() {
-        if *head.pack() == PackId::Unpacked {
+        if *head.pack() == PackId::Loose {
             info!("Updating HEAD to point to the newly-created pack...");
-            // The current HEAD was referencing a snapshot in the unpacked store.
-            // Now that the snapshots has been packed, we need to update HEAD
-            // to reference the packed snapshot.
+            // The current HEAD was referencing a snapshot in the loose
+            // store. Now that the snapshots has been packed, we need to update
+            // HEAD to reference the packed snapshot.
             let new_head = SnapshotId::new(pack.clone(), head.tag()).unwrap();
             repo.update_head(&new_head)?;
         }
     }
-    // Finally, delete the unpacked snapshots
-    repo.remove_unpacked_all()?;
+    // Finally, delete the loose snapshots
+    repo.remove_loose_all()?;
 
     if is_update_supressed {
         eprintln!(
@@ -129,7 +134,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
     let compression_level_range = zstd::compression_level_range();
 
     App::new(SUBCOMMAND)
-        .about("Packs all unpacked snapshots into a pack file, freeing up significant amounts of disk space.")
+        .about("Packs all loose snapshots into a pack file, freeing up significant amounts of disk space.")
         .arg(
             Arg::with_name("pack")
                 .takes_value(true)
@@ -181,10 +186,10 @@ fn leak_static_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// This is the built-in heuristic that tells us how many frames to use based on the data size.
-/// 1 frame / 512 MiB
+/// This is the built-in heuristic that tells us how many frames to use based on
+/// the data size. 1 frame / 512 MiB
 const FRAME_PER_DATA_SIZE: u64 = 512 * 1024 * 1024;
-fn get_frame_size_hint(unpacked_size: u64) -> u32 {
+fn get_frame_size_hint(loose_size: u64) -> u32 {
     // Divide by FRAME_PER_DATA_SIZE, rounding up
-    ((unpacked_size + FRAME_PER_DATA_SIZE - 1) / FRAME_PER_DATA_SIZE) as u32
+    ((loose_size + FRAME_PER_DATA_SIZE - 1) / FRAME_PER_DATA_SIZE) as u32
 }

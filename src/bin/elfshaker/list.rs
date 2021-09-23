@@ -6,8 +6,8 @@ use std::{error::Error, io, path::Path, str::FromStr};
 use walkdir::WalkDir;
 
 use super::utils::{find_pack_with_snapshot, format_size, open_repo_from_cwd, print_table};
-use elfshaker::packidx::PackedFileList;
-use elfshaker::repo::{PackId, Repository, SnapshotId, UNPACKED_DIR};
+use elfshaker::packidx::FileHandleList;
+use elfshaker::repo::{PackId, Repository, SnapshotId, LOOSE_DIR};
 
 pub(crate) const SUBCOMMAND: &str = "list";
 
@@ -65,10 +65,10 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 }
 
 fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Error>> {
-    let mut table = vec![["PACK".to_owned(), "SNAPSHOTS".to_owned(), "SIZE".to_owned()]];
+    let mut table = vec![];
     for pack_id in &*repo.index().available_packs() {
         match pack_id {
-            PackId::Packed(pack_name) => {
+            PackId::Pack(pack_name) => {
                 let pack = repo.open_pack(pack_name)?;
                 let size_str = if bytes {
                     pack.file_size().to_string()
@@ -82,91 +82,95 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
                 ]);
             }
             _ => {
-                let unpacked_index = repo.unpacked_index()?;
+                let loose_index = repo.loose_index()?;
 
-                let unpacked_dir = repo
-                    .path()
-                    .join(&*Repository::data_dir())
-                    .join(UNPACKED_DIR);
+                let loose_dir = repo.path().join(&*Repository::data_dir()).join(LOOSE_DIR);
                 let size_str = if bytes {
-                    dir_size(&unpacked_dir)?.to_string()
+                    dir_size(&loose_dir)?.to_string()
                 } else {
-                    format_size(dir_size(&unpacked_dir)?)
+                    format_size(dir_size(&loose_dir)?)
                 };
                 table.push([
-                    PackId::Unpacked.to_string(),
-                    unpacked_index.snapshots().len().to_string(),
+                    PackId::Loose.to_string(),
+                    loose_index.snapshots().len().to_string(),
                     size_str,
                 ]);
             }
         };
     }
 
-    print_table(table.iter());
+    print_table(
+        Some(&["PACK".to_owned(), "SNAPSHOTS".to_owned(), "SIZE".to_owned()]),
+        table.iter(),
+    );
     Ok(())
 }
 
 fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Error>> {
-    let mut table = vec![["SNAPSHOT".to_owned(), "FILES".to_owned()]];
+    let mut table = vec![];
 
-    if let PackId::Packed(pack_name) = pack {
+    if let PackId::Pack(pack_name) = pack {
         let pack = repo.open_pack(&pack_name)?;
         for snapshot in pack.index().snapshots() {
             // Get a snapshot with a complete file list.
             let snapshot = pack.index().find_snapshot(snapshot.tag()).unwrap();
             let file_count = match snapshot.list() {
-                PackedFileList::Complete(list) => list.len(),
+                FileHandleList::Complete(list) => list.len(),
                 _ => unreachable!(),
             };
             table.push([snapshot.tag().to_owned(), file_count.to_string()]);
         }
     } else {
-        let unpacked_index = repo.unpacked_index()?;
-        for snapshot in unpacked_index.snapshots() {
+        let loose_index = repo.loose_index()?;
+        for snapshot in loose_index.snapshots() {
             // Get a snapshot with a complete file list.
-            let snapshot = unpacked_index.find_snapshot(snapshot.tag()).unwrap();
+            let snapshot = loose_index.find_snapshot(snapshot.tag()).unwrap();
             let file_count = match snapshot.list() {
-                PackedFileList::Complete(list) => list.len(),
+                FileHandleList::Complete(list) => list.len(),
                 _ => unreachable!(),
             };
             table.push([snapshot.tag().to_owned(), file_count.to_string()]);
         }
     }
 
-    print_table(table.iter());
+    print_table(
+        Some(&["SNAPSHOT".to_owned(), "FILES".to_owned()]),
+        table.iter(),
+    );
     Ok(())
 }
 
 fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<(), Box<dyn Error>> {
-    let mut table = vec![["CHECKSUM".to_owned(), "SIZE".to_owned(), "FILE".to_owned()]];
+    let mut table = vec![];
 
-    if let PackId::Packed(pack_name) = snapshot.pack() {
+    if let PackId::Pack(pack_name) = snapshot.pack() {
         let pack = repo.open_pack(&pack_name)?;
         // Get a snapshot with a complete file list.
         let entries = pack.index().entries_from_snapshot(snapshot.tag()).unwrap();
         for entry in entries {
             table.push([
-                hex::encode(entry.object_index().checksum()).to_string(),
-                entry.object_index().size().to_string(),
-                Path::display(entry.path().as_ref()).to_string(),
+                hex::encode(entry.object.checksum).to_string(),
+                entry.object.size.to_string(),
+                Path::display(entry.path.as_ref()).to_string(),
             ]);
         }
     } else {
-        let unpacked_index = repo.unpacked_index()?;
+        let loose_index = repo.loose_index()?;
         // Get a snapshot with a complete file list.
-        let entries = unpacked_index
-            .entries_from_snapshot(snapshot.tag())
-            .unwrap();
+        let entries = loose_index.entries_from_snapshot(snapshot.tag()).unwrap();
         for entry in entries {
             table.push([
-                hex::encode(entry.object_index().checksum()).to_string(),
-                entry.object_index().size().to_string(),
-                Path::display(entry.path().as_ref()).to_string(),
+                hex::encode(entry.object.checksum).to_string(),
+                entry.object.size.to_string(),
+                Path::display(entry.path.as_ref()).to_string(),
             ]);
         }
     }
 
-    print_table(table.iter());
+    print_table(
+        Some(&["CHECKSUM".to_owned(), "SIZE".to_owned(), "FILE".to_owned()]),
+        table.iter(),
+    );
     Ok(())
 }
 

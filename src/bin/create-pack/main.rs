@@ -18,8 +18,8 @@ use walkdir::WalkDir;
 use zstd::stream::raw::{CParameter, DParameter};
 use zstd::{Decoder, Encoder};
 
-use elfshaker::packidx::{ObjectIndex, PackError, PackIndex, PackedFile, PackedFileList, Snapshot};
-use elfshaker::pathidx::{PathError, PathIndex, PathTree};
+use elfshaker::packidx::{FileHandle, FileHandleList, ObjectEntry, PackError, PackIndex, Snapshot};
+use elfshaker::pathidx::{PathPool, PathTree};
 use elfshaker::repo::{partition_by_u64, write_skippable_frame, PackFrame, PackHeader};
 
 #[derive(Clone, Debug)]
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>();
     // Create path tree
     println!("Constructing tree...");
-    let tree = create_path_tree(&Path::new(input_dir), path_depth, &file_paths).expect("Bad path!");
+    let tree = create_path_tree(&Path::new(input_dir), path_depth, &file_paths);
     // Compute and assign checksums
     let checksums = elfshaker::batch::compute_checksums(&object_paths)?;
     for (checksum, entry) in checksums.iter().zip(objects.iter_mut()) {
@@ -140,17 +140,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Writing index...");
     let mut pack_index_file = File::create(String::from(output) + ".idx")?;
 
-    let object_index = objects
+    let object_entries = objects
         .iter()
-        .map(|x| ObjectIndex::new(x.checksum, x.offset, x.size))
+        .map(|x| ObjectEntry::new(x.checksum, x.offset, x.size))
         .collect();
 
-    let pack_index = PackIndex::new(tree, object_index, snapshots);
+    let pack_index = PackIndex::new(tree, object_entries, snapshots);
     rmp_serde::encode::write(&mut pack_index_file, &pack_index)?;
 
     let object_path_partitions: Vec<Vec<_>> = partition_by_u64(&objects, 16, |o| o.size as u64)
         .into_iter()
-        .map(|x| x.into_iter().map(|o| &o.content_path).collect())
+        .map(|x| x.iter().map(|o| &o.content_path).collect())
         .collect();
 
     let frame_bufs: Vec<_> = object_path_partitions
@@ -222,7 +222,7 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
     if let Some(snapshot) = packidx.find_snapshot(snapshot_tag) {
         // PackIndex::find_snapshot returns snapshots with complete lists only
         file_list = match snapshot.list() {
-            PackedFileList::Complete(c) => c.clone(),
+            FileHandleList::Complete(c) => c.clone(),
             _ => unreachable!(),
         }
     } else {
@@ -235,14 +235,14 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
         .iter()
         .map(|x| {
             (
-                path_lookup[&x.tree_index()].clone(),
-                packidx.objects()[x.object_index() as usize].clone(),
+                path_lookup[&x.path].clone(),
+                packidx.objects()[u32::from(x.object) as usize].clone(),
             )
         })
         .collect::<Vec<_>>();
 
     // Sort objects to allow for one-way seeking
-    entries.sort_by_key(|(_, o)| o.offset());
+    entries.sort_by_key(|(_, o)| o.offset);
     println!("Decompressing {} files...", entries.len());
 
     let mut decoder = Decoder::new(pack)?;
@@ -253,21 +253,21 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
     let mut pos = 0;
 
     for (path, object) in entries {
-        let discard_bytes = object.offset() - pos;
+        let discard_bytes = object.offset - pos;
         io::copy(&mut decoder.by_ref().take(discard_bytes), &mut io::sink())?;
         // Resize buf
-        if buf.len() < object.size() as usize {
-            buf.resize(object.size() as usize, 0);
+        if buf.len() < object.size as usize {
+            buf.resize(object.size as usize, 0);
         }
         // Read object
-        decoder.read_exact(&mut buf[..object.size() as usize])?;
-        pos = object.offset() + object.size();
+        decoder.read_exact(&mut buf[..object.size as usize])?;
+        pos = object.offset + object.size;
         // Verify checksum
         let mut checksum = [0u8; 20];
         let mut hasher = Sha1::new();
-        hasher.input(&buf[..object.size() as usize]);
+        hasher.input(&buf[..object.size as usize]);
         hasher.result(&mut checksum);
-        if *object.checksum() != checksum {
+        if object.checksum != checksum {
             return Err(Box::new(PackError::ChecksumMismatch));
         }
         // Output path
@@ -283,11 +283,7 @@ fn unpack_snapshot<R1: Read, R2: Read, P: AsRef<Path>>(
 }
 
 /// Creates a PathTree from the given list of paths and using the specified options.
-fn create_path_tree<P>(
-    root_path: &Path,
-    path_depth: u32,
-    paths: &[P],
-) -> Result<PathTree, PathError>
+fn create_path_tree<P>(root_path: &Path, path_depth: u32, paths: &[P]) -> PathTree
 where
     P: AsRef<Path>,
 {
@@ -295,22 +291,26 @@ where
 
     // Create a path in the tree for each path referencing this object
     for path in paths {
-        let components: Result<Vec<_>, PathError> = path
+        let components: Vec<_> = path
             .as_ref()
             .strip_prefix(root_path)
-            .map_err(|_| PathError::InvalidPath)?
+            .expect("Path is not in the root of the repository!")
             .components()
             .skip(path_depth as usize)
-            .map(|x| x.as_os_str().to_str().ok_or(PathError::InvalidPath))
+            .map(|x| {
+                x.as_os_str()
+                    .to_str()
+                    .expect("Path contains non-unicode characters!")
+            })
             .collect();
-        tree.create_file(components?.iter().collect::<PathBuf>())?;
+        tree.create_file(components.iter().collect::<PathBuf>());
     }
 
     println!("Tree contains {} file objects.", tree.file_count());
 
-    tree.update_index();
+    tree.commit_changes();
 
-    Ok(tree)
+    tree
 }
 
 /// Creates a list of snapshots from the given files and options.
@@ -320,10 +320,10 @@ fn create_snapshots_from_paths(
     tree: &PathTree,
     objects: &[InputFileEntry],
 ) -> Result<Vec<Snapshot>, PackError> {
-    let mut snapshots: HashMap<String, Vec<PackedFile>> = HashMap::new();
+    let mut snapshots: HashMap<String, Vec<FileHandle>> = HashMap::new();
     // Use the --path-depth value to create tags/names for the snapshots.
-    for (object_index, object) in objects.iter().enumerate() {
-        for path in &object.paths {
+    for (object_index, entry) in objects.iter().enumerate() {
+        for path in &entry.paths {
             let rel_path = path
                 .strip_prefix(input_dir)
                 .map_err(|_| PackError::PathNotFound)?;
@@ -338,11 +338,8 @@ fn create_snapshots_from_paths(
                 .skip(path_depth as usize)
                 .map(|x| x.as_os_str());
 
-            let tree_index = tree
-                .find_index(in_tree_path)
-                .map_err(|_| PackError::PathNotFound)?
-                .ok_or(PackError::PathNotFound)?;
-            let packed_file = PackedFile::new(tree_index, object_index as u32);
+            let path = tree.find(in_tree_path).ok_or(PackError::PathNotFound)?;
+            let packed_file = FileHandle::new(path, (object_index as u32).into());
 
             match snapshots.entry(tag_path) {
                 Entry::Occupied(mut o) => {
@@ -356,7 +353,7 @@ fn create_snapshots_from_paths(
     }
     Ok(snapshots
         .into_iter()
-        .map(|(key, value)| Snapshot::new(&key, PackedFileList::Complete(value)))
+        .map(|(key, value)| Snapshot::new(&key, FileHandleList::Complete(value)))
         .collect())
 }
 

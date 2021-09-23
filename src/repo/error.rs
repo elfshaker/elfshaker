@@ -4,7 +4,6 @@
 use std::{fmt::Display, io};
 
 use crate::packidx::PackError;
-use crate::pathidx::PathError;
 use crate::repo::pack::IdError;
 
 /// The type of error used by repository operations.
@@ -12,7 +11,6 @@ use crate::repo::pack::IdError;
 pub enum Error {
     IOError(io::Error),
     PackError(PackError),
-    PathError(PathError),
     IdError(IdError),
     /// Bad elfshaker_data/inex
     CorruptRepositoryIndex,
@@ -39,7 +37,6 @@ impl Display for Error {
         match self {
             Self::IOError(ioerr) => ioerr.fmt(f),
             Self::PackError(packerr) => packerr.fmt(f),
-            Self::PathError(patherr) => patherr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
             Self::BrokenHeadRef => write!(f, "The pack or snapshot referenced by HEAD is missing!"),
@@ -77,12 +74,6 @@ impl std::convert::From<std::io::Error> for Error {
 impl std::convert::From<PackError> for Error {
     fn from(err: PackError) -> Self {
         Self::PackError(err)
-    }
-}
-
-impl std::convert::From<PathError> for Error {
-    fn from(err: PathError) -> Self {
-        Self::PathError(err)
     }
 }
 

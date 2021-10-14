@@ -462,8 +462,6 @@ impl PackIndex {
             })
             .collect();
 
-        // Add the new set of objects
-        self.objects.extend_from_slice(&new_objects);
         // Update the path indices of the entries in the old snapshots
         map_entries_in_place(&mut self.snapshots, |f| f.path = old2new[&f.path]);
         // Finally, push the new snapshot

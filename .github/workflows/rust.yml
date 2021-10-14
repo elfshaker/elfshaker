@@ -17,8 +17,8 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
     - name: Run check
-      run: ./test-scripts/check.sh
+      run: ./test-scripts/check.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack

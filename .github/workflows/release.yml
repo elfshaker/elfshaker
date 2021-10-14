@@ -1,0 +1,2 @@
+- name: Rust Release binary
+  uses: rust-build/rust-build.action@v1.2.0

@@ -17,7 +17,7 @@ list_month() {
     YEAR="$2"
 
     ((NEXT_YEAR=YEAR))
-    ((NEXT_MONTH=MONTH+1))
+    ((NEXT_MONTH=10#$MONTH+1))
     if [ $NEXT_MONTH -eq 13 ]; then
         ((NEXT_YEAR=NEXT_YEAR+1))
         ((NEXT_MONTH=1))

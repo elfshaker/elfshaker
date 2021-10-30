@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
+
+[[ "$TRACE" ]] && set -x
+set -euo pipefail
+shopt -s extglob
+
+if [[ $# != 2 ]]; then
+  echo "Usage: ./create-test-pack.sh NUM_SNAPSHOTS APPROX_FILE_SIZE"
+  exit 1
+fi
+
+rand_int() {
+    MIN=$1
+    MAX=$2
+    awk "BEGIN{print int($RANDOM*($MAX-$MIN)/32767)+$MIN}"
+}
+
+rand_filename() {
+    # Max 2*8 possible filenames
+    CHARS=(a b c d 1 2 3 4)
+    CHAR1="$(rand_int 0 8)"
+    CHAR2="$(rand_int 0 8)"
+    echo "${CHARS[$CHAR1]}${CHARS[$CHAR2]}"
+}
+
+rand_bytes() {
+  dd if=/dev/urandom bs="$1" count=1 iflag=fullblock
+}
+
+create_rand_file() {
+    APPROX_FILE_SIZE=$1
+
+    DEPTH="$(rand_int 1 3)"
+    for I in $(seq $DEPTH); do
+        DIR_NAME="$(rand_filename)"
+        DIR_NAME="${DIR_NAME:0:$I}" # Limit dir name to depth
+        if [ ! -f ./"$DIR_NAME" ]; then
+            mkdir -p ./"$DIR_NAME"
+            cd ./"$DIR_NAME"
+        fi
+    done
+
+    FILE_SIZE="$(rand_int 1 $APPROX_FILE_SIZE)"
+    FILE_NAME="$(rand_filename)"
+    if [ ! -d ./"$FILE_NAME" ]; then
+        rand_bytes "$FILE_SIZE" 2>/dev/null > ./"$FILE_NAME"
+    fi
+}
+
+main() {
+    NUM_SNAPSHOTS=$1
+    APPROX_FILE_SIZE=$2
+
+    REPO_DIR="$(mktemp -d)"
+    cd "$REPO_DIR"
+    mkdir elfshaker_data
+    elfshaker update-index
+
+    for I in $(seq $NUM_SNAPSHOTS); do
+        NUM_FILES=64
+        for J in $(seq $NUM_FILES); do
+            (create_rand_file $APPROX_FILE_SIZE)
+        done
+        elfshaker store "SNAPSHOT-$I" --no-update-index --verbose
+    done
+
+    rm -r -- !("elfshaker_data")
+    elfshaker pack verification --frames 2 --verbose
+}
+
+main $@

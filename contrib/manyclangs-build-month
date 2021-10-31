@@ -6,15 +6,15 @@
 set -euo pipefail
 
 print_help() {
-    echo 'Usage: manyclangs-build-month MM YYYY'
+    echo 'Usage: manyclangs-build-month YYYY MM'
     echo ''
     echo 'manyclangs-build-month is a "set it and forget it" script that builds'
     echo 'the specified month and produces a .pack file.'
 }
 
-list_month() {
-    MONTH="$1"
-    YEAR="$2"
+commits_for_month() {
+    YEAR="$1"
+    MONTH="$2"
 
     ((NEXT_YEAR=YEAR))
     ((NEXT_MONTH=10#$MONTH+1))
@@ -24,64 +24,122 @@ list_month() {
     fi
 
     git-list-between origin/main \
-        "$MONTH/01/$YEAR" "$NEXT_MONTH/01/$NEXT_YEAR" -- llvm clang
+        "$YEAR/$MONTH/01" "$NEXT_YEAR/$NEXT_MONTH/01" -- llvm clang
 }
 
-build_month() {
-    BUILD_DIR="$1"
-    MONTH="$2"
-    YEAR="$3"
-    list_month "$MONTH" "$YEAR" | awk '{print $1}' \
-        | manyclangs-build-commits "$BUILD_DIR" llvm clang
+_manyclangs_list_files0_to_pack() {
+    find -type f \( -name '*.o' -or -name '*.h' \) -a -print0
+    # Also include all LICENSE files, .log files the README and link.sh
+    # available at the root of ./build.
+    find -maxdepth 1 -type f \( \
+            -name link.sh \
+            -or -name README \
+            -or -name 'LICENSE*' \
+            -or -name '*.log' \
+            \) -print0
 }
 
-store_month() {
-    BUILD_DIR="$1"
-    MONTH="$2"
-    YEAR="$3"
+_manyclangs_build_part() {
+    YEAR=$1
+    MONTH=$2
+    PART=$3
+    BUILDNAME=mc-build-"$YEAR""$MONTH"-part"$PART"
+    COMMIT_LIST="$PWD/manyclangs-commit-list.txt.$PART"
 
-    # Include all .o and .h in ./build
-    FIND_COMMAND=(find ./build -type f -name "'*.o'" -or -name "'*.h'"
-        # Also include all LICENSE files, .log files the README and link.sh
-        # available at the root of ./build.
-        '&&' find ./build -maxdepth 1 -type f
-            -name link.sh
-            -or -name README
-            -or -name "'LICENSE*'"
-            -or -name "'*.log'")
+    ELFSHAKER_DATA=${ELFSHAKER_DATA-$PWD/elfshaker_data}
+    mkdir -p "$ELFSHAKER_DATA"
+    CCACHE_DIR=${CCACHE_DIR-$PWD/ccache}
 
-    list_month "$MONTH" "$YEAR" | awk -v root="$(realpath "$BUILD_DIR")/" '{print root$1" "$2}' \
-        | (cd "$BUILD_DIR/elfshaker" && elfshaker-store-all "${FIND_COMMAND[*]}")
+    # FD chosen to avoid collision with jobserver.
+    exec 30>&1 # dup 30 to 1, writes to 30 now go to old stdout.
+    exec &> ${BUILDNAME}.log # redirect everything to log.
+
+    echo Building part $BUILDNAME
+
+    # Defines where git will write files.
+    # Turns out we don't need to do anything other than this.
+    # Git restore will ensure that 'no-overlay' is in effect and deleted
+    # files will go away.
+    export GIT_WORK_TREE="$PWD/${BUILDNAME}" GIT_INDEX_FILE="${BUILDNAME}.gitidx"
+    HASHES_DIR=$PWD/hashes
+    mkdir -p "$HASHES_DIR"
+    mkdir -p "${GIT_WORK_TREE}/build"
+    cd "${GIT_WORK_TREE}/build"
+
+    # CCACHE_BASEDIR causes ccache to rewrite arguments to the compiler to be
+    # relative to $CCACHE_BASEDIR. This is significant because binaries often
+    # end up with paths as specified on the commandline through the macro
+    # __PRETTY_FUNCTION__ (see elfshaker/elfshaker#11).
+    export CCACHE_DIR CCACHE_BASEDIR="$GIT_WORK_TREE"
+
+    while read COMMIT_SHA SNAPSHOT_NAME
+    do
+        # Handy comand which sets the sources in ./llvm ./clang to the right
+        # contents efficiently (including removing files which have gone).
+        GIT_WORK_TREE=.. \
+        git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
+            llvm clang :^llvm/test :^clang/test
+
+        # manyclangs-build takes care of removing object files not produced by the build system.
+        # consume non-zero exit status if present and continue.
+        # TODO: On failure, need to make sure not to capture incorrect object files.
+        manyclangs-build "$COMMIT_SHA" || true
+
+        ln -frs "${ELFSHAKER_DATA}"
+        _manyclangs_list_files0_to_pack | elfshaker store --verbose --files-from0=- "$SNAPSHOT_NAME"
+        mv loose.idx "${ELFSHAKER_DATA}/loose/${SNAPSHOT_NAME}.idx"
+
+        _manyclangs_list_files0_to_pack | xargs -0 -P32 sha1sum | sort -k2,2 > ${HASHES_DIR}/${SNAPSHOT_NAME}.txt
+
+        echo Built $SNAPSHOT_NAME 1>&30 # for pv progress output.
+    done < "${COMMIT_LIST}"
 }
 
-pack_month() {
-    BUILD_DIR="$1"
-    MONTH="$2"
-    YEAR="$3"
+_manyclangs_build_parts() {
+    [[ "$TRACE" ]] && set -x
+    set -euo pipefail # exported function, fresh shell.
+    YEAR=$1
+    MONTH=$2
+    shift 2
 
-    cd "$BUILD_DIR/elfshaker"
-    elfshaker pack "$YEAR$MONTH" --verbose
+    for part in "$@"
+    do
+        _manyclangs_build_part $YEAR $MONTH "$part"
+    done
 }
 
 main() {
-    MONTH="$1"
-    YEAR="$2"
-    date -d "$MONTH/01/$YEAR" 1>/dev/null || (print_help && exit 1)
+    # set -x
+    YEAR="$1"
+    MONTH="$2"
+    date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
+    # env | grep GIT
 
-    BUILD_DIR="builds-$YEAR$MONTH"
-    if [ -d "$BUILD_DIR" ]; then
-        echo "$BUILD_DIR already exists! Aborting..."
+    if ! git rev-parse --show-toplevel &> /dev/null
+    then
+        echo 'Run with GIT_DIR set to path/to/llvm-project/.git or from inside a repository.'
         exit 1
     fi
 
-    mkdir -p "$BUILD_DIR/elfshaker/elfshaker_data/packs"
-    echo "Builds will be done in $BUILD_DIR."
+    # Divide work into small equal-ish-sized parts.
+    NPARTS=50
+    # Number of parts jobs to run in parallel.
+    NPARALLEL=5
 
-    build_month "$BUILD_DIR" "$MONTH" "$YEAR"
-    store_month "$BUILD_DIR" "$MONTH" "$YEAR"
-    pack_month "$BUILD_DIR" "$MONTH" "$YEAR"
+    commits_for_month "$YEAR" "$MONTH" > manyclangs-commit-list.txt
+    split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
+    COMMIT_COUNT=$(wc -l manyclangs-commit-list.txt | awk '{print $1}')
 
-    echo "Pack is available at $BUILD_DIR/elfshaker/elfshaker_data/packs/$YEAR$MONTH.pack"
+    export -f _manyclangs_build_parts _manyclangs_build_part _manyclangs_list_files0_to_pack
+    # A few extra slots, since we loose at least one to the build system and we
+    # don't expect every job to take 100% CPU.
+    JOBSLOP=5
+    jobserver -j$(($(nproc) + $JOBSLOP)) \
+        xargs --max-procs=$NPARALLEL -n1 \
+        bash -c '_manyclangs_build_parts "$@"' -- $YEAR $MONTH \
+            <<<$(seq -f '%02.0f' 00 $(( $NPARTS - 1 ))) \
+            | pv --average-rate --line-mode --size "$COMMIT_COUNT" > /dev/null \
+            ;
 }
 
 case "${1:--h}" in

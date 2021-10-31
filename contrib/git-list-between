@@ -6,7 +6,7 @@
 set -euo pipefail
 
 print_help() {
-    echo 'Usage: git-list-between BRANCH MM/DD/YYYY MM/DD/YYYY [[--] <path>...]'
+    echo 'Usage: git-list-between BRANCH YYYY/MM/DD YYYY/MM/DD [[--] <path>...]'
 }
 
 list() {
@@ -43,7 +43,10 @@ main() {
     # This prevents the list from being filtered by a PATHSPEC...
     readarray -t COMMIT_LIST < <(list '--format=format:%H')
     # Create a hashmap [SHA=>index] that contains the indexes of the commits in
-    # the selected time span.
+    # the selected time span. These indexes represent an increasing 'generation
+    # number' starting at 1 in the given series and increasing from there.
+    # Histories with merge commits will have collisions in this number,
+    # llvm-project has a linear-only history.
     declare -A INDEX_LOOKUP=()
     for i in "${!COMMIT_LIST[@]}"; do
         INDEX_LOOKUP["${COMMIT_LIST[$i]}"]=$i
@@ -51,7 +54,7 @@ main() {
 
     # Construct the final list by passing EXTRA_ARGS, allowing the user to filter
     # the commits by a PATHSPEC..., use the index of the commit in the unfiltered
-    # log, and format the output
+    # log, and format the output.
     while read -r SHA ABBREV DATE TIME; do
         INDEX="${INDEX_LOOKUP["$SHA"]}"
         printf '%s %s-%05dT%s-%s\n' "$SHA" "$DATE" "$((INDEX+1))" "$TIME" "$ABBREV"

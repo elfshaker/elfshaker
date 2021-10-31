@@ -13,15 +13,15 @@ awk_inplace() {
 }
 
 patch_clang_version() {
-    # Here we patch the clang version to include the commit SHA by defining LLVM_REVISION and CLANG_REVISION
-    # We insert the #defines after the last #include (which seems reasonably safe, but could be confused by an #if #include #endif for example
-    git checkout -- ../clang/lib/Basic/Version.cpp
+    # Here we patch the clang version to include the commit SHA by defining
+    # LLVM_REVISION and CLANG_REVISION We insert the #defines after the last
+    # #include (which seems reasonably safe, but could be confused by an #if
+    # #include #endif for example
     awk_inplace -c -v commit="\"$1\"" 'FNR==NR{ if (/#include/) p=NR; next} 1; FNR==p{ print "#define LLVM_REVISION " commit; print "#define CLANG_REVISION LLVM_REVISION"; }' ../clang/lib/Basic/Version.cpp ../clang/lib/Basic/Version.cpp
 }
 
 patch_llvm_version() {
     # We do a similar thing for LLVM tools -- define LLVM_VERSION_INFO manually
-    git checkout -- ../llvm/lib/Support/CommandLine.cpp
     awk_inplace -c -v commit="\"$1\"" 'FNR==NR{ if (/#include/) p=NR; next} 1; FNR==p{ print "#define LLVM_VERSION_INFO " commit }' ../llvm/lib/Support/CommandLine.cpp ../llvm/lib/Support/CommandLine.cpp
 }
 
@@ -49,14 +49,76 @@ wait
 EOF
 }
 
+object_compdb() {
+    ninja -t rules | egrep '^C(XX)?_COMPILER__' | xargs ninja -t compdb
+}
+
+build_system_is_clean() {
+    ninja -n build.ninja |& grep 'ninja: no work to do.' &> /dev/null
+}
+
 main() {
-    patch_clang_version "$(git rev-parse HEAD)"
-    # patch_llvm_version invalidates llvm-tblgen and causes builds to run slower!
+    COMMIT_SHA="${1-$(git rev-parse HEAD)}"
+
+    if [[ -e CMakeCache.txt  ]] && ! build_system_is_clean; then
+        # Build system is out of date. Rebuild from empty to avoid any
+        # possibility of cache contamination.
+        rm -rf CMakeCache.txt cmake
+        find -iname '*.cmake' -o -iname CMakeFiles -exec rm -rf {} +
+    fi
+
+    if [ ! -e CMakeCache.txt ]; then
+        \time -f 'Configured with manyclangs-cmake in %E' manyclangs-cmake ../llvm
+    fi
+
+    patch_clang_version "$COMMIT_SHA"
+
+    cp ../llvm/LICENSE.TXT ./LICENSE-llvm.txt
+    cp ../clang/LICENSE.TXT ./LICENSE-clang.txt
+    {
+        echo 'These builds were done as part of the elfshaker/manyclangs project,'
+        echo 'please see https://github.com/elfshaker/manyclangs for more information.'
+    } > ./README
+
+    # patch_llvm_version invalidates llvm-tblgen and causes builds to run
+    # slower! We may be able to work around this by having a separate source
+    # tree for tblgen and setting LLVM_TABLEGEN and CLANG_TABLEGEN. That way the
+    # TABLEGEN build would not be invalidated. Unsure though if tablegen were
+    # the only thing invalidated in that circumstance the build system would
+    # correctly rerun.
+
     # patch_llvm_version "$(git rev-parse HEAD)"
 
-    CCACHE_FILECLONE=1 CCACHE_SLOPPINESS=time_macros ninja
+    # Append a manyclangs-targets build rule to ninja. This is preferable to
+    # manually invoking ninja because you can only pass so many things at the
+    # command line and ninja doesn't accept response files as a parameter.
+    sed -i '/^build manyclangs-targets:/d' build.ninja # idempotence.
+    object_compdb | jq -r '"build manyclangs-targets: phony clang-resource-headers " + ([.[].output] | join(" "))' >> build.ninja
+
+    # Delete files which aren't outputs of the build system.
+    comm -23 \
+        <(find -iname '*.o' | sed 's|./||' | sort) \
+        <(object_compdb | jq -r '[.[].output] | sort | .[]') \
+        | xargs --no-run-if-empty rm -v
+
+    # Clobber the resource directories since they're cheap to remake.
+    rm -rf lib/clang
+
+    # Use FILECLONE if possible to save disk space/bandwidth.
+    # CCACHE_SLOPPINESS=time_macros is because the clang sources contain
+    # __TIME__ etc in order to implement them in the compiler, but do not
+    # actually use them.
+    if time CCACHE_FILECLONE=1 CCACHE_SLOPPINESS=time_macros ninja manyclangs-targets |& tee build.log
+    then
+        # On build success, the log is not very interesting, so delete it.
+        rm build.log
+    else
+        echo Build failed.
+        exit 1
+    fi
 
     create_link_script > ./link.sh
+    chmod +x link.sh
 }
 
 main "$@"

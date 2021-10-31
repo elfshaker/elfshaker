@@ -5,36 +5,89 @@
 [[ "$TRACE" ]] && set -x
 set -euo pipefail
 
-# Improves compression ratio
-COMPILER_FLAGS='-ffunction-sections -fdata-sections -mno-outline '
-# Reproducible builds
-FILE_PREFIX="$(dirname "$(realpath "$1")")"
-COMPILER_FLAGS+="-no-canonical-prefixes -ffile-prefix-map=$FILE_PREFIX='' "
-# Prevent paths leaking through __PRETTY_FUNCTION__
-COMPILER_FLAGS+="-Wno-builtin-macro-redefined '-D__PRETTY_FUNCTION__=__func__' "
+LLVM_SRCDIR="${1-../llvm}"
+LLVM_TGTDIR="${2-.}"
 
-cmake "$1" \
-    -GNinja \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=On \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_C_FLAGS="$COMPILER_FLAGS" \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
-    -DCMAKE_INSTALL_PREFIX="$PWD"/install \
-    -DCMAKE_C_COMPILER_LAUNCHER='ccache' \
-    -DCMAKE_CXX_COMPILER_LAUNCHER='ccache' \
-    -DLLVM_ENABLE_PROJECTS='clang' \
-    -DLLVM_OPTIMIZED_TABLEGEN=On \
-    -DLLVM_USE_LINKER=/usr/bin/ld.lld-11 \
-    -DLLVM_CCACHE_BUILD=On \
-    -DLLVM_ENABLE_WARNINGS=Off \
-    -DLLVM_ENABLE_ZLIB=Off \
-    -DLLVM_INCLUDE_BENCHMARKS=Off \
-    -DLLVM_INCLUDE_EXAMPLES=Off \
-    -DLLVM_ENABLE_ASSERTIONS=On \
-    -DLLVM_ENABLE_BINDINGS=Off \
-    -DLLVM_APPEND_VC_REV=Off \
-    -DLLVM_INCLUDE_TESTS=Off \
-    -DCLANG_INCLUDE_TESTS=Off \
+if [[ ! -d "$LLVM_SRCDIR" ]]
+then
+    echo 'usage: manyclangs-cmake <build_dir> [../path/to/llvm]
+
+Configure
+
+This script probably makes assumptions that the build directory
+is inside the llvm-project directory.' 1>&2
+    exit 1
+fi
+
+# Abspath to specified LLVM source directory.
+FILE_PREFIX="$(dirname "$(realpath "$LLVM_SRCDIR")")"
+
+# Version number of clang used to build the pack. Chosen because it's what is
+# easily available in the universe repository on Ubuntu 20.04 which is a recent
+# but not-too-new distribution with long term support, and therefore easy for
+# others to reproduce by running this script.
+# Defaults to "-12".
+BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
+
+COMPILER_FLAGS=(
+    # Flags which improves compression ratio.
+    -ffunction-sections
+    -fdata-sections
+    -mno-outline
+    # Flags to make resulting build not depend on abspath of sources.
+    -no-canonical-prefixes
+    -ffile-prefix-map="$FILE_PREFIX"=
+    -fmacro-prefix-map="$FILE_PREFIX"=
+    # Don't embed the compiler ident into the objects; this allows using an
+    # LTO/PGO build of the compiler which is faster and produces identical
+    # binaries aside from the ident string.
+    -fno-ident
+)
+
+FLAGS=(
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=On
+
+    # Rel + assertions build.
+    -DCMAKE_BUILD_TYPE=Release
+    -DLLVM_ENABLE_ASSERTIONS=On
+    -DLLVM_ENABLE_PROJECTS='clang'
+
+    # VC revision is written into binaries with manyclangs-build. This is not
+    # used because it invalidates tablegen which causes a lot of rebuilding.
+    -DLLVM_APPEND_VC_REV=Off
+
+    # Compiler + linker.
+    -DCMAKE_C_COMPILER=clang"${BUILDER_CLANG_VERSION_SUFFIX}"
+    -DCMAKE_CXX_COMPILER=clang++"${BUILDER_CLANG_VERSION_SUFFIX}"
+    -DCMAKE_C_FLAGS="${COMPILER_FLAGS[*]}"
+    -DCMAKE_CXX_FLAGS="${COMPILER_FLAGS[*]}"
+    -DLLVM_USE_LINKER="${LLVM_USE_LINKER-/usr/bin/ld.lld"${BUILDER_CLANG_VERSION_SUFFIX}"}"
+    # Because elfshaker does not bother with the intermediate step of building
+    # archive files, this results in slightly different binary outputs, because
+    # every .o file is specified on the command line. Ordinarily the linker has
+    # a mapping of symbols to files from the archive file and it only bothers
+    # linking in the files which are actually used.
+    # -DCMAKE_EXE_LINKER_FLAGS="-Wl,-whole-archive"
+
+    # These are necessary for reproducibility in conjunction with
+    # CCACHE_BASEDIR, search for other comments referencing this variable.
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+    # Bindings can slow down configuration-time, and we don't use them.
+    -DLLVM_ENABLE_BINDINGS=Off
+    # We don't care about warnings for this use-case.
+    -DLLVM_ENABLE_WARNINGS=Off
+    # Try to minimize dependencies, at the expense of minor features.
+    -DLLVM_ENABLE_LIBXML2=Off
+    -DLLVM_ENABLE_ZLIB=Off
+
+    # Shrink ninja files.
+    -DCLANG_INCLUDE_TESTS=Off
     -DLLVM_BUILD_TESTS=Off
+    -DLLVM_INCLUDE_BENCHMARKS=Off
+    -DLLVM_INCLUDE_EXAMPLES=Off
+    -DLLVM_INCLUDE_TESTS=Off
+)
+
+cmake -GNinja "${FLAGS[@]}" -S "$LLVM_SRCDIR" -B "$LLVM_TGTDIR"

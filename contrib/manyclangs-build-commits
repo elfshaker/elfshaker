@@ -51,13 +51,6 @@ create_build() {
 
         "$SOURCE_DIR"/manyclangs-build . |& tee -a "$BUILD_LOGS/build.log"
 
-        # Add license information
-        cp ../llvm/LICENSE.TXT ./LICENSE-llvm.txt
-        cp ../clang/LICENSE.TXT ./LICENSE-clang.txt
-        {
-            echo 'These builds were done as part of the elfshaker/manyclangs project,'
-            echo 'please see https://github.com/elfshaker/manyclangs for more information'
-        } > ./README
     )
     BUILD_STATUS="$?"
     set -e

@@ -66,7 +66,7 @@ link_and_run() {
 main() {
     ELFSHAKER_DIR="$1"
     COMITTISH="$2"
-    COMMAND=(${@:3})
+    COMMAND=("${@:3}")
 
     SHA="$(git rev-parse --short=10 "$COMITTISH")"
     (cd "$ELFSHAKER_DIR" && elfshaker find "$SHA") | {

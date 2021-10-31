@@ -28,15 +28,15 @@ commits_for_month() {
 }
 
 _manyclangs_list_files0_to_pack() {
-    find -type f \( -name '*.o' -or -name '*.h' \) -a -print0
+    find . -type f \( -name '*.o' -or -name '*.h' \) -a -printf '%P\0'
     # Also include all LICENSE files, .log files the README and link.sh
     # available at the root of ./build.
-    find -maxdepth 1 -type f \( \
+    find . -maxdepth 1 -type f \( \
             -name link.sh \
             -or -name README \
             -or -name 'LICENSE*' \
             -or -name '*.log' \
-            \) -print0
+            \) -printf '%P\0'
 }
 
 _manyclangs_build_part() {
@@ -52,9 +52,9 @@ _manyclangs_build_part() {
 
     # FD chosen to avoid collision with jobserver.
     exec 30>&1 # dup 30 to 1, writes to 30 now go to old stdout.
-    exec &> ${BUILDNAME}.log # redirect everything to log.
+    exec &> "${BUILDNAME}".log # redirect everything to log.
 
-    echo Building part $BUILDNAME
+    echo Building part "$BUILDNAME"
 
     # Defines where git will write files.
     # Turns out we don't need to do anything other than this.
@@ -65,6 +65,7 @@ _manyclangs_build_part() {
     mkdir -p "$HASHES_DIR"
     mkdir -p "${GIT_WORK_TREE}/build"
     cd "${GIT_WORK_TREE}/build"
+    ln -frs "${ELFSHAKER_DATA}" elfshaker_data
 
     # CCACHE_BASEDIR causes ccache to rewrite arguments to the compiler to be
     # relative to $CCACHE_BASEDIR. This is significant because binaries often
@@ -72,26 +73,30 @@ _manyclangs_build_part() {
     # __PRETTY_FUNCTION__ (see elfshaker/elfshaker#11).
     export CCACHE_DIR CCACHE_BASEDIR="$GIT_WORK_TREE"
 
-    while read COMMIT_SHA SNAPSHOT_NAME
+    while read -r COMMIT_SHA SNAPSHOT_NAME
     do
         # Handy comand which sets the sources in ./llvm ./clang to the right
         # contents efficiently (including removing files which have gone).
         GIT_WORK_TREE=.. \
         git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
-            llvm clang :^llvm/test :^clang/test
+            ../{llvm,clang} :^../{llvm,clang}/test
 
-        # manyclangs-build takes care of removing object files not produced by the build system.
-        # consume non-zero exit status if present and continue.
-        # TODO: On failure, need to make sure not to capture incorrect object files.
-        manyclangs-build "$COMMIT_SHA" || true
+        # manyclangs-build takes care of removing object files not produced by
+        # the build system. consume non-zero exit status if present and
+        # continue.
+        if manyclangs-build "$COMMIT_SHA"
+        then
+            # Build success, capture object hashes and store to elfshaker.
+            _manyclangs_list_files0_to_pack | xargs -0 -P32 sha1sum | awk '{print $1" "$2}' | sort -k2,2 > "${HASHES_DIR}"/"${SNAPSHOT_NAME}".txt
+            _manyclangs_list_files0_to_pack | elfshaker store --verbose --files0-from=- "$SNAPSHOT_NAME"
+        else
+            # On failure, capture the build log.
+            touch BUILD_FAILED
+            { echo BUILD_FAILED; echo build.log; } | elfshaker store --verbose --files-from=- "$SNAPSHOT_NAME"
+            rm BUILD_FAILED
+        fi
 
-        ln -frs "${ELFSHAKER_DATA}"
-        _manyclangs_list_files0_to_pack | elfshaker store --verbose --files-from0=- "$SNAPSHOT_NAME"
-        mv loose.idx "${ELFSHAKER_DATA}/loose/${SNAPSHOT_NAME}.idx"
-
-        _manyclangs_list_files0_to_pack | xargs -0 -P32 sha1sum | sort -k2,2 > ${HASHES_DIR}/${SNAPSHOT_NAME}.txt
-
-        echo Built $SNAPSHOT_NAME 1>&30 # for pv progress output.
+        echo Built "$SNAPSHOT_NAME" 1>&30 # for pv progress output.
     done < "${COMMIT_LIST}"
 }
 
@@ -104,42 +109,59 @@ _manyclangs_build_parts() {
 
     for part in "$@"
     do
-        _manyclangs_build_part $YEAR $MONTH "$part"
+        _manyclangs_build_part "$YEAR" "$MONTH" "$part"
     done
 }
 
 main() {
-    # set -x
     YEAR="$1"
     MONTH="$2"
     date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
-    # env | grep GIT
 
-    if ! git rev-parse --show-toplevel &> /dev/null
+    BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
+
+    DEPS=(jq compdb2line ninja cmake "clang${BUILDER_CLANG_VERSION_SUFFIX}" "clang++${BUILDER_CLANG_VERSION_SUFFIX}")
+    MISSING_DEPS=()
+    for DEP in "${DEPS[@]}"
+    do
+        if ! command -v "$DEP" &> /dev/null;
+        then
+            MISSING_DEPS+=("$DEP")
+        fi
+    done
+
+    if [ ${#MISSING_DEPS[@]} -ne 0 ]
+    then
+        echo "Missing some binaries from \$PATH: ${MISSING_DEPS[*]}"
+        echo "Note that compdb2line is part of this project and needs installing."
+        exit 1
+    fi
+
+    if ! git rev-parse --git-dir &> /dev/null
     then
         echo 'Run with GIT_DIR set to path/to/llvm-project/.git or from inside a repository.'
         exit 1
     fi
 
-    # Divide work into small equal-ish-sized parts.
-    NPARTS=50
-    # Number of parts jobs to run in parallel.
-    NPARALLEL=5
-
     commits_for_month "$YEAR" "$MONTH" > manyclangs-commit-list.txt
-    split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
     COMMIT_COUNT=$(wc -l manyclangs-commit-list.txt | awk '{print $1}')
+
+    NPARTS=20 # Divide work into small equal-ish-sized parts.
+    NPARALLEL=5 # Number of parts to run in parallel.
+    split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
 
     export -f _manyclangs_build_parts _manyclangs_build_part _manyclangs_list_files0_to_pack
     # A few extra slots, since we loose at least one to the build system and we
     # don't expect every job to take 100% CPU.
     JOBSLOP=5
-    jobserver -j$(($(nproc) + $JOBSLOP)) \
+    jobserver -j$(($(nproc) + JOBSLOP)) \
         xargs --max-procs=$NPARALLEL -n1 \
-        bash -c '_manyclangs_build_parts "$@"' -- $YEAR $MONTH \
-            <<<$(seq -f '%02.0f' 00 $(( $NPARTS - 1 ))) \
-            | pv --average-rate --line-mode --size "$COMMIT_COUNT" > /dev/null \
+        bash -c '_manyclangs_build_parts "$@"' -- "$YEAR" "$MONTH" \
+            <<<$(seq -f '%02.0f' 00 $(( NPARTS - 1 ))) \
+            | pv --progress --fineta --timer --average-rate --line-mode --size "$COMMIT_COUNT" > /dev/null \
             ;
+
+    time elfshaker pack --verbose "aarch64-ubuntu2004-manyclangs-$YEAR$MONTH"
 }
 
 case "${1:--h}" in

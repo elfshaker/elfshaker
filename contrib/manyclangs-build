@@ -50,7 +50,7 @@ EOF
 }
 
 object_compdb() {
-    ninja -t rules | egrep '^C(XX)?_COMPILER__' | xargs ninja -t compdb
+    ninja -t rules | grep -E '^C(XX)?_COMPILER__' | xargs ninja -t compdb
 }
 
 build_system_is_clean() {
@@ -60,11 +60,11 @@ build_system_is_clean() {
 main() {
     COMMIT_SHA="${1-$(git rev-parse HEAD)}"
 
-    if [[ -e CMakeCache.txt  ]] && ! build_system_is_clean; then
+    if [[ -e CMakeCache.txt ]] && ! build_system_is_clean; then
         # Build system is out of date. Rebuild from empty to avoid any
         # possibility of cache contamination.
         rm -rf CMakeCache.txt cmake
-        find -iname '*.cmake' -o -iname CMakeFiles -exec rm -rf {} +
+        find . \( -iname '*.cmake' -o -iname CMakeFiles \) -exec rm -rf {} +
     fi
 
     if [ ! -e CMakeCache.txt ]; then
@@ -97,7 +97,7 @@ main() {
 
     # Delete files which aren't outputs of the build system.
     comm -23 \
-        <(find -iname '*.o' | sed 's|./||' | sort) \
+        <(find . -iname '*.o' | sed 's|./||' | sort) \
         <(object_compdb | jq -r '[.[].output] | sort | .[]') \
         | xargs --no-run-if-empty rm -v
 

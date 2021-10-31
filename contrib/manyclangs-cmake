@@ -30,14 +30,14 @@ FILE_PREFIX="$(dirname "$(realpath "$LLVM_SRCDIR")")"
 BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
 
 COMPILER_FLAGS=(
-    # Flags which improves compression ratio.
+    # Flags which improve the compression ratio.
     -ffunction-sections
     -fdata-sections
     -mno-outline
     # Flags to make resulting build not depend on abspath of sources.
     -no-canonical-prefixes
-    -ffile-prefix-map="$FILE_PREFIX"=
-    -fmacro-prefix-map="$FILE_PREFIX"=
+    "-ffile-prefix-map=${FILE_PREFIX}="
+    "-fmacro-prefix-map=${FILE_PREFIX}="
     # Don't embed the compiler ident into the objects; this allows using an
     # LTO/PGO build of the compiler which is faster and produces identical
     # binaries aside from the ident string.
@@ -45,49 +45,43 @@ COMPILER_FLAGS=(
 )
 
 FLAGS=(
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=On
+    "-DCMAKE_EXPORT_COMPILE_COMMANDS=On"
 
     # Rel + assertions build.
-    -DCMAKE_BUILD_TYPE=Release
-    -DLLVM_ENABLE_ASSERTIONS=On
-    -DLLVM_ENABLE_PROJECTS='clang'
+    "-DCMAKE_BUILD_TYPE=Release"
+    "-DLLVM_ENABLE_ASSERTIONS=On"
+    "-DLLVM_ENABLE_PROJECTS=clang"
 
     # VC revision is written into binaries with manyclangs-build. This is not
     # used because it invalidates tablegen which causes a lot of rebuilding.
-    -DLLVM_APPEND_VC_REV=Off
+    "-DLLVM_APPEND_VC_REV=Off"
 
     # Compiler + linker.
-    -DCMAKE_C_COMPILER=clang"${BUILDER_CLANG_VERSION_SUFFIX}"
-    -DCMAKE_CXX_COMPILER=clang++"${BUILDER_CLANG_VERSION_SUFFIX}"
-    -DCMAKE_C_FLAGS="${COMPILER_FLAGS[*]}"
-    -DCMAKE_CXX_FLAGS="${COMPILER_FLAGS[*]}"
-    -DLLVM_USE_LINKER="${LLVM_USE_LINKER-/usr/bin/ld.lld"${BUILDER_CLANG_VERSION_SUFFIX}"}"
-    # Because elfshaker does not bother with the intermediate step of building
-    # archive files, this results in slightly different binary outputs, because
-    # every .o file is specified on the command line. Ordinarily the linker has
-    # a mapping of symbols to files from the archive file and it only bothers
-    # linking in the files which are actually used.
-    # -DCMAKE_EXE_LINKER_FLAGS="-Wl,-whole-archive"
+    "-DCMAKE_C_COMPILER=clang${BUILDER_CLANG_VERSION_SUFFIX}"
+    "-DCMAKE_CXX_COMPILER=clang++${BUILDER_CLANG_VERSION_SUFFIX}"
+    "-DCMAKE_C_FLAGS=${COMPILER_FLAGS[*]}"
+    "-DCMAKE_CXX_FLAGS=${COMPILER_FLAGS[*]}"
+    "-DLLVM_USE_LINKER=${LLVM_USE_LINKER-/usr/bin/ld.lld"${BUILDER_CLANG_VERSION_SUFFIX}"}"
 
     # These are necessary for reproducibility in conjunction with
     # CCACHE_BASEDIR, search for other comments referencing this variable.
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    "-DCMAKE_C_COMPILER_LAUNCHER=ccache"
+    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
 
     # Bindings can slow down configuration-time, and we don't use them.
-    -DLLVM_ENABLE_BINDINGS=Off
+    "-DLLVM_ENABLE_BINDINGS=Off"
     # We don't care about warnings for this use-case.
-    -DLLVM_ENABLE_WARNINGS=Off
+    "-DLLVM_ENABLE_WARNINGS=Off"
     # Try to minimize dependencies, at the expense of minor features.
-    -DLLVM_ENABLE_LIBXML2=Off
-    -DLLVM_ENABLE_ZLIB=Off
+    "-DLLVM_ENABLE_LIBXML2=Off"
+    "-DLLVM_ENABLE_ZLIB=Off"
 
     # Shrink ninja files.
-    -DCLANG_INCLUDE_TESTS=Off
-    -DLLVM_BUILD_TESTS=Off
-    -DLLVM_INCLUDE_BENCHMARKS=Off
-    -DLLVM_INCLUDE_EXAMPLES=Off
-    -DLLVM_INCLUDE_TESTS=Off
+    "-DCLANG_INCLUDE_TESTS=Off"
+    "-DLLVM_BUILD_TESTS=Off"
+    "-DLLVM_INCLUDE_BENCHMARKS=Off"
+    "-DLLVM_INCLUDE_EXAMPLES=Off"
+    "-DLLVM_INCLUDE_TESTS=Off"
 )
 
 cmake -GNinja "${FLAGS[@]}" -S "$LLVM_SRCDIR" -B "$LLVM_TGTDIR"

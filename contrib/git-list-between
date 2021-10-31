@@ -31,6 +31,7 @@ main() {
     EXTRA_ARGS=("${@:4}")
 
     # Validate args
+    # shellcheck disable=SC2015
     git rev-parse "$BRANCH" 1>/dev/null \
         && date -d "$DATE_LOWER" 1>/dev/null \
         && date -d "$DATE_UPPER" 1>/dev/null \

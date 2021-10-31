@@ -8,6 +8,8 @@ shopt -s extglob
 
 if [[ $# != 2 ]]; then
   echo "Usage: ./create-test-pack.sh NUM_SNAPSHOTS APPROX_FILE_SIZE"
+  echo
+  echo "Creates a packfile for testing purposes with random content, intended for consumption by test-scripts/check.sh"
   exit 1
 fi
 

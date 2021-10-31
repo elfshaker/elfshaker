@@ -68,7 +68,33 @@ main() {
     fi
 
     if [ ! -e CMakeCache.txt ]; then
-        \time -f 'Configured with manyclangs-cmake in %E' manyclangs-cmake ../llvm
+        REL_LLVM_PATH=../llvm/
+        ABS_BASE_PATH=$(realpath $REL_LLVM_PATH/../)/
+        REL_BASE_PATH=$(realpath --relative-to=. "$ABS_BASE_PATH")/
+
+        command time -f 'Configured with manyclangs-cmake in %E' manyclangs-cmake "${REL_LLVM_PATH}"
+
+        # [determinism] Prevent absolute build path from leaking into llvm-config build variables.
+        echo '#define LLVM_SRC_ROOT "/llvm-project/llvm"' >> ./tools/llvm-config/BuildVariables.inc
+        echo '#define LLVM_OBJ_ROOT "/llvm-project/build"' >> ./tools/llvm-config/BuildVariables.inc
+
+        # Patch build rules so that the compiler is only fed with relative
+        # paths. This is necessary to work around the following issues:
+        # * https://github.com/elfshaker/elfshaker/issues/11
+        # * https://bugs.llvm.org/show_bug.cgi?id=52360
+        # ("__PRETTY_FUNCTION__ leaks absolute paths even with -fmacro-prefix-map").
+        cp build.ninja build.ninja.orig # backup, in case of failure.
+        # shellcheck disable=SC2016
+        awk_inplace -c -v "search=$ABS_BASE_PATH" -v "replace=$REL_BASE_PATH" '
+            /^  INCLUDES = / { gsub(" -I"search, " -I"replace, $0); print; next }
+            /^build.*C(XX)?_COMPILER/ { gsub(" "search, " "replace, $0); print; next }
+            { print }
+        ' build.ninja
+
+        # Append a manyclangs-targets build rule to ninja. This is preferable to
+        # manually invoking ninja because you can only pass so many things at the
+        # command line and ninja doesn't accept response files as a parameter.
+        object_compdb | jq -r '"build manyclangs-targets: phony clang-resource-headers " + ([.[].output] | join(" "))' >> build.ninja
     fi
 
     patch_clang_version "$COMMIT_SHA"
@@ -88,12 +114,6 @@ main() {
     # correctly rerun.
 
     # patch_llvm_version "$(git rev-parse HEAD)"
-
-    # Append a manyclangs-targets build rule to ninja. This is preferable to
-    # manually invoking ninja because you can only pass so many things at the
-    # command line and ninja doesn't accept response files as a parameter.
-    sed -i '/^build manyclangs-targets:/d' build.ninja # idempotence.
-    object_compdb | jq -r '"build manyclangs-targets: phony clang-resource-headers " + ([.[].output] | join(" "))' >> build.ninja
 
     # Delete files which aren't outputs of the build system.
     comm -23 \

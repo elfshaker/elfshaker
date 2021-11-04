@@ -7,8 +7,7 @@ use crate::progress::ProgressReporter;
 use crate::repo::run_in_parallel;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
-use std::{cell::RefCell, fs::File, io, io::Read, path::Path};
-use thread_local::ThreadLocal;
+use std::{fs::File, io, io::Read, path::Path};
 use zstd::stream::raw::CParameter;
 use zstd::Encoder;
 
@@ -17,27 +16,17 @@ pub fn compute_checksums<P>(paths: &[P]) -> io::Result<Vec<ObjectChecksum>>
 where
     P: AsRef<Path> + Sync,
 {
-    let tls_buf = ThreadLocal::new();
-    let threads = num_cpus::get() as u32;
-    run_in_parallel(
-        paths.iter().map(|x| {
-            let tls_buf_ref = &tls_buf;
-            move || {
-                let mut buf = tls_buf_ref.get_or(|| RefCell::new(vec![])).borrow_mut();
-                buf.clear();
+    run_in_parallel(num_cpus::get(), paths.iter(), |x| {
+        let mut buf = vec![];
+        let mut file = File::open(&x)?;
+        file.read_to_end(&mut buf)?;
 
-                let mut file = File::open(&x)?;
-                file.read_to_end(&mut buf)?;
-
-                let checksum_buf = &mut [0u8; 20];
-                let mut hasher = Sha1::new();
-                hasher.input(&buf);
-                hasher.result(checksum_buf);
-                Ok(*checksum_buf)
-            }
-        }),
-        threads,
-    )
+        let checksum_buf = &mut [0u8; 20];
+        let mut hasher = Sha1::new();
+        hasher.input(&buf);
+        hasher.result(checksum_buf);
+        Ok(*checksum_buf)
+    })
     .into_iter()
     .collect::<io::Result<Vec<_>>>()
 }

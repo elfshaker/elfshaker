@@ -457,7 +457,7 @@ impl Pack {
         num_workers: u32,
     ) -> Result<(), Error>
     where
-        P: AsRef<Path>,
+        P: AsRef<Path> + Sync,
     {
         if entries.is_empty() {
             return Ok(());
@@ -497,19 +497,20 @@ impl Pack {
             .frame_readers
             .into_iter()
             .zip(frame_to_entries.into_iter())
-            // Skip frames we are not interested in
+            // Skip empty frames.
             .filter(|(_, entries)| !entries.is_empty())
-            .map(|(frame_reader, entries)| {
-                let output_dir: PathBuf = output_dir.as_ref().into();
-                move || extract_files(frame_reader, &entries, output_dir, verify)
-            });
+            .collect::<Vec<_>>();
 
         // Record start time
         let start_time = std::time::Instant::now();
-        // Run in parallel
-        let results = run_in_parallel(tasks, num_workers);
+        let results = run_in_parallel(
+            num_workers as usize,
+            tasks.into_iter(),
+            |(frame_reader, entries)| extract_files(frame_reader, &entries, &output_dir, verify),
+        );
         // Collect stats
         let stats = results
+            .into_iter()
             .sum::<Result<ExtractStats, Error>>()?
             // Convert the statistics into fractions, since summing the time per thread doesn't make much sense.
             .fractions();

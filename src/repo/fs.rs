@@ -41,7 +41,7 @@ where
 /// Ensures that the directory exists.
 /// Unlike [`fs::create_dir()`], this function does not return Err if the directory already exists.
 pub fn ensure_dir(path: &Path) -> io::Result<()> {
-    match fs::create_dir(&path) {
+    match fs::create_dir_all(&path) {
         Ok(_) => Ok(()),
         Err(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),

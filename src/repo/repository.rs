@@ -497,7 +497,7 @@ impl Repository {
     {
         assert!(matches!(snapshot.pack(), PackId::Loose));
 
-        let files: Vec<_> = clean_file_list(self.path.as_ref(), files)?.collect();
+        let files: Vec<_> = clean_file_list(files)?;
         info!("Computing checksums for {} files...", files.len());
         // Checksum files
         let (duration, checksums) = measure_ok(|| batch::compute_checksums(&files))?;
@@ -871,46 +871,46 @@ fn build_loose_object_path(repo_path: &Path, checksum: &ObjectChecksum) -> PathB
 
 /// Cleans the list of file paths relative to the repository root,
 /// and skips any paths pointing into the repository data directory.
-fn clean_file_list<P>(
-    repo_dir: &Path,
-    files: impl Iterator<Item = P>,
-) -> io::Result<impl Iterator<Item = PathBuf>>
+fn clean_file_list<P>(files: impl Iterator<Item = P>) -> io::Result<Vec<PathBuf>>
 where
     P: AsRef<Path>,
 {
-    let files = files
-        .map(|p| {
-            if p.as_ref().is_relative() {
-                Ok(p)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Expected a relative path, got {:?}!", p.as_ref()),
-                ))
-            }
-        })
-        .flatten()
-        .map(|p| {
-            Ok(p.as_ref()
-                .canonicalize()?
-                .components()
-                .skip(repo_dir.components().count())
-                .collect::<PathBuf>())
-        })
-        .collect::<io::Result<Vec<PathBuf>>>()?
-        .into_iter()
-        .filter(|p| !is_elfshaker_data_path(p));
+    files
+        .filter_map(|p| {
+            let p = p.as_ref();
 
-    Ok(files)
+            if !p.is_relative() {
+                return Some(Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Expected a relative path, got {}!", p.display()),
+                )));
+            }
+            for c in p.components() {
+                if c.as_os_str() == ".." {
+                    return Some(Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Parent directory .. appears in input path: {}", p.display(),),
+                    )));
+                }
+            }
+            if is_elfshaker_data_path(p) {
+                return None;
+            }
+
+            Some(Ok(p.to_owned()))
+        })
+        .collect::<io::Result<Vec<PathBuf>>>()
 }
 
 /// Checks if the relative path is rooted at the data directory.
 fn is_elfshaker_data_path(p: &Path) -> bool {
-    assert!(p.is_relative());
-    match p.components().next() {
-        Some(c) => c.as_os_str() == &*Repository::data_dir(),
-        _ => false,
+    let mut parts = p.components().peekable();
+    while parts.peek().map_or(false, |part| part.as_os_str() == ".") {
+        parts.next();
     }
+    parts
+        .next()
+        .map_or(false, |part| part.as_os_str() == &*Repository::data_dir())
 }
 
 #[cfg(test)]

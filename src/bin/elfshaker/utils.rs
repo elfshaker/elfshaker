@@ -7,6 +7,7 @@ use elfshaker::progress::ProgressReporter;
 use elfshaker::repo::{Error as RepoError, PackId, Repository, RepositoryIndex, HEAD_FILE};
 use log::{error, info, trace};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicIsize, Ordering},
     Arc,
@@ -123,9 +124,8 @@ pub fn find_pack_with_snapshot(
 /// stats about the process.
 pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
     // Open repo from cwd.
-    let repo_path = std::env::current_dir()?;
     info!("Opening repository...");
-    let (elapsed, open_result) = measure(|| Repository::open(&repo_path));
+    let (elapsed, open_result) = measure(|| Repository::open("."));
     info!("Opening repository took {:?}", elapsed);
     let repo = match open_result {
         Ok(repo) => repo,
@@ -134,7 +134,7 @@ pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
             return Err(RepoError::CorruptRepositoryIndex);
         }
         Err(RepoError::CorruptHead) => {
-            let mut head_path = repo_path.join(&*Repository::data_dir());
+            let mut head_path = PathBuf::from(".").join(&*Repository::data_dir());
             head_path.push(HEAD_FILE);
             error!(
                 "The repository HEAD file ({:?}) is corrupt! Remove the file and try again.",

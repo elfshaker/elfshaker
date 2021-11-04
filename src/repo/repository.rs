@@ -125,7 +125,7 @@ impl RepositoryIndex {
 
     /// Returns the names of the packs containing the snapshot.
     pub fn find_packs(&self, snapshot: &str) -> &[PackId] {
-        &self
+        self
             .snapshots
             .get(snapshot)
             .map(|x| x as &[PackId])
@@ -134,7 +134,7 @@ impl RepositoryIndex {
 
     /// Returns the names of the packs containing the snapshot.
     pub fn available_snapshots(&self) -> Cow<[&str]> {
-        self.snapshots.keys().map(|tag| &tag as &str).collect()
+        self.snapshots.keys().map(|tag| tag as &str).collect()
     }
 
     /// The list of known packs containing at least 1 snapshot.
@@ -446,9 +446,9 @@ impl Repository {
         P: AsRef<Path>,
     {
         if let Some(pack) = pack {
-            pack.extract_entries(&entries, path.as_ref(), opts.verify(), opts.num_workers())
+            pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
         } else {
-            self.copy_loose_entries(&entries, path.as_ref(), opts.verify())
+            self.copy_loose_entries(entries, path.as_ref(), opts.verify())
         }
     }
 
@@ -554,7 +554,7 @@ impl Repository {
         info!("Updating loose snapshot index...");
         self.update_loose_index(&index)?;
         info!("Updating HEAD...");
-        self.update_head(&snapshot)?;
+        self.update_head(snapshot)?;
         Ok(())
     }
 
@@ -601,7 +601,7 @@ impl Repository {
         let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
             / object_partitions.len() as u32;
 
-        let task_opts = &batch::CompressionOptions {
+        let task_opts = batch::CompressionOptions {
             window_log: opts.compression_window_log,
             level: opts.compression_level,
             num_workers: workers_per_task,
@@ -628,7 +628,7 @@ impl Repository {
                 let mut buf = vec![];
                 // Compress all the object files.
                 let r =
-                    batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
+                   batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
                         .map(move |bytes| (bytes, buf));
                 // Update done count.
                 let done = done_task_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
@@ -899,7 +899,7 @@ where
         })
         .collect::<io::Result<Vec<PathBuf>>>()?
         .into_iter()
-        .filter(|p| !is_elfshaker_data_path(&p));
+        .filter(|p| !is_elfshaker_data_path(p));
 
     Ok(files)
 }

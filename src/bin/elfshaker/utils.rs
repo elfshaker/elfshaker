@@ -53,7 +53,7 @@ where
     let strings: Vec<_> = rows.map(format).collect();
 
     if strings.is_empty() {
-        for header in header_strings {
+        if let Some(header) = header_strings {
             for item in header.iter() {
                 eprint!("{} ", item);
             }
@@ -72,7 +72,7 @@ where
         .collect::<Vec<_>>();
 
     // Print header to stderr
-    for header in header_strings {
+    if let Some(header) = header_strings {
         assert_eq!(columns, header.len());
         for (i, item) in header.iter().enumerate() {
             let pad = column_sizes[i] - item.len();

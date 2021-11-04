@@ -361,7 +361,7 @@ impl PackIndex {
     pub fn permute_objects(&mut self, indices: &[usize]) -> Result<(), PackError> {
         assert_eq!(self.objects().len(), indices.len());
         // Reorder the objects
-        apply_permutation(&mut self.objects, &indices);
+        apply_permutation(&mut self.objects, indices);
         // Update object offsets
         let mut offset = 0;
         for object in &mut self.objects {

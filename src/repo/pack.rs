@@ -493,6 +493,8 @@ impl Pack {
             bytes_to_decompress as f64 / 1024f64 / 1024f64
         );
 
+        // Collect required for run_in_parallel ExactSizeIterator argument.
+        #[allow(clippy::needless_collect)]
         let tasks = self
             .frame_readers
             .into_iter()
@@ -552,7 +554,7 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
 fn write_object(buf: &[u8], path: &Path) -> Result<(), Error> {
     fs::create_dir_all(path.parent().unwrap())?;
     let mut f = File::create(path)?;
-    f.write_all(&buf)?;
+    f.write_all(buf)?;
     Ok(())
 }
 

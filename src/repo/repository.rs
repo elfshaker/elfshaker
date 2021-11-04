@@ -5,20 +5,19 @@ use super::constants::*;
 
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, HashMap, HashSet},
-    ffi::OsStr,
+    collections::{HashMap, HashSet},
     fs,
     fs::File,
     io,
     io::{Read, Write},
+    iter::once,
     path::{Path, PathBuf},
     str::FromStr,
     time::SystemTime,
 };
 
 use log::{error, info, warn};
-use serde::{Deserialize, Serialize};
-use walkdir::{DirEntry, WalkDir};
+use walkdir::WalkDir;
 
 use super::algo::{partition_by_u64, run_in_parallel};
 use super::constants::REPO_DIR;
@@ -108,63 +107,6 @@ pub struct ExtractResult {
     pub added_file_count: u32,
     pub removed_file_count: u32,
 }
-
-/// The repository index is a data structure that can be rebuild from the
-/// available pack file indexes and is used to speed-up snapshot lookups.
-#[derive(Serialize, Deserialize)]
-pub struct RepositoryIndex {
-    snapshots: HashMap<String, Vec<PackId>>,
-}
-
-impl RepositoryIndex {
-    pub fn new() -> Self {
-        Self {
-            snapshots: Default::default(),
-        }
-    }
-
-    /// Returns the names of the packs containing the snapshot.
-    pub fn find_packs(&self, snapshot: &str) -> &[PackId] {
-        self.snapshots
-            .get(snapshot)
-            .map(|x| x as &[PackId])
-            .unwrap_or(&[])
-    }
-
-    /// Returns the names of the packs containing the snapshot.
-    pub fn available_snapshots(&self) -> Cow<[&str]> {
-        self.snapshots.keys().map(|tag| tag as &str).collect()
-    }
-
-    /// The list of known packs containing at least 1 snapshot.
-    pub fn available_packs(&self) -> Cow<Vec<PackId>> {
-        // Derive the pack names from the index
-        let packs: HashSet<&PackId> = self.snapshots.values().flatten().collect();
-        let mut packs: Vec<PackId> = packs.into_iter().cloned().collect();
-        packs.sort_unstable();
-        // We might want to cache this, hence the Cow
-        Cow::Owned(packs)
-    }
-
-    /// Adds a new snapshot to the index.
-    pub fn add_snapshot(&mut self, snapshot: &SnapshotId) {
-        match self.snapshots.entry(snapshot.tag().to_owned()) {
-            Entry::Occupied(mut o) => {
-                o.get_mut().push(snapshot.pack().clone());
-            }
-            Entry::Vacant(v) => {
-                v.insert(vec![snapshot.pack().clone()]);
-            }
-        }
-    }
-}
-
-impl Default for RepositoryIndex {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Contains methods for interfacing with elfshaker repositories, including
 /// methods to create snapshots and pack files, and to extract files from them.
 pub struct Repository {
@@ -174,65 +116,9 @@ pub struct Repository {
     head: Option<SnapshotId>,
     /// The time HEAD was last modified.
     head_time: Option<SystemTime>,
-    /// Maps (snapshot -> packs)
-    index: RepositoryIndex,
 }
 
 impl Repository {
-    /// Rebuilds the repository index by collating the snapshots from all
-    /// pack files found in the [`PACKS_DIR`] directory.
-    pub fn update_index(repo_dir: &Path) -> Result<RepositoryIndex, Error> {
-        info!("Opening repository {:?}...", repo_dir);
-        let mut packs_dir = repo_dir.to_owned();
-        packs_dir.push(&*Repository::data_dir());
-        packs_dir.push(PACKS_DIR);
-
-        // File all pack index files under $REPO_DIR/packs.
-        let packs = WalkDir::new(packs_dir)
-            .max_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(is_pack_index)
-            .collect::<Vec<_>>();
-
-        info!("Found {} packs!", packs.len());
-        let mut index = RepositoryIndex::new();
-
-        // Construct a top-level index from the pack indexes.
-        for pack in &packs {
-            let pack_path = pack.path();
-            // Pack names must be valid unicode.
-            let pack_name = pack_path.file_name().unwrap().to_str().unwrap();
-            info!("Processing {}...", pack_name);
-            let pack_name: String = {
-                // Skip the extension
-                let mut chars = pack_name.chars();
-                chars.nth_back(PACK_INDEX_EXTENSION.len()).unwrap();
-                chars.collect()
-            };
-            let pack_index = Pack::parse_index(std::io::BufReader::new(File::open(pack_path)?))?;
-            let snapshots = pack_index.snapshots();
-            for snapshot in snapshots {
-                let id = SnapshotId::new(PackId::Pack(pack_name.to_owned()), snapshot.tag())?;
-                index.add_snapshot(&id);
-            }
-        }
-
-        for snapshot in Self::read_loose_index(repo_dir)?.snapshots() {
-            let id = SnapshotId::loose(snapshot.tag())?;
-            index.add_snapshot(&id);
-        }
-
-        let mut index_path = std::env::current_dir()?;
-        index_path.push(&*Repository::data_dir());
-        index_path.push(INDEX_FILE);
-        info!("Writing {:?}...", index_path);
-        let mut writer = File::create(index_path)?;
-        rmp_serde::encode::write(&mut writer, &index).expect("Serialization failed!");
-
-        Ok(index)
-    }
-
     /// Opens the specified repository.
     ///
     /// # Arguments
@@ -259,19 +145,10 @@ impl Repository {
             info!("Current HEAD: None");
         }
 
-        let index: RepositoryIndex = {
-            if let Some(bytes) = read_or_none(data_dir.join(INDEX_FILE))? {
-                rmp_serde::decode::from_slice(&bytes).map_err(|_| Error::CorruptRepositoryIndex)?
-            } else {
-                return Err(Error::CorruptRepositoryIndex);
-            }
-        };
-
         Ok(Repository {
-            path: path.as_ref().into(),
+            path: path.as_ref().to_owned(),
             head,
             head_time,
-            index,
         })
     }
 
@@ -300,16 +177,77 @@ impl Repository {
     pub fn head(&self) -> &Option<SnapshotId> {
         &self.head
     }
-    pub fn index(&self) -> &RepositoryIndex {
-        &self.index
-    }
+
     /// Open the pack.
     pub fn open_pack(&self, pack: &str) -> Result<Pack, Error> {
-        let pack_id = PackId::Pack(pack.to_owned());
-        if !self.index().available_packs().iter().any(|p| *p == pack_id) {
-            return Err(Error::PackNotFound(pack.to_owned()));
-        }
         Pack::open(&self.path, pack)
+    }
+
+    pub fn packs(&self) -> Result<Vec<PackId>, Error> {
+        let root = self.path.join(REPO_DIR).join(PACKS_DIR);
+        WalkDir::new(&root)
+            .into_iter()
+            .filter_map(|dirent| {
+                dirent
+                    .map_err(Error::WalkDirError)
+                    .and_then(|e| {
+                        e.into_path()
+                            .strip_prefix(&root)
+                            .unwrap() // has prefix by construction.
+                            .as_os_str()
+                            .to_owned()
+                            .into_string()
+                            .map_err(Error::Utf8Error)
+                            .map(PackId::from_index_path)
+                    })
+                    .transpose()
+            })
+            .chain(once(Ok(PackId::Loose)))
+            .collect()
+    }
+
+    pub fn find_pack_with_snapshot(&self, snapshot: &str) -> Result<PackId, Error> {
+        let packs = self
+            .packs()?
+            .into_iter()
+            .filter_map(|pack_id| {
+                self.load_index(&pack_id)
+                    .map(|idx| {
+                        idx.snapshots()
+                            .iter()
+                            .any(|s| s.tag() == snapshot)
+                            .then(|| pack_id)
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<PackId>, Error>>()?;
+
+        match packs.len() {
+            0 => Err(Error::PackError(PackError::SnapshotNotFound(
+                snapshot.to_owned(),
+            ))),
+            1 => Ok(packs.into_iter().next().unwrap()),
+            _ => Err(Error::AmbiguousSnapshotMatch(snapshot.to_owned(), packs)),
+        }
+    }
+
+    pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
+        let data_dir = self.path.join(&*Repository::data_dir());
+        let pack_index_path = match pack_id {
+            PackId::Pack(name) => data_dir
+                .join(PACKS_DIR)
+                .join(name)
+                .with_extension(PACK_INDEX_EXTENSION),
+            PackId::Loose => {
+                let path = data_dir.join(LOOSE_DIR).join(LOOSE_INDEX_FILE);
+                if !path.exists() {
+                    return Ok(PackIndex::default());
+                }
+                path
+            }
+        };
+        info!("Load index {} {}", pack_id, pack_index_path.display());
+        Pack::parse_index(std::io::BufReader::new(File::open(pack_index_path)?))
     }
 
     /// Checks-out the specified snapshot.
@@ -534,6 +472,9 @@ impl Repository {
                 ))
             })
             .collect::<Result<Vec<_>, Error>>()?;
+
+        info!("Need to store {} new objects!", new_checksums.len());
+
         index.push_snapshot(snapshot.tag(), &pack_entries)?;
 
         // Copy files
@@ -844,18 +785,6 @@ impl Repository {
     }
 }
 
-fn is_pack_index(entry: &DirEntry) -> bool {
-    entry.file_type().is_file()
-        && match Path::new(entry.file_name())
-            .file_name()
-            .map(OsStr::to_str)
-            .flatten()
-        {
-            Some(filename) => filename.ends_with(PACK_INDEX_EXTENSION),
-            None => false,
-        }
-}
-
 fn build_loose_object_path(repo_path: &Path, checksum: &ObjectChecksum) -> PathBuf {
     let checksum_str = hex::encode(&checksum[..]);
     let mut obj_path = repo_path.join(&*Repository::data_dir());
@@ -1033,7 +962,6 @@ mod tests {
         let mut repo = Repository {
             head: Some(SnapshotId::from_str("pack/snapshot").unwrap()),
             head_time: None,
-            index: RepositoryIndex::default(),
             path: "/some/path".into(),
         };
         let snapshot = SnapshotId::from_str("pack/snapshot-2").unwrap();
@@ -1059,7 +987,6 @@ mod tests {
         let mut repo = Repository {
             head: None,
             head_time: None,
-            index: RepositoryIndex::default(),
             path: "/some/path".into(),
         };
         let snapshot = SnapshotId::from_str("pack/snapshot").unwrap();

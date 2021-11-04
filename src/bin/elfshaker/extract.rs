@@ -6,7 +6,7 @@ use std::{error::Error, str::FromStr};
 use clap::{App, Arg, ArgMatches};
 use log::{info, warn};
 
-use super::utils::{find_pack_with_snapshot, open_repo_from_cwd};
+use super::utils::open_repo_from_cwd;
 use elfshaker::repo::{ExtractOptions, PackId, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "extract";
@@ -36,7 +36,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Determine the pack file to use.
     let pack = match pack {
         Some(pack) => PackId::from_str(pack)?,
-        None => find_pack_with_snapshot(repo.index(), snapshot)?,
+        None => repo.find_pack_with_snapshot(snapshot)?,
     };
 
     let new_head = SnapshotId::new(pack, snapshot)?;

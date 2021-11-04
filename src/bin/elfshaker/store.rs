@@ -2,12 +2,12 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
-use log::{error, info};
+use log::error;
 use std::{error::Error, ffi::OsStr, fs, io, path::PathBuf};
 use walkdir::WalkDir;
 
 use super::utils::open_repo_from_cwd;
-use elfshaker::repo::{Repository, SnapshotId};
+use elfshaker::repo::SnapshotId;
 
 pub(crate) const SUBCOMMAND: &str = "store";
 
@@ -16,7 +16,6 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let files0_from = matches.value_of("files0-from");
     let snapshot = matches.value_of("snapshot").unwrap();
     let snapshot = SnapshotId::loose(snapshot)?;
-    let is_update_supressed = matches.is_present("no-update-index");
 
     if files_from.is_some() && files0_from.is_some() {
         error!("Cannot specify both --files-from and --files0-from!");
@@ -35,14 +34,6 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let mut repo = open_repo_from_cwd()?;
     repo.create_snapshot(&snapshot, files.into_iter())?;
-
-    if is_update_supressed {
-        eprintln!("Snapshot {} created successfully! Remember to run update-index to update the repository index!", snapshot);
-    } else {
-        info!("Updating the repository index...");
-        Repository::update_index(repo.path())?;
-        eprintln!("Snapshot {} created successfully!", snapshot);
-    }
 
     Ok(())
 }
@@ -73,11 +64,6 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .long("files0-from")
                 .value_name("file")
                 .help("Reads the NUL-separated (ASCII \\0) list of files to include in the snapshot from the specified file. '-' is taken to mean stdin."),
-        )
-        .arg(
-            Arg::with_name("no-update-index")
-                .long("no-update-index")
-                .help("Does not update the repository index automatically."),
         )
 }
 

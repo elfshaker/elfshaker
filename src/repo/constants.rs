@@ -15,6 +15,7 @@ pub const PACKS_DIR: &str = "packs";
 pub const PACK_EXTENSION: &str = "pack";
 /// The file extension of a pack index file.
 pub const PACK_INDEX_EXTENSION: &str = "pack.idx";
+pub const DOT_PACK_INDEX_EXTENSION: &str = ".pack.idx";
 /// A directory containing the object files from all loose snapshots
 pub const LOOSE_DIR: &str = "loose";
 /// The pack index for the loose snapshots

@@ -1,19 +1,22 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
+use std::ffi::OsString;
 use std::{fmt::Display, io};
 
 use crate::packidx::PackError;
 use crate::repo::pack::IdError;
 
+use super::PackId;
+
 /// The type of error used by repository operations.
 #[derive(Debug)]
 pub enum Error {
     IOError(io::Error),
+    WalkDirError(walkdir::Error),
+    Utf8Error(OsString),
     PackError(PackError),
     IdError(IdError),
-    /// Bad elfshaker_data/inex
-    CorruptRepositoryIndex,
     /// Bad elfshaker_data/HEAD (missing HEAD is okay and means that nothing has been extracted so far)
     CorruptHead,
     /// The references snapshot/pack is missing.
@@ -23,7 +26,7 @@ pub enum Error {
     /// The .pack file is corrupt.
     CorruptPack,
     /// Multiple or none snapshots match the specified description
-    AmbiguousSnapshotMatch,
+    AmbiguousSnapshotMatch(String, Vec<PackId>),
     /// The working directory contains unexpected files
     DirtyWorkDir,
     /// The .pack file is not available in packs/
@@ -32,23 +35,32 @@ pub enum Error {
     RepositoryNotFound,
 }
 
+impl From<walkdir::Error> for Error {
+    fn from(err: walkdir::Error) -> Self {
+        Self::WalkDirError(err)
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::IOError(ioerr) => ioerr.fmt(f),
             Self::PackError(packerr) => packerr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
+            Self::WalkDirError(wderr) => wderr.fmt(f),
+            Self::Utf8Error(s) => write!(f, "unable to interpret path as utf8: {:?}", s),
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
             Self::BrokenHeadRef(e) => write!(f, "Broken HEAD: {}", e),
-            Self::CorruptRepositoryIndex => {
-                write!(f, "The repository index is corrupt or missing!")
-            }
             Self::CorruptPack => {
                 write!(f, "The pack file is corrupt!")
             }
             Self::CorruptPackIndex => write!(f, "The pack index is corrupt!"),
-            Self::AmbiguousSnapshotMatch => {
-                write!(f, "Found multiple snapshots matching the description!")
+            Self::AmbiguousSnapshotMatch(snapshot, packs) => {
+                write!(
+                    f,
+                    "The requested snapshot {} lives in multiple packs: {:?}",
+                    snapshot, packs
+                )
             }
             Self::DirtyWorkDir => write!(
                 f,

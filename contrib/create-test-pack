@@ -59,7 +59,6 @@ main() {
     REPO_DIR="$(mktemp -p /dev/shm/ -d elfshaker.create_test_pack.XXXXXXXXXX)"
     cd "$REPO_DIR"
     mkdir elfshaker_data
-    "${ELFSHAKER_BIN}" update-index
 
     for I in $(seq $NUM_SNAPSHOTS); do
         NUM_FILES=64
@@ -69,7 +68,7 @@ main() {
         # Delete some files.
         # TODO(peterwaller-arm): Reinstate this when #20 is fixed? Investigate if this is buggy?
         # find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int_inclusive 0 $NUM_FILES) | xargs rm -v
-        "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --no-update-index --verbose
+        "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --verbose
     done
 
     rm -r -- !("elfshaker_data")

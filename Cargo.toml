@@ -4,12 +4,8 @@
 [package]
 name = "elfshaker"
 version = "0.1.0"
-authors = ["Veselin Karaganev <veselin.karaganev@arm.com>"]
+authors = ["Veselin Karaganev <veselin.karaganev@arm.com>", "Peter Waller <peter.waller@arm.com>"]
 edition = "2018"
-
-[[bin]]
-name = "create-pack"
-path = "src/bin/create-pack/main.rs"
 
 [[bin]]
 name = "elfshaker"
@@ -18,7 +14,6 @@ path = "src/bin/elfshaker/main.rs"
 [dependencies]
 zstd = { version = "0.9.0", features = ["zstdmt"] }
 crossbeam-utils = "0.8"
-tar = "0.4.35"
 walkdir = "2.3.2"
 clap = "2.33.0"
 rust-crypto = "0.2.36"

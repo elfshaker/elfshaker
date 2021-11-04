@@ -25,9 +25,10 @@ use super::error::Error;
 use super::fs::{create_temp_path, ensure_dir, get_last_modified, read_or_none, write_file_atomic};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::batch;
-use crate::log::measure_ok;
 use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
 use crate::progress::ProgressReporter;
+use crypto::digest::Digest;
+use crypto::sha1::Sha1;
 
 /// A struct specifying the the extract options.
 #[derive(Clone, Debug)]
@@ -415,19 +416,6 @@ impl Repository {
         })
     }
 
-    fn update_loose_index(&mut self, index: &PackIndex) -> Result<(), Error> {
-        let mut index_path = self.path.join(&*Repository::data_dir());
-        index_path.push(LOOSE_DIR);
-        index_path.push(LOOSE_INDEX_FILE);
-
-        let mut buf = vec![];
-        // This should not fail, unless there is an error in the implementation.
-        rmp_serde::encode::write(&mut buf, &index).expect("Serialization failed!");
-
-        write_file_atomic(buf.as_slice(), &self.temp_dir(), &index_path)?;
-        Ok(())
-    }
-
     pub fn create_snapshot<I, P>(&mut self, snapshot: &SnapshotId, files: I) -> Result<(), Error>
     where
         I: Iterator<Item = P>,
@@ -435,70 +423,50 @@ impl Repository {
     {
         assert!(matches!(snapshot.pack(), PackId::Loose));
 
-        let files: Vec<_> = clean_file_list(self.path.as_ref(), files)?.collect();
+        let files = clean_file_list(self.path.as_ref(), files)?.collect::<Vec<_>>();
         info!("Computing checksums for {} files...", files.len());
-        // Checksum files
-        let (duration, checksums) = measure_ok(|| batch::compute_checksums(&files))?;
-        info!("Checksum computation took {:?}", duration);
-        // Compare with index
-        info!("Reading loose snapshot index...");
-        let mut index = self.loose_index()?;
-        if index.snapshots().iter().any(|s| s.tag() == snapshot.tag()) {
-            return Err(Error::PackError(PackError::SnapshotAlreadyExists(
-                "loose".into(),
-                snapshot.tag().to_owned(),
-            )));
-        }
-        // input_checksums maps checksums to the first file on disk with that checksum.
-        let input_checksums: HashMap<&_, usize> =
-            checksums.iter().enumerate().map(|(x, y)| (y, x)).collect();
-        // loose_checksums contains the checksums in the loose.idx
-        let loose_checksums: HashSet<&_> = index.objects().iter().map(|o| &o.checksum).collect();
-        let new_checksums: Vec<&_> = input_checksums
-            .keys()
-            .filter(|&x| !loose_checksums.contains(x))
-            .copied()
-            .collect();
-        info!("Need to store {} new objects!", new_checksums.len());
-        // Compute the entries for the new snapshot and update the loose index
-        let pack_entries = checksums
-            .iter()
-            .enumerate()
-            .map(|(file_index, checksum)| {
-                let file_path = &files[file_index];
-                let file_size = fs::metadata(file_path)?.len();
-                Ok(FileEntry::new(
-                    file_path.into(),
-                    ObjectEntry::loose(*checksum, file_size),
-                ))
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
 
-        info!("Need to store {} new objects!", new_checksums.len());
-
-        index.push_snapshot(snapshot.tag(), &pack_entries)?;
-
-        // Copy files
-        let mut loose_dir = self.path.join(&*Repository::data_dir());
-        loose_dir.push(LOOSE_DIR);
-        ensure_dir(&loose_dir)?;
-        // Create temp dir
         let temp_dir = self.temp_dir();
         ensure_dir(&temp_dir)?;
 
-        info!("Writing files to disk...");
-        for checksum in &new_checksums {
-            let file_index = input_checksums[checksum];
-            let file_path = &files[file_index];
-            let file = File::open(file_path)?;
-            // Store object
-            self.write_loose_object(file, &temp_dir, checksum)?;
-        }
+        let threads = num_cpus::get();
 
-        info!("Updating loose snapshot index...");
-        self.update_loose_index(&index)?;
-        info!("Updating HEAD...");
-        self.update_head(snapshot)?;
+        let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
+            let mut buf = vec![];
+            let mut file = File::open(&file_path)?;
+            file.read_to_end(&mut buf)?;
+
+            let mut checksum = [0u8; 20];
+            let mut hasher = Sha1::new();
+            hasher.input(&buf);
+            hasher.result(&mut checksum);
+            self.write_loose_object(&*buf, &temp_dir, &checksum)?;
+
+            Ok(FileEntry::new(
+                file_path.into(),
+                ObjectEntry::loose(checksum, buf.len() as u64),
+            ))
+        })
+        .into_iter()
+        .collect::<io::Result<Vec<_>>>()?;
+
+        let mut index = PackIndex::default();
+        index.push_snapshot(snapshot.tag(), &pack_entries)?;
+
+        let loose_path = self.path().join(REPO_DIR).join(PACKS_DIR).join(LOOSE_DIR);
+        ensure_dir(&loose_path)?;
+
+        let mut buf = vec![];
+        // This should not fail, unless there is an error in the implementation.
+        rmp_serde::encode::write(&mut buf, &index).expect("Serialization failed!");
+        write_file_atomic(
+            buf.as_slice(),
+            &self.temp_dir(),
+            &loose_path
+                .join(snapshot.tag())
+                .with_extension(PACK_INDEX_EXTENSION),
+        )?;
+
         Ok(())
     }
 

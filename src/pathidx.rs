@@ -1,404 +1,157 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-//! Implements a data structure called [`PathTree`] which can
-//! efficiently store many paths. It works by deduplicating common path
-//! components and interning them such that a full path can be identified by a
-//! single 32-bit integer.
-
-use std::cell::RefCell;
-use std::cmp::{Ord, Ordering};
-use std::collections::{BTreeSet, HashMap};
+use core::fmt;
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
-use std::rc::Rc;
 
-use serde::{Deserialize, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// An opaque reference to a [`Path`] stored in a [`PathPool`].
-#[derive(Hash, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
-pub struct PathHandle(u32);
-
-/// PathPool exists to intern strings representing paths. It enables an
-/// efficient representation of specific paths using a [`PathHandle`].
-pub trait PathPool {
-    /// The number of unique file paths in the tree.
-    fn file_count(&self) -> usize;
-    /// Stores the specified file path.
-    fn create_file<P: AsRef<Path>>(&mut self, path: P);
-    /// Returns true if [`PathPool::commit_changes`] needs to be called due to a previous
-    /// mutating change.
-    fn is_dirty(&self) -> bool;
-    /// Updates the internal structures of `self` after mutating changes to the
-    /// tree, ensuring that any mutating changes have been committed.
-    ///
-    /// [`PathPool::commit_changes`] must be run after a mutation and old [`PathHandle`]s
-    /// should be discarded.
-    fn commit_changes(&mut self);
-    /// Returns the handle corresponding to the given path.
-    fn find<S: AsRef<OsStr>, I: Iterator<Item = S>>(
-        &self,
-        path_components: I,
-    ) -> Option<PathHandle>;
-    /// Creates a handle-to-path hash map.
-    fn create_lookup(&self) -> HashMap<PathHandle, OsString>;
+/// PathPool interns path strings.
+#[derive(Default, Clone)]
+pub struct PathPool {
+    entries: Vec<OsString>,
+    entry_map: HashMap<OsString, PathHandle>,
 }
 
-/// A structure for efficient storage of file paths, implementing the PathPool
-/// trait. It has an efficient representation in memory and can be serialized to
-/// disk. Conceptually the data structure is a trie over path components.
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PathTree {
-    file_count: usize,
-    root: TreeNodeRc,
-    // Flag indicating whether the tree was mutated and [`commit_changes`] needs
-    // to be run.
-    #[serde(skip)]
-    is_dirty: bool,
-}
+pub type PathHandle = u32;
 
-impl PathTree {
-    /// Creates a new empty PathTree.
+impl PathPool {
     pub fn new() -> Self {
-        Self {
-            file_count: 0,
-            root: Rc::new(RefCell::new(TreeNode::Directory(DirectoryNode::new(
-                "".as_ref(),
-            )))),
-            is_dirty: false,
+        Self::default()
+    }
+
+    /// get returns the intern'd PathHandle.
+    pub fn get<P: AsRef<OsStr>>(&self, p: P) -> Option<PathHandle> {
+        self.entry_map.get(p.as_ref()).map(|&x| x)
+    }
+
+    /// get_or_insert returns the intern'd PathHandle for the given string, or inserts it if not present.
+    pub fn get_or_insert<P: AsRef<OsStr>>(&mut self, p: P) -> PathHandle {
+        if let Some(h) = self.get(p.as_ref()) {
+            h
+        } else {
+            let h = self.entries.len() as PathHandle;
+            let p = p.as_ref().to_owned();
+            self.entries.push(p.clone());
+            self.entry_map.insert(p, h);
+            h
         }
     }
 
-    /// Traverses all paths in an unspecified but stable order.
-    fn traverse_paths<F>(&self, mut f: F)
+    // lookup the string for the given PathHandle.
+    pub fn lookup(&self, h: PathHandle) -> Option<&OsString> {
+        self.entries.get(h as usize)
+    }
+}
+
+use std::iter::FromIterator;
+impl<'l> FromIterator<&'l OsString> for PathPool {
+    fn from_iter<I: IntoIterator<Item = &'l OsString>>(iter: I) -> Self {
+        let mut c = PathPool::new();
+        for i in iter {
+            c.get_or_insert(i);
+        }
+        c
+    }
+}
+
+impl<'de> Deserialize<'de> for PathPool {
+    fn deserialize<D>(deserializer: D) -> Result<PathPool, D::Error>
     where
-        F: FnMut(&OsStr),
+        D: Deserializer<'de>,
     {
-        let mut s = vec![(OsString::new(), self.root.clone())];
-        while !s.is_empty() {
-            let (parent, node) = s.pop().unwrap();
-            let node_ref = node.borrow();
-            match *node_ref {
-                TreeNode::Directory(ref dir) => {
-                    for child in &dir.children {
-                        let mut path = parent.clone();
-                        if !path.is_empty() {
-                            path.push(std::path::MAIN_SEPARATOR.to_string());
-                        }
-                        path.push(&dir.name);
-                        s.push((path, child.clone()));
+        struct VisitPathPool;
+        impl<'de> Visitor<'de> for VisitPathPool {
+            type Value = PathPool;
+            fn visit_seq<V>(self, mut seq: V) -> Result<PathPool, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let mut result = if let Some(len) = seq.size_hint() {
+                    PathPool {
+                        entries: Vec::with_capacity(len),
+                        entry_map: HashMap::with_capacity(len),
                     }
+                } else {
+                    PathPool::new()
+                };
+                while let Some(elem) = seq.next_element::<OsString>()? {
+                    result.get_or_insert(elem);
                 }
-                TreeNode::File(ref file) => {
-                    let mut path = parent.clone();
-                    if !path.is_empty() {
-                        path.push(std::path::MAIN_SEPARATOR.to_string());
-                    }
-                    path.push(&file.name);
-                    f(&path);
-                }
+                Ok(result)
+            }
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("PathPool")
             }
         }
-    }
 
-    /// Traverses all nodes in an unspecified but stable order.
-    ///
-    /// The relative order of traversed file nodes is guaranteed to be the same
-    /// as the order of paths traversed by `traverse()`.
-    ///
-    /// This is because the path handles are synthesized from the items are
-    /// ordered by traverse() and assigned using traverse_mut(). These handles
-    /// are not written to disk and hence the order or traversal must match.
-    fn traverse_mut<F>(&mut self, mut f: F)
+        deserializer.deserialize_seq(VisitPathPool)
+    }
+}
+
+impl Serialize for PathPool {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        F: FnMut(&TreeNodeRc),
+        S: Serializer,
     {
-        let mut s = vec![self.root.clone()];
-        while !s.is_empty() {
-            let node = s.pop().unwrap();
-            let node_ref = node.borrow();
-            if let TreeNode::Directory(ref dir) = *node_ref {
-                for child in &dir.children {
-                    s.push(child.clone());
-                }
-            }
-            drop(node_ref);
-            f(&node);
-        }
+        serializer.collect_seq(&self.entries)
     }
 }
 
-impl Default for PathTree {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl Clone for PathTree {
-    fn clone(&self) -> Self {
-        Self {
-            file_count: self.file_count,
-            root: Rc::new((*self.root).clone()),
-            is_dirty: self.is_dirty,
-        }
-    }
-}
-
-impl PathPool for PathTree {
-    fn file_count(&self) -> usize {
-        self.file_count
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.is_dirty
-    }
-
-    fn create_file<P: AsRef<Path>>(&mut self, path: P) {
-        let mut path_components = path.as_ref().components().collect::<Vec<_>>();
-        assert!(
-            !path_components.is_empty(),
-            "Cannot add the path to the pool: the path is empty!"
-        );
-        let filename = path_components.pop().unwrap();
-
-        let dir = DirectoryNode::create_dir_all(&self.root, path_components.into_iter());
-        let mut dir_ref = dir.borrow_mut();
-        if let TreeNode::Directory(ref mut dir) = *dir_ref {
-            if dir.create_file(filename.as_ref()) {
-                self.file_count += 1;
-            }
-        }
+    #[test]
+    fn basic_pathpool_test() {
+        let mut p = PathPool::new();
+        // Not present.
+        let handle = p.get(&OsString::from("foo"));
+        assert_eq!(handle, None);
+        // Insertion.
+        let first_handle = p.get_or_insert(&OsString::from("foo"));
+        assert_eq!(p.lookup(first_handle), Some(&OsString::from("foo")));
+        // Repeat insertion.
+        let second_handle = p.get(&OsString::from("foo"));
+        assert_eq!(Some(first_handle), second_handle);
+        // Not present.
+        let missing = p.get(&OsString::from("bar"));
+        assert_eq!(missing, None);
+        // Insertion but reusing a previously-was-file path fragment as a directory.
+        let foobar = p.get_or_insert(&OsString::from("foo/bar"));
+        assert_eq!(p.lookup(foobar), Some(&OsString::from("foo/bar")));
     }
 
-    fn commit_changes(&mut self) {
-        // To update the tree, we simply iterate over it in pre-order and assign
-        // consecutive numeric values to the path handles, starting at 1. 0 is
-        // the in-memory representation used for an uninitialised handle.
-        let mut last_handle = PathHandle(1);
-        let last_handle_ref = &mut last_handle;
-        self.traverse_mut(|node| {
-            let mut node_ref = node.borrow_mut();
-            if let TreeNode::File(ref mut file) = *node_ref {
-                file.handle = Some(*last_handle_ref);
-                *last_handle_ref = PathHandle(last_handle_ref.0 + 1);
-            }
-        });
-        self.is_dirty = false;
-    }
+    #[test]
+    fn serde() {
+        let paths: Vec<OsString> = vec!["a", "b", "c", "b", "a/a", "a/a/a", "a", "a/a"]
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
-    fn find<S: AsRef<OsStr>, I: Iterator<Item = S>>(
-        &self,
-        path_components: I,
-    ) -> Option<PathHandle> {
-        assert!(
-            !self.is_dirty,
-            "Tree is dirty, run commit_changes after mutating!"
-        );
-        let mut path_components = path_components.collect::<Vec<_>>();
-        assert!(
-            !path_components.is_empty(),
-            "Cannot add the path to the pool: the path is empty!"
-        );
-        let filename = path_components.pop().unwrap();
-
-        let dir = DirectoryNode::open_dir_all(&self.root, path_components.into_iter());
-        dir.as_ref()?;
-        let dir = dir.unwrap();
-
-        let dir_ref = dir.borrow();
-        if let TreeNode::Directory(ref dir) = *dir_ref {
-            let node = dir.open(filename.as_ref());
-            // Just take the handle from the file node.
-            return node
-                .map(|x| match &*x.borrow() {
-                    TreeNode::File(file) => file.handle,
-                    _ => unreachable!(),
-                })
-                .flatten();
-        }
-
-        None
-    }
-
-    fn create_lookup(&self) -> HashMap<PathHandle, OsString> {
-        assert!(
-            !self.is_dirty,
-            "Tree is dirty, run commit_changes after mutating!"
-        );
-        let mut map = HashMap::new();
-
-        let mut i = 1;
-        self.traverse_paths(|x| {
-            map.insert(PathHandle(i), x.into());
-            i += 1;
-        });
-
-        map
-    }
-}
-
-/// A node in the path tree.
-///
-/// Note: Path names are stored as UTF-8 encoded strings.
-#[derive(Clone, Serialize, Deserialize, Debug)]
-enum TreeNode {
-    Directory(DirectoryNode),
-    File(FileNode),
-}
-
-type TreeNodeRc = Rc<RefCell<TreeNode>>;
-
-#[derive(Serialize, Deserialize, Debug)]
-struct DirectoryNode {
-    name: OsString,
-    children: BTreeSet<TreeNodeRc>,
-}
-
-impl Clone for DirectoryNode {
-    fn clone(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            children: self
-                .children
-                .iter()
-                .map(|x| Rc::new((**x).clone()))
-                .collect(),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-struct FileNode {
-    name: OsString,
-    #[serde(skip)]
-    handle: Option<PathHandle>,
-}
-
-impl TreeNode {
-    fn name(&self) -> &OsStr {
-        match self {
-            TreeNode::Directory(ref d) => d.name(),
-            TreeNode::File(ref f) => f.name(),
-        }
-    }
-}
-
-impl Ord for TreeNode {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.name().cmp(other.name())
-    }
-}
-
-impl PartialOrd for TreeNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for TreeNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.name() == other.name()
-    }
-}
-
-impl Eq for TreeNode {}
-
-impl DirectoryNode {
-    fn new(name: &OsStr) -> Self {
-        Self {
-            name: name.into(),
-            children: BTreeSet::new(),
-        }
-    }
-
-    fn name(&self) -> &OsStr {
-        &self.name
-    }
-
-    /// Opens a node in the current directory.
-    fn open(&self, name: &OsStr) -> Option<TreeNodeRc> {
-        self.children
+        let pool = PathPool::from_iter(paths.iter());
+        let handles = paths
             .iter()
-            .find(|x| x.borrow().name() == name)
-            .cloned()
-    }
+            .map(|p| pool.get(p).unwrap())
+            .collect::<Vec<_>>();
 
-    /// Creates a subdirectory.
-    fn create_dir(&mut self, name: &OsStr) -> TreeNodeRc {
-        let existing = self.open(name);
-        if let Some(e) = existing {
-            return e;
+        let mut encoded: Vec<u8> = vec![];
+        rmp_serde::encode::write(&mut encoded, &pool).unwrap();
+
+        let decoded: PathPool = rmp_serde::decode::from_read(&*encoded).unwrap();
+
+        // Same handles given original paths.
+        let decoded_handles = paths
+            .iter()
+            .map(|p| decoded.get(p).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(handles, decoded_handles);
+
+        // Handles preserved across a roundtrip.
+        for (path, orig_handle) in paths.iter().zip(handles.into_iter()) {
+            assert_eq!(decoded.lookup(orig_handle), Some(path));
         }
-
-        let node = Rc::new(RefCell::new(TreeNode::Directory(DirectoryNode::new(name))));
-        assert!(self.children.insert(node.clone()));
-        node
-    }
-
-    /// Opens a directory that is several levels deep.
-    fn open_dir_all<S: AsRef<OsStr>, I: Iterator<Item = S>>(
-        root: &TreeNodeRc,
-        mut components: I,
-    ) -> Option<TreeNodeRc> {
-        let root_ref = root.borrow();
-        if let TreeNode::Directory(ref dir) = *root_ref {
-            if let Some(c) = components.next() {
-                if let Some(node) = dir.open(c.as_ref()) {
-                    return DirectoryNode::open_dir_all(&node, components);
-                } else {
-                    return None;
-                }
-            }
-            Some(root.clone())
-        } else {
-            panic!("Root is not a directory!")
-        }
-    }
-
-    /// Recursively creates all directories.
-    fn create_dir_all<S: AsRef<OsStr>, I: Iterator<Item = S>>(
-        root: &TreeNodeRc,
-        mut components: I,
-    ) -> TreeNodeRc {
-        let mut root_ref = root.borrow_mut();
-        if let TreeNode::Directory(ref mut dir) = *root_ref {
-            if let Some(c) = components.next() {
-                if let Some(node) = dir.open(c.as_ref()) {
-                    return DirectoryNode::create_dir_all(&node, components);
-                } else {
-                    let subdir = dir.create_dir(c.as_ref());
-                    return DirectoryNode::create_dir_all(&subdir, components);
-                }
-            }
-            root.clone()
-        } else {
-            panic!("Root is not a directory!")
-        }
-    }
-
-    /// Creates a file entry. Returns true if a new entry was added,
-    /// false if the entry was already present.
-    fn create_file(&mut self, name: &OsStr) -> bool {
-        let existing = self.open(name);
-        if existing.is_some() {
-            return false;
-        }
-
-        let node = Rc::new(RefCell::new(TreeNode::File(FileNode::new(name))));
-        assert!(self.children.insert(node));
-        true
-    }
-}
-
-impl FileNode {
-    fn new(name: &OsStr) -> Self {
-        Self {
-            name: name.into(),
-            handle: None,
-        }
-    }
-
-    fn name(&self) -> &OsStr {
-        &self.name
     }
 }

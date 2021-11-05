@@ -3,11 +3,11 @@
 
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
-use crate::pathidx::{PathHandle, PathPool, PathTree};
+use crate::pathidx::{PathHandle, PathPool};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::{OsString};
 use std::fmt;
 
 /// Error type used in the packidx module.
@@ -97,7 +97,7 @@ impl ObjectEntry {
 
 /// A [`FileHandle`] identifies a file stored in a pack. It contains two
 /// handles: a [`PathHandle`], which can be used to get the path of the file
-/// from the [`PathTree`], and an [`ObjectHandle`], which can be used to get the
+/// from the [`PathPool`], and an [`ObjectHandle`], which can be used to get the
 /// corresponding [`ObjectEntry`].
 ///
 /// [`FileEntry`] and [`FileHandle`] can both be used to find the path and
@@ -281,23 +281,20 @@ impl FileEntry {
 /// Contains the metadata needed to extract files from a pack file.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct PackIndex {
-    tree: PathTree,
+    path_pool: PathPool,
     objects: Vec<ObjectEntry>,
     snapshots: Vec<Snapshot>,
 }
 
 impl PackIndex {
-    pub fn new(tree: PathTree, objects: Vec<ObjectEntry>, snapshots: Vec<Snapshot>) -> Self {
+    pub fn new(path_pool: PathPool, objects: Vec<ObjectEntry>, snapshots: Vec<Snapshot>) -> Self {
         Self {
-            tree,
+            path_pool,
             objects,
             snapshots,
         }
     }
 
-    pub fn tree(&self) -> &PathTree {
-        &self.tree
-    }
     pub fn objects(&self) -> &[ObjectEntry] {
         &self.objects
     }
@@ -392,12 +389,11 @@ impl PackIndex {
     where
         I: Iterator<Item = FileHandle>,
     {
-        let path_lookup = self.tree.create_lookup();
         // Map the path handle and object ID to the corresponding path and
         // object entry.
         files
             .map(|x| -> Result<_, PackError> {
-                let path = path_lookup.get(&x.path).ok_or(PackError::PathNotFound(x.path))?;
+                let path = self.path_pool.lookup(x.path).ok_or(PackError::PathNotFound(x.path))?;
                 let object = self
                     .objects
                     .get(x.object.0 as usize)
@@ -426,13 +422,6 @@ impl PackIndex {
             return Err(PackError::SnapshotAlreadyExists("<unknown>".into(), tag.to_owned()));
         }
 
-        let (new_tree, old2new) = extend_tree(self.tree.clone(), input.iter().map(|e| &e.path))?;
-        let rev_lookup: HashMap<_, _> = new_tree
-            .create_lookup()
-            .into_iter()
-            .map(|(a, b)| (b, a))
-            .collect();
-
         let existing_objects: HashSet<&_> = self.objects.iter().map(|o| &o.checksum).collect();
         // Compute and extend with the set of objects which are not available in
         // the loose storage
@@ -456,19 +445,15 @@ impl PackIndex {
             .iter()
             .map(|e| {
                 FileHandle::new(
-                    rev_lookup[&e.path],
+                    self.path_pool.get_or_insert(&e.path),
                     ObjectHandle(object_indices[&e.object.checksum] as u32),
                 )
             })
             .collect();
 
-        // Update the path indices of the entries in the old snapshots
-        map_entries_in_place(&mut self.snapshots, |f| f.path = old2new[&f.path]);
         // Finally, push the new snapshot
         self.snapshots
             .push(Snapshot::new(tag, FileHandleList::Complete(files)));
-        // And replace the path tree
-        self.tree = new_tree;
 
         Ok(())
     }
@@ -482,13 +467,11 @@ impl fmt::Debug for PackIndex {
         struct DebugPackIndex {
             objects: usize,
             snapshots: usize,
-            paths: usize,
         }
 
         let index = DebugPackIndex {
             objects: self.objects().len(),
             snapshots: self.snapshots().len(),
-            paths: self.tree().file_count(),
         };
         fmt::Debug::fmt(&index, f)
     }
@@ -516,40 +499,6 @@ where
             }
         };
     }
-}
-
-/// Adds the given paths to the [`PathTree`].
-/// Also returns a [`HashMap<PathHandle, PathHandle>`] that can be used to determine how the existing indices changed.
-fn extend_tree<I, P>(
-    mut tree: PathTree,
-    paths: I,
-) -> Result<(PathTree, HashMap<PathHandle, PathHandle>), PackError>
-where
-    I: Iterator<Item = P>,
-    P: AsRef<OsStr>,
-{
-    let original_lookup = tree.create_lookup();
-    for path in paths {
-        tree.create_file(path.as_ref());
-    }
-    // We need to run new_tree.commit_changes() after mutation, before any read
-    // operations.
-    tree.commit_changes();
-
-    // Maps the updated paths to the new handles.
-    let new_rev_lookup: HashMap<_, PathHandle> = tree
-        .create_lookup()
-        .into_iter()
-        .map(|(i, p)| (p, i))
-        .collect();
-
-    // Now, we need to figure out how to map the old paths to new_paths.
-    let old2new: HashMap<PathHandle, PathHandle> = original_lookup
-        .into_iter()
-        .map(|(old_idx, path)| (old_idx, new_rev_lookup[&path]))
-        .collect();
-
-    Ok((tree, old2new))
 }
 
 /// Transforms the input sequence using the specified indices.

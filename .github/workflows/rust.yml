@@ -22,3 +22,5 @@ jobs:
       run: cargo test --verbose
     - name: Run check
       run: ./test-scripts/check.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack
+    - name: Generate random pack
+      run: ./test-scripts/check.sh ./target/release/elfshaker $(contrib/create-test-pack 5 64)

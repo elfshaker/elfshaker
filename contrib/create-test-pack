@@ -55,7 +55,7 @@ main() {
     NUM_SNAPSHOTS=$1
     APPROX_FILE_SIZE=$2
 
-    REPO_DIR="$(mktemp -d)"
+    REPO_DIR="$(mktemp -p /dev/shm/ -d)"
     cd "$REPO_DIR"
     mkdir elfshaker_data
     elfshaker update-index
@@ -70,6 +70,8 @@ main() {
 
     rm -r -- !("elfshaker_data")
     elfshaker pack verification --frames 2 --verbose
+
+    echo "$REPO_DIR"/elfshaker_data/packs/verification.pack
 }
 
 main $@

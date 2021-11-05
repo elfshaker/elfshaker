@@ -613,13 +613,16 @@ impl Repository {
 
         info!("Creating {} compressed frames...", total_task_count);
 
-        let tasks = object_partitions.into_iter().map(|objects| {
-            let base_path = self.path.to_path_buf();
-            let done_task_count_ref = &done_task_count;
-            move || {
+        let mut frames = vec![];
+        let mut frame_bufs = vec![];
+
+        let frame_results = run_in_parallel(
+            opts.num_workers as usize,
+            object_partitions.into_iter(),
+            |objects| {
                 let paths = objects
                     .iter()
-                    .map(|o| build_loose_object_path(&base_path, &o.checksum))
+                    .map(|o| build_loose_object_path(&self.path, &o.checksum))
                     .collect::<Vec<_>>();
 
                 let mut buf = vec![];
@@ -628,18 +631,14 @@ impl Repository {
                     batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
                         .map(move |bytes| (bytes, buf));
                 // Update done count.
-                let done =
-                    done_task_count_ref.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+                let done = done_task_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
                 // And report the change.
                 reporter.checkpoint(done, Some(total_task_count - done));
                 r
-            }
-        });
+            },
+        );
 
-        let mut frames = vec![];
-        let mut frame_bufs = vec![];
-
-        for frame_result in run_in_parallel(tasks, opts.num_workers) {
+        for frame_result in frame_results {
             let (decompressed_size, compressed_buffer) = frame_result?;
             frames.push(PackFrame {
                 frame_size: compressed_buffer.len() as u64,

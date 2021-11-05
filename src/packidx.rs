@@ -478,6 +478,7 @@ impl PackIndex {
 impl fmt::Debug for PackIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         #[derive(Debug)]
+        #[allow(dead_code)]
         struct DebugPackIndex {
             objects: usize,
             snapshots: usize,

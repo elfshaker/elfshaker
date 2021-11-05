@@ -1,69 +1,46 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-unsafe fn extend_lifetime<'a, F, R>(f: F) -> Box<dyn FnOnce() -> R + Send + 'static>
+use std::panic;
+
+/// run_in_parallel splits the input items into `nthread` even-sized groups, and
+/// spawns one thread to handle each group. The `workload()` function is run on
+/// each item to produce a Vec<Output> whose order matches that of the input.
+pub fn run_in_parallel<Item, Output, Workload>(
+    nthread: usize,
+    items: impl ExactSizeIterator<Item = Item>,
+    workload: Workload,
+) -> Vec<Output>
 where
-    F: FnOnce() -> R + Send + 'a,
+    Workload: Copy + Send + Fn(Item) -> Output,
+    Item: Send,
+    Output: Send,
 {
-    std::mem::transmute::<Box<dyn FnOnce() -> R + Send + 'a>, Box<dyn FnOnce() -> R + Send + 'static>>(
-        Box::new(f),
-    )
-}
+    crossbeam_utils::thread::scope(|s| {
+        let mut workers = Vec::new();
+        let mut items = items.peekable();
+        let n_per_thread = items.len() / nthread;
+        while items.peek().is_some() {
+            let thread_items = items.by_ref().take(n_per_thread).collect::<Vec<_>>();
+            workers.push(s.spawn(move |_| thread_items.into_iter().map(workload).collect::<Vec<_>>()))
+        }
 
-pub fn run_in_parallel<T, R>(
-    tasks: impl Iterator<Item = T>,
-    num_threads: u32,
-) -> impl Iterator<Item = R>
-where
-    T: Send + FnOnce() -> R,
-    R: Send + 'static,
-{
-    assert_ne!(0, num_threads);
-    let queue: std::collections::VecDeque<_> = tasks
-        .enumerate()
-        // It is safe to extend the lifetime here because we know that
-        // we always join all threads before this function exists
-        .map(|(i, t)| unsafe { (i, extend_lifetime(t)) })
-        .collect();
-    let queue = std::sync::Arc::new(std::sync::Mutex::new(queue));
-    let threads: Vec<_> = (0..num_threads)
-        .map(|_| {
-            let queue = queue.clone();
-            std::thread::spawn(move || {
-                let mut results = vec![];
-                loop {
-                    let item = {
-                        let mut queue = queue.lock().expect("Poisoned mutex!");
-                        queue.pop_front()
-                    };
-                    if let Some((i, item)) = item {
-                        results.push((i, item()));
-                    } else {
-                        break;
-                    }
-                }
-                results
-            })
-        })
-        .collect();
-
-    let mut results = threads
-        .into_iter()
-        .map(|t| t.join())
-        // Join all threads before proceeding. This has the implication that a panic in a thread
-        // will require all threads to exit before it is propagated to the caller.
-        .collect::<Vec<_>>()
-        .into_iter()
-        // Unwrap the thread results
-        // This panics only if the thread panicked,
-        // and returns the task result otherwise.
-        .flat_map(|j| j.unwrap())
-        .collect::<Vec<_>>();
-
-    // Sort the results in the original task order.
-    results.sort_by_key(|(i, _)| *i);
-    // And return an iterator.
-    results.into_iter().map(|(_, r)| r)
+        workers
+            .into_iter()
+            .map(|w| w.join())
+            .collect::<Result<Vec<_>, _>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
+    })
+    // These errors only relate to thread failures, and contain panic information.
+    // They don't pertain to any errors raised by the workload.
+    .map_err(|payload| {
+        panic::resume_unwind(payload);
+    })
+    .unwrap()
+    .map_err(|payload| {
+        panic::resume_unwind(payload);
+    })
+    .unwrap()
 }
 
 /// Partition the dataset into *up to* `n` partitions, using the values returned by `eval` as the partitioning metric.
@@ -106,10 +83,11 @@ mod test {
 
     #[test]
     fn run_in_parallel_works() {
-        let tasks = (0..8192).map(|n| move || n * 2);
-        let expected = (0..8192).map(|n| n * 2);
-        let result = run_in_parallel(tasks, 64);
-        assert!(expected.eq(result));
+        let tasks = (0..10000000u64).collect::<Vec<_>>();
+        let result = run_in_parallel(128, tasks.iter(), |&x| x * 2);
+        let expected = tasks.into_iter().map(|x| x * 2).collect::<Vec<_>>();
+
+        assert!(expected.eq(&result));
     }
 
     #[test]

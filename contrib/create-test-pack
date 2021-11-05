@@ -6,17 +6,10 @@
 set -euo pipefail
 shopt -s extglob
 
-if [[ $# != 2 ]]; then
-  echo "Usage: ./create-test-pack.sh NUM_SNAPSHOTS APPROX_FILE_SIZE"
-  echo
-  echo "Creates a packfile for testing purposes with random content, intended for consumption by test-scripts/check.sh"
-  exit 1
-fi
-
 rand_int() {
     MIN=$1
     MAX=$2
-    awk "BEGIN{print int($RANDOM*($MAX-$MIN)/32767)+$MIN}"
+    echo $(( RANDOM * ( MAX - MIN ) / 32767 + MIN ))
 }
 
 rand_filename() {
@@ -52,24 +45,35 @@ create_rand_file() {
 }
 
 main() {
-    NUM_SNAPSHOTS=$1
-    APPROX_FILE_SIZE=$2
+    if [[ $# != 3 ]]; then
+        echo "Usage: ./create-test-pack.sh ELFSHAKER_BIN NUM_SNAPSHOTS APPROX_FILE_SIZE"
+        echo
+        echo "Creates a packfile for testing purposes with random content, intended for consumption by test-scripts/check.sh"
+        exit 1
+    fi
 
-    REPO_DIR="$(mktemp -p /dev/shm/ -d)"
+    ELFSHAKER_BIN=$(realpath $1)
+    NUM_SNAPSHOTS=$2
+    APPROX_FILE_SIZE=$3
+
+    REPO_DIR="$(mktemp -p /dev/shm/ -d elfshaker.create_test_pack.XXXXXXXXXX)"
     cd "$REPO_DIR"
     mkdir elfshaker_data
-    elfshaker update-index
+    "${ELFSHAKER_BIN}" update-index
 
     for I in $(seq $NUM_SNAPSHOTS); do
         NUM_FILES=64
         for J in $(seq $NUM_FILES); do
             (create_rand_file $APPROX_FILE_SIZE)
         done
-        elfshaker store "SNAPSHOT-$I" --no-update-index --verbose
+        # Delete some files files.
+        # TODO(peterwaller-arm): Reinstate this when #20 is fixed? Investigate if this is buggy?
+        # find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int 0 $NUM_FILES) | xargs rm -v
+        "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --no-update-index --verbose
     done
 
     rm -r -- !("elfshaker_data")
-    elfshaker pack verification --frames 2 --verbose
+    "${ELFSHAKER_BIN}" pack verification --frames 2 --verbose
 
     echo "$REPO_DIR"/elfshaker_data/packs/verification.pack
 }

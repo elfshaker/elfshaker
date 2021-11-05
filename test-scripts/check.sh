@@ -329,7 +329,7 @@ test_head_updated_after_packing() {
 test_touched_file_dirties_repo() {
   "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
-  find . -not -path "./elfshaker_data/*" -exec touch {} +
+  find . -not -path "./elfshaker_data/*" -exec touch -d "$(date --date='now +10 sec')" {} +
   if "$elfshaker" extract --verbose --verify -P "$pack" "$snapshot_b"; then
     echo 'Failed to detect files changes!'
     exit 1
@@ -339,7 +339,7 @@ test_touched_file_dirties_repo() {
 test_dirty_repo_can_be_forced() {
   "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
-  find . -not -path "./elfshaker_data/*" -exec touch {} +
+  find . -not -path "./elfshaker_data/*" -exec touch -d "$(date --date='now +10 sec')" {} +
   if ! "$elfshaker" extract --verbose --force --verify -P "$pack" "$snapshot_b"; then
     echo 'Could not use --force to skip dirty repository checks!'
     exit 1

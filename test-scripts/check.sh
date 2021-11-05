@@ -7,6 +7,8 @@
 [[ "$TRACE" ]] && set -x
 set -euo pipefail
 shopt -s extglob
+# So that subshells see our shell options.
+export SHELLOPTS
 
 if [[ $# != 2 ]]; then
   echo "Usage: ./check.sh path/to/elfshaker path/to/file.pack"
@@ -14,7 +16,7 @@ if [[ $# != 2 ]]; then
 fi
 
 timestamp() {
-  date "+%s" # Unix timestamp
+  date "+%Y%m%d%H%M%S" # Unix timestamp
 }
 
 # Use specified elfshaker binary
@@ -23,7 +25,7 @@ input=$(realpath "$2")
 pack=$(basename -- "$input")
 pack="${pack%.*}"
 
-temp_dir=$(realpath ./"test-T$(timestamp)")
+temp_dir=$(realpath /dev/shm/"test-T$(timestamp)")
 trap 'trap_exit' EXIT
 
 cleanup() {
@@ -33,10 +35,22 @@ cleanup() {
 trap_exit() {
   exit_code=$?
   if [[ $exit_code != 0 ]]; then
-    read -n 1 -s -r -p "Press any key to continue with cleanup";
+    echo "Script exited with error, tempfiles preserved in $temp_dir"
+    read -n 1 -s -r -p "Press any key to continue with cleanup."
+    echo
   fi
   cleanup
   exit $exit_code
+}
+
+all_pwd_sha1sums() {
+  find . \( -name elfshaker_data -prune \) -o -type f -printf '%P\n' | \
+    xargs sha1sum | \
+    awk '{print $1" "$2}' | sort -k2,2
+}
+
+elfshaker_sha1sums() {
+  "$elfshaker" list -P "$@" 2> /dev/null | awk '{print $1" "$3}' | sort -k2,2
 }
 
 verify_snapshot() {
@@ -49,16 +63,12 @@ verify_snapshot() {
     exit 1
   fi
 
-  "$elfshaker" list -P "$pack" "$tag" | sed '1d' | sort > LIST_OUTPUT
-  while read -r line; do
-    path=$(echo "$line" | awk '{print $1;}')
-    checksum=$(echo "$line" | awk '{print $3;}')
-    actual_checksum=$(sha1sum "$path" | awk '{print $1;}')
-    if [ "${checksum,,}" != "${actual_checksum,,}" ]; then
-        echo "Checksums for $path do NOT match ($actual_checksum, expected: $checksum)!"
-    fi
-  done < LIST_OUTPUT
-  rm LIST_OUTPUT
+  if ! DIFF=$(diff -u1 <(elfshaker_sha1sums $pack $tag) <(all_pwd_sha1sums))
+  then
+    echo "$DIFF"
+    echo "Checksums differ!"
+    exit 1
+  fi
 }
 
 before_test() {
@@ -78,9 +88,10 @@ run_test() {
     echo "FAIL"
     echo "----------------"
     echo -e "\033[0;31m"
-    tail -n 25 "$output_file"
+    cat "$output_file"
     echo -e "\033[0m"
     echo -e "\n----------------"
+    exit 1
   fi
   rm "$output_file"
 }
@@ -168,7 +179,7 @@ test_pack_simple_works() {
   # Pack the two files
   "$elfshaker" --verbose update-index
   "$elfshaker" --verbose store SS-1
-  "$elfshaker" --verbose pack P-1
+  "$elfshaker" --verbose pack --compression-level 1 P-1
   "$elfshaker" --verbose update-index
   # Delete the files
   rm ./foo ./bar
@@ -198,7 +209,7 @@ test_pack_two_snapshots_works() {
   fi
   # Store the modified files in SS-2 and pack all into P-1
   "$elfshaker" --verbose store SS-2
-  "$elfshaker" --verbose pack P-1
+  "$elfshaker" --verbose pack --compression-level 1 P-1
   "$elfshaker" --verbose update-index
   # Then extract from the pack and verify the checksums
   "$elfshaker" --verbose extract --reset -P P-1 SS-1
@@ -232,7 +243,7 @@ test_pack_two_snapshots_object_sort_works() {
   fi
   # Store the modified files in SS-2 and pack all into P-1
   "$elfshaker" --verbose store SS-2
-  "$elfshaker" --verbose pack P-1
+  "$elfshaker" --verbose pack --compression-level 1 P-1
   "$elfshaker" --verbose update-index
   # Then extract from the pack and verify the checksums
   "$elfshaker" --verbose extract --reset -P P-1 SS-1
@@ -262,7 +273,7 @@ test_pack_two_snapshots_multiframe_works() {
   "$elfshaker" store SS-2
   # When the number of frames is too large (> #objects), elfshaker should
   # silently emit less frames and not crash
-  "$elfshaker" pack --frames 999 P-1
+  "$elfshaker" pack --compression-level 1 --frames 999 P-1
   "$elfshaker" update-index
   # Then extract from the pack and verify the checksums
   "$elfshaker" extract --reset --verify -P P-1 SS-1
@@ -307,7 +318,7 @@ test_head_updated_after_packing() {
   "$elfshaker" update-index
   rand_megs 1 > ./foo
   "$elfshaker" store test-snapshot
-  "$elfshaker" pack test-pack
+  "$elfshaker" pack --compression-level 1 test-pack
   "$elfshaker" update-index
   if [[ "$(cat elfshaker_data/HEAD)" != "test-pack/test-snapshot" ]]; then
     echo 'HEAD was expected to point to the newly-created pack!'
@@ -318,9 +329,8 @@ test_head_updated_after_packing() {
 test_touched_file_dirties_repo() {
   "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
-  sleep 1
   find . -not -path "./elfshaker_data/*" -exec touch {} +
-  if [ "$elfshaker" extract --verbose --verify -P "$pack" "$snapshot_b" ]; then
+  if "$elfshaker" extract --verbose --verify -P "$pack" "$snapshot_b"; then
     echo 'Failed to detect files changes!'
     exit 1
   fi
@@ -329,9 +339,8 @@ test_touched_file_dirties_repo() {
 test_dirty_repo_can_be_forced() {
   "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
-  sleep 1
   find . -not -path "./elfshaker_data/*" -exec touch {} +
-  if [ ! "$elfshaker" extract --verbose --force --verify -P "$pack" "$snapshot_b" ]; then
+  if ! "$elfshaker" extract --verbose --force --verify -P "$pack" "$snapshot_b"; then
     echo 'Could not use --force to skip dirty repository checks!'
     exit 1
   fi
@@ -352,8 +361,8 @@ main() {
   list_output=$(mktemp)
   # Grab 2 snapshots from the pack
   "$elfshaker" list -P "$pack" 2>/dev/null | sed '1d' > "$list_output"
-  snapshot_a=$(head -n 1 "$list_output" | awk '{print $1;}')
-  snapshot_b=$(tail -n 1 "$list_output" | awk '{print $1;}')
+  snapshot_a=$(head -n 1 "$list_output" | awk '{print $1}')
+  snapshot_b=$(tail -n 1 "$list_output" | awk '{print $1}')
   rm "$list_output"
 
   if [[ "$snapshot_a" == "$snapshot_b" ]]; then

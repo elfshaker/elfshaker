@@ -144,7 +144,7 @@ fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<()
     let mut table = vec![];
 
     if let PackId::Pack(pack_name) = snapshot.pack() {
-        let pack = repo.open_pack(&pack_name)?;
+        let pack = repo.open_pack(pack_name)?;
         // Get a snapshot with a complete file list.
         let entries = pack.index().entries_from_snapshot(snapshot.tag()).unwrap();
         for entry in entries {

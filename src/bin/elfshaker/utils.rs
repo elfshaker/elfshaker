@@ -107,12 +107,7 @@ pub fn find_pack_with_snapshot(
     let packs = repo_index.find_packs(snapshot);
     match packs.len() {
         0 => {
-            error!(
-                "Snapshot {} is not available in the known set of pack files! \
-                Make sure that the correct pack file is available, refresh the index, and try again!",
-                snapshot
-            );
-            Err(RepoError::PackError(PackError::SnapshotNotFound))
+            Err(RepoError::PackError(PackError::SnapshotNotFound(snapshot.to_owned())))
         }
         1 => Ok(packs[0].clone()),
         _ => {

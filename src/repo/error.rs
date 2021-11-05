@@ -17,7 +17,7 @@ pub enum Error {
     /// Bad elfshaker_data/HEAD (missing HEAD is okay and means that nothing has been extracted so far)
     CorruptHead,
     /// The references snapshot/pack is missing.
-    BrokenHeadRef,
+    BrokenHeadRef(Box<Error>),
     /// The .pack.idx is corrupt
     CorruptPackIndex,
     /// The .pack file is corrupt.
@@ -27,7 +27,7 @@ pub enum Error {
     /// The working directory contains unexpected files
     DirtyWorkDir,
     /// The .pack file is not available in packs/
-    PackNotFound,
+    PackNotFound(String),
     /// The directory is not a repository
     RepositoryNotFound,
 }
@@ -39,7 +39,7 @@ impl Display for Error {
             Self::PackError(packerr) => packerr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
-            Self::BrokenHeadRef => write!(f, "The pack or snapshot referenced by HEAD is missing!"),
+            Self::BrokenHeadRef(e) => write!(f, "Broken HEAD: {}", e),
             Self::CorruptRepositoryIndex => {
                 write!(f, "The repository index is corrupt or missing!")
             }
@@ -52,11 +52,12 @@ impl Display for Error {
             }
             Self::DirtyWorkDir => write!(
                 f,
-                "Some files in the repository have been removed or modified unexpectedly!"
+                "Some files in the repository have been removed or modified unexpectedly! \
+                 You can use --force to skip this check, but this might result in DATA LOSS!"
             ),
-            Self::PackNotFound => write!(
+            Self::PackNotFound(p) => write!(
                 f,
-                "The specified pack file could not be found in the repository index!"
+                "The specified pack file '{}' could not be found in the repository index!", p,
             ),
             Self::RepositoryNotFound => write!(f, "The directory is not an elfshaker repository!"),
         }

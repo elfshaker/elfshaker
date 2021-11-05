@@ -308,7 +308,7 @@ impl Repository {
     pub fn open_pack(&self, pack: &str) -> Result<Pack, Error> {
         let pack_id = PackId::Pack(pack.to_owned());
         if !self.index().available_packs().iter().any(|p| *p == pack_id) {
-            return Err(Error::PackNotFound);
+            return Err(Error::PackNotFound(pack.to_owned()));
         }
         Pack::open(&self.path, pack)
     }
@@ -358,8 +358,8 @@ impl Repository {
                     .map(|name| self.open_pack(&name))
                     .transpose()
                     .map_err(|e| {
-                        if matches!(e, Error::PackNotFound) {
-                            Error::BrokenHeadRef
+                        if matches!(e, Error::PackNotFound(_)) {
+                            Error::BrokenHeadRef(Box::new(e))
                         } else {
                             e
                         }
@@ -375,8 +375,8 @@ impl Repository {
                     })?;
 
                 let head_entries = head_index.entries_from_snapshot(head.tag()).map_err(|e| {
-                    if matches!(e, PackError::SnapshotNotFound) {
-                        Error::BrokenHeadRef
+                    if matches!(e, PackError::SnapshotNotFound(_)) {
+                        Error::BrokenHeadRef(Box::new(Error::PackError(e)))
                     } else {
                         Error::PackError(e)
                     }
@@ -506,7 +506,7 @@ impl Repository {
         info!("Reading loose snapshot index...");
         let mut index = self.loose_index()?;
         if index.snapshots().iter().any(|s| s.tag() == snapshot.tag()) {
-            return Err(PackError::SnapshotAlreadyExists.into());
+            return Err(Error::PackError(PackError::SnapshotAlreadyExists("loose".into(), snapshot.tag().to_owned())));
         }
         // input_checksums maps checksums to the first file on disk with that checksum.
         let input_checksums: HashMap<&_, usize> =

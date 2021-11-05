@@ -4,11 +4,10 @@
 use std::{error::Error, str::FromStr};
 
 use clap::{App, Arg, ArgMatches};
-use log::{error, info, warn};
+use log::{info, warn};
 
 use super::utils::{find_pack_with_snapshot, open_repo_from_cwd};
-use elfshaker::packidx::PackError;
-use elfshaker::repo::{Error as RepoError, ExtractOptions, PackId, SnapshotId};
+use elfshaker::repo::{ExtractOptions, PackId, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "extract";
 
@@ -57,36 +56,12 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     opts.set_force(is_force);
     opts.set_num_workers(threads);
 
-    match repo.extract_snapshot(new_head.clone(), opts) {
-        Ok(result) => {
-            eprintln!("A \t{} files", result.added_file_count);
-            eprintln!("D \t{} files", result.removed_file_count);
-            eprintln!("M \t{} files", result.modified_file_count);
-            eprintln!("Extracted '{}'", new_head);
-        }
-        Err(e) => match e {
-            RepoError::PackError(PackError::SnapshotNotFound) => {
-                error!(
-                    "Snapshot was expected to be available in {}, but was not found \
-                    in the index specific to the pack (.pack.idx)",
-                    new_head.pack()
-                );
-            }
-            RepoError::DirtyWorkDir => {
-                error!("Some files in the repository have been removed or modified unexpectedly! \
-                        You can use --force to skip this check, but this might result in DATA LOSS!");
-            }
-            RepoError::BrokenHeadRef => {
-                error!(
-                    "The index for the current snapshot '{}' could not be found! \
-                    You can use --reset to extract all files from '{}', instead of attempting an incremental update.",
-                    repo.head().as_ref().unwrap(),
-                    new_head
-                )
-            }
-            e => return Err(Box::new(e)),
-        },
-    }
+    let result = repo.extract_snapshot(new_head.clone(), opts)?;
+
+    eprintln!("A \t{} files", result.added_file_count);
+    eprintln!("D \t{} files", result.removed_file_count);
+    eprintln!("M \t{} files", result.modified_file_count);
+    eprintln!("Extracted '{}'", new_head);
 
     Ok(())
 }

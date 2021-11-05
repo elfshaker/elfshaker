@@ -14,11 +14,11 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub enum PackError {
     CompleteListNeeded,
-    PathNotFound,
+    PathNotFound(PathHandle),
     ObjectNotFound,
-    SnapshotNotFound,
+    SnapshotNotFound(String),
     /// A snapshot with that tag is already present in the pack
-    SnapshotAlreadyExists,
+    SnapshotAlreadyExists(String, String),
     ChecksumMismatch,
 }
 
@@ -32,11 +32,11 @@ impl std::fmt::Display for PackError {
                 "Expected a complete file list, but got the delta format instead!"
             ),
             PackError::ObjectNotFound => write!(f, "The object was not found!"),
-            PackError::PathNotFound => write!(f, "The path was not found!"),
-            PackError::SnapshotNotFound => write!(f, "The snapshot was not found!"),
-            PackError::SnapshotAlreadyExists => write!(
+            PackError::PathNotFound(p) => write!(f, "Corrupt pack, PathHandle {:?} not found", p),
+            PackError::SnapshotNotFound(s) => write!(f, "The snapshot '{}' was not found!", s),
+            PackError::SnapshotAlreadyExists(p, s) => write!(
                 f,
-                "A snapshot with this tag is already present in the pack!"
+                "A snapshot with the tag '{}' is already present in the pack '{}'!",s, p,
             ),
             PackError::ChecksumMismatch => write!(f, "The object checksum did not match!"),
         }
@@ -397,7 +397,7 @@ impl PackIndex {
         // object entry.
         files
             .map(|x| -> Result<_, PackError> {
-                let path = path_lookup.get(&x.path).ok_or(PackError::PathNotFound)?;
+                let path = path_lookup.get(&x.path).ok_or(PackError::PathNotFound(x.path))?;
                 let object = self
                     .objects
                     .get(x.object.0 as usize)
@@ -409,7 +409,7 @@ impl PackIndex {
 
     /// Returns the full list of [`FileEntry`].
     pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<FileEntry>, PackError> {
-        let snapshot = self.find_snapshot(tag).ok_or(PackError::SnapshotNotFound)?;
+        let snapshot = self.find_snapshot(tag).ok_or(PackError::SnapshotNotFound(tag.to_owned()))?;
 
         // Convert the FileHandleList into a list of entries to write to disk.
         let entries = match snapshot.list {
@@ -423,7 +423,7 @@ impl PackIndex {
     /// index format. The list of [`FileEntry`] is the files to record in the snapshot.
     pub fn push_snapshot(&mut self, tag: &str, input: &[FileEntry]) -> Result<(), PackError> {
         if self.snapshots().iter().any(|s| s.tag == tag) {
-            return Err(PackError::SnapshotAlreadyExists);
+            return Err(PackError::SnapshotAlreadyExists("<unknown>".into(), tag.to_owned()));
         }
 
         let (new_tree, old2new) = extend_tree(self.tree.clone(), input.iter().map(|e| &e.path))?;

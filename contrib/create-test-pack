@@ -22,8 +22,8 @@ rand_int() {
 rand_filename() {
     # Max 2*8 possible filenames
     CHARS=(a b c d 1 2 3 4)
-    CHAR1="$(rand_int 0 8)"
-    CHAR2="$(rand_int 0 8)"
+    CHAR1="$(rand_int 0 7)"
+    CHAR2="$(rand_int 0 7)"
     echo "${CHARS[$CHAR1]}${CHARS[$CHAR2]}"
 }
 

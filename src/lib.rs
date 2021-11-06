@@ -4,6 +4,6 @@
 pub mod batch;
 pub mod log;
 pub mod packidx;
-pub mod pathidx;
+pub mod pathpool;
 pub mod progress;
 pub mod repo;

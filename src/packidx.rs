@@ -3,7 +3,7 @@
 
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
-use crate::pathidx::{PathHandle, PathPool};
+use crate::pathpool::{PathHandle, PathPool};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

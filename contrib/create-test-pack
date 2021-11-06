@@ -6,17 +6,17 @@
 set -euo pipefail
 shopt -s extglob
 
-rand_int() {
+rand_int_inclusive() {
     MIN=$1
     MAX=$2
-    echo $(( RANDOM * ( MAX - MIN ) / 32767 + MIN ))
+    echo $(( RANDOM * ( (MAX+1) - MIN ) / 32768 + MIN ))
 }
 
 rand_filename() {
-    # Max 2*8 possible filenames
+    # Max 8^2 possible filenames
     CHARS=(a b c d 1 2 3 4)
-    CHAR1="$(rand_int 0 7)"
-    CHAR2="$(rand_int 0 7)"
+    CHAR1="$(rand_int_inclusive 0 7)"
+    CHAR2="$(rand_int_inclusive 0 7)"
     echo "${CHARS[$CHAR1]}${CHARS[$CHAR2]}"
 }
 
@@ -27,7 +27,7 @@ rand_bytes() {
 create_rand_file() {
     APPROX_FILE_SIZE=$1
 
-    DEPTH="$(rand_int 1 3)"
+    DEPTH="$(rand_int_inclusive 1 2)"
     for I in $(seq $DEPTH); do
         DIR_NAME="$(rand_filename)"
         DIR_NAME="${DIR_NAME:0:$I}" # Limit dir name to depth
@@ -37,7 +37,7 @@ create_rand_file() {
         fi
     done
 
-    FILE_SIZE="$(rand_int 1 $APPROX_FILE_SIZE)"
+    FILE_SIZE="$(rand_int_inclusive 1 $APPROX_FILE_SIZE)"
     FILE_NAME="$(rand_filename)"
     if [ ! -d ./"$FILE_NAME" ]; then
         rand_bytes "$FILE_SIZE" 2>/dev/null > ./"$FILE_NAME"
@@ -66,9 +66,9 @@ main() {
         for J in $(seq $NUM_FILES); do
             (create_rand_file $APPROX_FILE_SIZE)
         done
-        # Delete some files files.
+        # Delete some files.
         # TODO(peterwaller-arm): Reinstate this when #20 is fixed? Investigate if this is buggy?
-        # find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int 0 $NUM_FILES) | xargs rm -v
+        # find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int_inclusive 0 $NUM_FILES) | xargs rm -v
         "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --no-update-index --verbose
     done
 

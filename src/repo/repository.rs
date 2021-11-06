@@ -125,8 +125,7 @@ impl RepositoryIndex {
 
     /// Returns the names of the packs containing the snapshot.
     pub fn find_packs(&self, snapshot: &str) -> &[PackId] {
-        self
-            .snapshots
+        self.snapshots
             .get(snapshot)
             .map(|x| x as &[PackId])
             .unwrap_or(&[])
@@ -506,7 +505,10 @@ impl Repository {
         info!("Reading loose snapshot index...");
         let mut index = self.loose_index()?;
         if index.snapshots().iter().any(|s| s.tag() == snapshot.tag()) {
-            return Err(Error::PackError(PackError::SnapshotAlreadyExists("loose".into(), snapshot.tag().to_owned())));
+            return Err(Error::PackError(PackError::SnapshotAlreadyExists(
+                "loose".into(),
+                snapshot.tag().to_owned(),
+            )));
         }
         // input_checksums maps checksums to the first file on disk with that checksum.
         let input_checksums: HashMap<&_, usize> =
@@ -628,7 +630,7 @@ impl Repository {
                 let mut buf = vec![];
                 // Compress all the object files.
                 let r =
-                   batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
+                    batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
                         .map(move |bytes| (bytes, buf));
                 // Update done count.
                 let done = done_task_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;

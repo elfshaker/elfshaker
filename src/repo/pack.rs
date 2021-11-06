@@ -449,6 +449,7 @@ impl Pack {
     /// * `output_dir` - The directory relative to which the files will be extracted.
     /// * `verify` - Enable/disable checksum verification.
     #[allow(unused_mut)]
+    #[allow(clippy::needless_collect)]
     pub(crate) fn extract_entries<P>(
         mut self,
         entries: &[FileEntry],
@@ -494,7 +495,6 @@ impl Pack {
         );
 
         // Collect required for run_in_parallel ExactSizeIterator argument.
-        #[allow(clippy::needless_collect)]
         let tasks = self
             .frame_readers
             .into_iter()
@@ -600,7 +600,7 @@ fn assign_to_frames(
 
     // Figure out frame belonging of the objects,
     // using the frame offset and the object offset.
-    let mut frames: Vec<Vec<FileEntry>> = (0..frames.len()).map(|_| vec![]).collect();
+    let mut frames: Vec<Vec<FileEntry>> = (0..frames.len()).map(|_| Vec::new()).collect();
     for entry in entries {
         let frame_index = frame_decompressed_offset
             .iter()

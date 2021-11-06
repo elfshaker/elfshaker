@@ -7,7 +7,7 @@ use crate::pathpool::{PathHandle, PathPool};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsString};
+use std::ffi::OsString;
 use std::fmt;
 
 /// Error type used in the packidx module.
@@ -36,7 +36,8 @@ impl std::fmt::Display for PackError {
             PackError::SnapshotNotFound(s) => write!(f, "The snapshot '{}' was not found!", s),
             PackError::SnapshotAlreadyExists(p, s) => write!(
                 f,
-                "A snapshot with the tag '{}' is already present in the pack '{}'!",s, p,
+                "A snapshot with the tag '{}' is already present in the pack '{}'!",
+                s, p,
             ),
             PackError::ChecksumMismatch => write!(f, "The object checksum did not match!"),
         }
@@ -393,7 +394,10 @@ impl PackIndex {
         // object entry.
         files
             .map(|x| -> Result<_, PackError> {
-                let path = self.path_pool.lookup(x.path).ok_or(PackError::PathNotFound(x.path))?;
+                let path = self
+                    .path_pool
+                    .lookup(x.path)
+                    .ok_or(PackError::PathNotFound(x.path))?;
                 let object = self
                     .objects
                     .get(x.object.0 as usize)
@@ -405,7 +409,9 @@ impl PackIndex {
 
     /// Returns the full list of [`FileEntry`].
     pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<FileEntry>, PackError> {
-        let snapshot = self.find_snapshot(tag).ok_or_else(|| PackError::SnapshotNotFound(tag.to_owned()))?;
+        let snapshot = self
+            .find_snapshot(tag)
+            .ok_or_else(|| PackError::SnapshotNotFound(tag.to_owned()))?;
 
         // Convert the FileHandleList into a list of entries to write to disk.
         let entries = match snapshot.list {
@@ -419,7 +425,10 @@ impl PackIndex {
     /// index format. The list of [`FileEntry`] is the files to record in the snapshot.
     pub fn push_snapshot(&mut self, tag: &str, input: &[FileEntry]) -> Result<(), PackError> {
         if self.snapshots().iter().any(|s| s.tag == tag) {
-            return Err(PackError::SnapshotAlreadyExists("<unknown>".into(), tag.to_owned()));
+            return Err(PackError::SnapshotAlreadyExists(
+                "<unknown>".into(),
+                tag.to_owned(),
+            ));
         }
 
         let existing_objects: HashSet<&_> = self.objects.iter().map(|o| &o.checksum).collect();

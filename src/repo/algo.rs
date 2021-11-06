@@ -20,10 +20,15 @@ where
     crossbeam_utils::thread::scope(|s| {
         let mut workers = Vec::new();
         let mut items = items.peekable();
-        let n_per_thread = if nthread > items.len() { 1 } else { items.len() / nthread };
+        let n_per_thread = if nthread > items.len() {
+            1
+        } else {
+            items.len() / nthread
+        };
         while items.peek().is_some() {
             let thread_items = items.by_ref().take(n_per_thread).collect::<Vec<_>>();
-            workers.push(s.spawn(move |_| thread_items.into_iter().map(workload).collect::<Vec<_>>()))
+            workers
+                .push(s.spawn(move |_| thread_items.into_iter().map(workload).collect::<Vec<_>>()))
         }
 
         workers

@@ -106,9 +106,9 @@ pub fn find_pack_with_snapshot(
     trace!("Looking for snapshot in top-level index...");
     let packs = repo_index.find_packs(snapshot);
     match packs.len() {
-        0 => {
-            Err(RepoError::PackError(PackError::SnapshotNotFound(snapshot.to_owned())))
-        }
+        0 => Err(RepoError::PackError(PackError::SnapshotNotFound(
+            snapshot.to_owned(),
+        ))),
         1 => Ok(packs[0].clone()),
         _ => {
             error!(

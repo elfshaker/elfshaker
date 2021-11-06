@@ -57,7 +57,8 @@ impl Display for Error {
             ),
             Self::PackNotFound(p) => write!(
                 f,
-                "The specified pack file '{}' could not be found in the repository index!", p,
+                "The specified pack file '{}' could not be found in the repository index!",
+                p,
             ),
             Self::RepositoryNotFound => write!(f, "The directory is not an elfshaker repository!"),
         }

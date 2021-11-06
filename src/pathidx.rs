@@ -24,7 +24,7 @@ impl PathPool {
 
     /// get returns the intern'd PathHandle.
     pub fn get<P: AsRef<OsStr>>(&self, p: P) -> Option<PathHandle> {
-        self.entry_map.get(p.as_ref()).map(|&x| x)
+        self.entry_map.get(p.as_ref()).copied()
     }
 
     /// get_or_insert returns the intern'd PathHandle for the given string, or inserts it if not present.

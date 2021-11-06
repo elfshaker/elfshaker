@@ -405,7 +405,7 @@ impl PackIndex {
 
     /// Returns the full list of [`FileEntry`].
     pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<FileEntry>, PackError> {
-        let snapshot = self.find_snapshot(tag).ok_or(PackError::SnapshotNotFound(tag.to_owned()))?;
+        let snapshot = self.find_snapshot(tag).ok_or_else(|| PackError::SnapshotNotFound(tag.to_owned()))?;
 
         // Convert the FileHandleList into a list of entries to write to disk.
         let entries = match snapshot.list {

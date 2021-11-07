@@ -10,7 +10,6 @@ use std::{
     fs::File,
     io,
     io::{Read, Write},
-    iter::once,
     path::{Path, PathBuf},
     str::FromStr,
     time::SystemTime,
@@ -22,7 +21,7 @@ use walkdir::WalkDir;
 use super::algo::{partition_by_u64, run_in_parallel};
 use super::constants::REPO_DIR;
 use super::error::Error;
-use super::fs::{create_temp_path, ensure_dir, get_last_modified, read_or_none, write_file_atomic};
+use super::fs::{create_temp_path, ensure_dir, get_last_modified, write_file_atomic};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::batch;
 use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
@@ -180,14 +179,14 @@ impl Repository {
     }
 
     /// Open the pack.
-    pub fn open_pack(&self, pack: &str) -> Result<Pack, Error> {
+    pub fn open_pack(&self, pack: &PackId) -> Result<Pack, Error> {
         Pack::open(&self.path, pack)
     }
 
     pub fn packs(&self) -> Result<Vec<PackId>, Error> {
         let root = self.path.join(REPO_DIR).join(PACKS_DIR);
         fs::create_dir_all(&root)?;
-        WalkDir::new(&root)
+        let mut result = WalkDir::new(&root)
             .into_iter()
             .filter_map(|dirent| {
                 dirent
@@ -204,8 +203,18 @@ impl Repository {
                     })
                     .transpose()
             })
-            .chain(once(Ok(PackId::Loose)))
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        result.sort();
+        Ok(result)
+    }
+
+    pub fn loose_packs(&self) -> Result<Vec<PackId>, Error> {
+        self.packs().map(|packs| {
+            packs
+                .into_iter()
+                .filter(|p| self.is_pack_loose(p))
+                .collect()
+        })
     }
 
     pub fn find_pack_with_snapshot(&self, snapshot: &str) -> Result<PackId, Error> {
@@ -233,6 +242,17 @@ impl Repository {
         }
     }
 
+    pub fn is_pack_loose(&self, pack_id: &PackId) -> bool {
+        let data_dir = self.path.join(&*Repository::data_dir());
+        let pack_index_path = match pack_id {
+            PackId::Pack(name) => data_dir
+                .join(PACKS_DIR)
+                .join(name)
+                .with_extension(PACK_EXTENSION),
+        };
+        !pack_index_path.exists()
+    }
+
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
         let data_dir = self.path.join(&*Repository::data_dir());
         let pack_index_path = match pack_id {
@@ -240,13 +260,6 @@ impl Repository {
                 .join(PACKS_DIR)
                 .join(name)
                 .with_extension(PACK_INDEX_EXTENSION),
-            PackId::Loose => {
-                let path = data_dir.join(LOOSE_DIR).join(LOOSE_INDEX_FILE);
-                if !path.exists() {
-                    return Ok(PackIndex::default());
-                }
-                path
-            }
         };
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Pack::parse_index(std::io::BufReader::new(File::open(pack_index_path)?))
@@ -268,18 +281,7 @@ impl Repository {
         }
 
         // Open the pack and find the snapshot specified in SnapshotId.
-        let source_name: Option<String> = snapshot_id.pack().clone().into();
-
-        let source_pack: Option<_> =
-            source_name.map_or(Ok(None), |name| self.open_pack(&name).map(Some))?;
-
-        let source_index = source_pack
-            .as_ref()
-            .map(|p| Cow::Borrowed(p.index()))
-            .ok_or(PackError::SnapshotNotFound)
-            .or_else(|_| -> Result<Cow<PackIndex>, Error> {
-                Ok(Cow::Owned(self.loose_index()?))
-            })?;
+        let source_index = self.load_index(snapshot_id.pack())?;
 
         let entries = source_index.entries_from_snapshot(snapshot_id.tag())?;
         let (new_entries, old_entries) = if opts.reset || !self.head().is_some() {
@@ -292,27 +294,7 @@ impl Repository {
                 let head_entries = source_index.entries_from_snapshot(head.tag())?;
                 Self::compute_entry_diff(&head_entries, &entries)
             } else {
-                let head_pack_name: Option<String> = head.pack().clone().into();
-                let head_pack = head_pack_name
-                    .map(|name| self.open_pack(&name))
-                    .transpose()
-                    .map_err(|e| {
-                        if matches!(e, Error::PackNotFound(_)) {
-                            Error::BrokenHeadRef(Box::new(e))
-                        } else {
-                            e
-                        }
-                    })?;
-
-                let head_index = head_pack
-                    .as_ref()
-                    .map(|pack| Cow::Borrowed(pack.index()))
-                    .map(Result::<Cow<PackIndex>, Error>::Ok)
-                    .unwrap_or_else(|| match source_pack {
-                        Some(_) => Ok(source_index),
-                        None => Ok(Cow::Owned(self.loose_index()?)),
-                    })?;
-
+                let head_index = self.load_index(head.pack())?;
                 let head_entries = head_index.entries_from_snapshot(head.tag()).map_err(|e| {
                     if matches!(e, PackError::SnapshotNotFound(_)) {
                         Error::BrokenHeadRef(Box::new(Error::PackError(e)))
@@ -355,7 +337,7 @@ impl Repository {
             }?;
         }
 
-        self.extract_entries(source_pack, &new_entries, self.path.clone(), opts)?;
+        self.extract_entries(snapshot_id.pack(), &new_entries, self.path.clone(), opts)?;
         self.update_head(&snapshot_id)?;
 
         Ok(ExtractResult {
@@ -369,14 +351,13 @@ impl Repository {
     ///
     /// # Arguments
     ///
-    /// * `pack` - The pack containing the entries. If [`None`], entries will be
-    ///     assumed to be loose.
+    /// * `pack_id` - The pack_id containing the entries.
     /// * `entries` - The list of entries to extract.
     /// * `path` - The destination path.
     /// * `verify` - Set to true to verify object checksums after extraction.
     pub fn extract_entries<P>(
         &mut self,
-        pack: Option<Pack>,
+        pack_id: &PackId,
         entries: &[FileEntry],
         path: P,
         opts: ExtractOptions,
@@ -384,7 +365,7 @@ impl Repository {
     where
         P: AsRef<Path>,
     {
-        if let Some(pack) = pack {
+        if let Ok(pack) = self.open_pack(pack_id) {
             pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
         } else {
             self.copy_loose_entries(entries, path.as_ref(), opts.verify())
@@ -396,33 +377,11 @@ impl Repository {
         Cow::Borrowed(REPO_DIR)
     }
 
-    /// The loose index is the same format as a standard pack index. It
-    /// references objects which are not in packs, under
-    /// elfshaker_data/loose/<checksum fragment>.
-    /// Offsets are all zero, since they do not live in a concatenated data stream.
-    pub fn loose_index(&self) -> Result<PackIndex, Error> {
-        Self::read_loose_index(&self.path)
-    }
-
-    fn read_loose_index(repo_dir: &Path) -> Result<PackIndex, Error> {
-        let mut index_path = repo_dir.join(&*Repository::data_dir());
-        index_path.push(LOOSE_DIR);
-        index_path.push(LOOSE_INDEX_FILE);
-
-        let index = read_or_none(index_path)?.map(|b| Pack::parse_index(&b[..]));
-        Ok(match index {
-            Some(i) => i?,
-            _ => PackIndex::default(),
-        })
-    }
-
     pub fn create_snapshot<I, P>(&mut self, snapshot: &SnapshotId, files: I) -> Result<(), Error>
     where
         I: Iterator<Item = P>,
         P: AsRef<Path>,
     {
-        assert!(matches!(snapshot.pack(), PackId::Loose));
-
         let files = clean_file_list(self.path.as_ref(), files)?.collect::<Vec<_>>();
         info!("Computing checksums for {} files...", files.len());
 
@@ -467,6 +426,8 @@ impl Repository {
                 .with_extension(PACK_INDEX_EXTENSION),
         )?;
 
+        self.update_head(snapshot)?;
+
         Ok(())
     }
 
@@ -484,11 +445,7 @@ impl Repository {
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {
-        assert!(!matches!(pack, PackId::Loose));
-        let pack_name = match pack {
-            PackId::Pack(name) => name,
-            PackId::Loose => unreachable!(),
-        };
+        let PackId::Pack(pack_name) = pack;
 
         // Construct output file path.
         let pack_path = {

@@ -18,13 +18,9 @@ pub const PACK_INDEX_EXTENSION: &str = "pack.idx";
 pub const DOT_PACK_INDEX_EXTENSION: &str = ".pack.idx";
 /// A directory containing the object files from all loose snapshots
 pub const LOOSE_DIR: &str = "loose";
-/// The pack index for the loose snapshots
-pub const LOOSE_INDEX_FILE: &str = "loose.idx";
 /// A directory used during store/extract operations. Can be deleted safely
 /// at anytime when there is no elfshaker operation executing.
 pub const TEMP_DIR: &str = "trash";
-/// Reserved pack name used to indicate the loose set of snapshots.
-pub const LOOSE_ID: &str = "loose";
 // 2^30 = 1024MiB window log
 pub const DEFAULT_WINDOW_LOG_MAX: u32 = 30;
 /// Valid pack headers have this value set in the [`PackHeader::magic`] field.

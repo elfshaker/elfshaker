@@ -68,6 +68,7 @@ where
     let mut processed_bytes = 0;
 
     for (i, obj) in object_paths.iter().enumerate() {
+        // TODO(peterwaller-arm): Verify object checksums here, abort on mismatch.
         let mut file = File::open(&obj)?;
         let bytes = io::copy(&mut file, &mut encoder)?;
         processed_bytes += bytes;

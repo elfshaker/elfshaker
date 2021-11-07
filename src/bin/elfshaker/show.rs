@@ -20,17 +20,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         Some(pack) => PackId::from_str(pack)?,
         None => repo.find_pack_with_snapshot(snapshot)?,
     };
-    let snapshot = SnapshotId::new(pack, snapshot)?;
-    let source_pack;
-    let loose_index;
-    let pack_index = if let PackId::Pack(name) = snapshot.pack() {
-        source_pack = Some(repo.open_pack(name)?);
-        source_pack.as_ref().unwrap().index()
-    } else {
-        source_pack = None;
-        loose_index = Some(repo.loose_index()?);
-        loose_index.as_ref().unwrap()
-    };
+    let snapshot = SnapshotId::new(pack.clone(), snapshot)?;
+    let pack_index = repo.load_index(&pack)?;
 
     let entries: HashMap<_, _> = pack_index
         .entries_from_snapshot(snapshot.tag())?
@@ -56,11 +47,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     };
     let temp_dir = std::env::temp_dir().join(temp_dir);
 
-    let do_extract = || -> Result<(), Box<dyn Error>> {
+    let mut do_extract = || -> Result<(), Box<dyn Error>> {
         let mut opts = ExtractOptions::default();
         opts.set_verify(true);
 
-        repo.extract_entries(source_pack, &selected_entries, &temp_dir, opts)?;
+        repo.extract_entries(&pack, &selected_entries, &temp_dir, opts)?;
 
         // Dump the contents of all entries to stdout.
         for e in &selected_entries {

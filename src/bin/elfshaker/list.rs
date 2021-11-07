@@ -2,7 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
-use std::{error::Error, path::Path, str::FromStr};
+use std::{error::Error, path::Path};
 
 use super::utils::{format_size, open_repo_from_cwd, print_table};
 use elfshaker::packidx::FileHandleList;
@@ -11,20 +11,18 @@ use elfshaker::repo::{PackId, Repository, SnapshotId};
 pub(crate) const SUBCOMMAND: &str = "list";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let pack = matches.value_of("pack");
-    let snapshot = matches.value_of("snapshot");
+    let snapshot_or_pack = matches.value_of("snapshot_or_pack");
     let bytes = matches.is_present("bytes");
 
     let repo = open_repo_from_cwd()?;
-    if let Some(snapshot) = snapshot {
-        let pack = match pack {
-            Some(pack) => PackId::from_str(pack)?,
-            None => repo.find_pack_with_snapshot(snapshot)?,
-        };
-        let snapshot = SnapshotId::new(pack, snapshot)?;
-        print_snapshot_summary(&repo, &snapshot)?;
-    } else if let Some(pack) = pack {
-        print_pack_summary(&repo, PackId::from_str(pack)?)?;
+
+    if let Some(snapshot_or_pack) = snapshot_or_pack {
+        if let Some(pack_id) = repo.is_pack(snapshot_or_pack)? {
+            print_pack_summary(&repo, pack_id)?;
+        } else {
+            let snapshot = repo.find_snapshot(snapshot_or_pack)?;
+            print_snapshot_summary(&repo, &snapshot)?;
+        }
     } else {
         print_repo_summary(&repo, bytes)?;
     }
@@ -36,24 +34,13 @@ pub(crate) fn get_app() -> App<'static, 'static> {
     App::new(SUBCOMMAND)
         .about(
             "Prints the list of packs available in the repository, the list of snapshots \
-            available in a pack, or the list of files available in a snapshot, depending \
-            on the options used.",
+             available in a pack, or the list of files available in a snapshot.",
         )
         .arg(
-            Arg::with_name("snapshot")
+            Arg::with_name("snapshot_or_pack")
                 .required(false)
                 .index(1)
-                .help("Prints the contents of the specified snapshot."),
-        )
-        .arg(
-            Arg::with_name("pack")
-                .takes_value(true)
-                .short("P")
-                .long("pack")
-                .value_name("name")
-                .help(
-                    "Specifies the pack file to use. If used alone and no snapshot is specified, prints the contents of the pack file.",
-                ),
+                .help("Prints the contents of the specified snapshot or pack."),
         )
         .arg(
             Arg::with_name("b")
@@ -66,18 +53,16 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    for pack_name in repo.packs()? {
-        let pack = repo.open_pack(&pack_name)?;
-        let size_str = if bytes {
-            pack.file_size().to_string()
-        } else {
-            format_size(pack.file_size())
-        };
+    for pack_id in repo.packs()? {
+        let pack_index = repo.load_index(&pack_id)?;
+
+        // TODO(peterwaller-arm): Some size calculation.
+        let size_str = if bytes { "0".into() } else { format_size(1) };
         table.push([
-            match pack_name {
+            match pack_id {
                 PackId::Pack(s) => s,
             },
-            pack.index().snapshots().len().to_string(),
+            pack_index.snapshots().len().to_string(),
             size_str,
         ]);
     }
@@ -92,10 +77,11 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
 fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    let pack = repo.open_pack(&pack)?;
-    for snapshot in pack.index().snapshots() {
+    let pack_index = repo.load_index(&pack)?;
+    for snapshot in pack_index.snapshots() {
+        // TODO: Provide an snapshot iterator instead.
+        let snapshot = pack_index.find_snapshot(snapshot.tag()).unwrap();
         // Get a snapshot with a complete file list.
-        let snapshot = pack.index().find_snapshot(snapshot.tag()).unwrap();
         let file_count = match snapshot.list() {
             FileHandleList::Complete(list) => list.len(),
             _ => unreachable!(),
@@ -113,9 +99,9 @@ fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Err
 fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    let pack = repo.open_pack(snapshot.pack())?;
     // Get a snapshot with a complete file list.
-    let entries = pack.index().entries_from_snapshot(snapshot.tag()).unwrap();
+    let pack_index = repo.load_index(snapshot.pack())?;
+    let entries = pack_index.entries_from_snapshot(snapshot.tag()).unwrap();
     for entry in entries {
         table.push([
             hex::encode(entry.object.checksum).to_string(),

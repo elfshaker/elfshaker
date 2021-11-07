@@ -2,12 +2,11 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
-use std::{error::Error, io, path::Path, str::FromStr};
-use walkdir::WalkDir;
+use std::{error::Error, path::Path, str::FromStr};
 
 use super::utils::{format_size, open_repo_from_cwd, print_table};
 use elfshaker::packidx::FileHandleList;
-use elfshaker::repo::{PackId, Repository, SnapshotId, LOOSE_DIR};
+use elfshaker::repo::{PackId, Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "list";
 
@@ -67,37 +66,20 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    for pack_id in repo.packs()? {
-        match pack_id {
-            PackId::Pack(pack_name) => {
-                let pack = repo.open_pack(&pack_name)?;
-                let size_str = if bytes {
-                    pack.file_size().to_string()
-                } else {
-                    format_size(pack.file_size())
-                };
-                table.push([
-                    pack_name.to_owned(),
-                    pack.index().snapshots().len().to_string(),
-                    size_str,
-                ]);
-            }
-            _ => {
-                let loose_index = repo.loose_index()?;
-
-                let loose_dir = repo.path().join(&*Repository::data_dir()).join(LOOSE_DIR);
-                let size_str = if bytes {
-                    dir_size(&loose_dir)?.to_string()
-                } else {
-                    format_size(dir_size(&loose_dir)?)
-                };
-                table.push([
-                    PackId::Loose.to_string(),
-                    loose_index.snapshots().len().to_string(),
-                    size_str,
-                ]);
-            }
+    for pack_name in repo.packs()? {
+        let pack = repo.open_pack(&pack_name)?;
+        let size_str = if bytes {
+            pack.file_size().to_string()
+        } else {
+            format_size(pack.file_size())
         };
+        table.push([
+            match pack_name {
+                PackId::Pack(s) => s,
+            },
+            pack.index().snapshots().len().to_string(),
+            size_str,
+        ]);
     }
 
     print_table(
@@ -110,28 +92,15 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
 fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    if let PackId::Pack(pack_name) = pack {
-        let pack = repo.open_pack(&pack_name)?;
-        for snapshot in pack.index().snapshots() {
-            // Get a snapshot with a complete file list.
-            let snapshot = pack.index().find_snapshot(snapshot.tag()).unwrap();
-            let file_count = match snapshot.list() {
-                FileHandleList::Complete(list) => list.len(),
-                _ => unreachable!(),
-            };
-            table.push([snapshot.tag().to_owned(), file_count.to_string()]);
-        }
-    } else {
-        let loose_index = repo.loose_index()?;
-        for snapshot in loose_index.snapshots() {
-            // Get a snapshot with a complete file list.
-            let snapshot = loose_index.find_snapshot(snapshot.tag()).unwrap();
-            let file_count = match snapshot.list() {
-                FileHandleList::Complete(list) => list.len(),
-                _ => unreachable!(),
-            };
-            table.push([snapshot.tag().to_owned(), file_count.to_string()]);
-        }
+    let pack = repo.open_pack(&pack)?;
+    for snapshot in pack.index().snapshots() {
+        // Get a snapshot with a complete file list.
+        let snapshot = pack.index().find_snapshot(snapshot.tag()).unwrap();
+        let file_count = match snapshot.list() {
+            FileHandleList::Complete(list) => list.len(),
+            _ => unreachable!(),
+        };
+        table.push([snapshot.tag().to_owned(), file_count.to_string()]);
     }
 
     print_table(
@@ -144,28 +113,15 @@ fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Err
 fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    if let PackId::Pack(pack_name) = snapshot.pack() {
-        let pack = repo.open_pack(pack_name)?;
-        // Get a snapshot with a complete file list.
-        let entries = pack.index().entries_from_snapshot(snapshot.tag()).unwrap();
-        for entry in entries {
-            table.push([
-                hex::encode(entry.object.checksum).to_string(),
-                entry.object.size.to_string(),
-                Path::display(entry.path.as_ref()).to_string(),
-            ]);
-        }
-    } else {
-        let loose_index = repo.loose_index()?;
-        // Get a snapshot with a complete file list.
-        let entries = loose_index.entries_from_snapshot(snapshot.tag()).unwrap();
-        for entry in entries {
-            table.push([
-                hex::encode(entry.object.checksum).to_string(),
-                entry.object.size.to_string(),
-                Path::display(entry.path.as_ref()).to_string(),
-            ]);
-        }
+    let pack = repo.open_pack(snapshot.pack())?;
+    // Get a snapshot with a complete file list.
+    let entries = pack.index().entries_from_snapshot(snapshot.tag()).unwrap();
+    for entry in entries {
+        table.push([
+            hex::encode(entry.object.checksum).to_string(),
+            entry.object.size.to_string(),
+            Path::display(entry.path.as_ref()).to_string(),
+        ]);
     }
 
     print_table(
@@ -173,16 +129,4 @@ fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<()
         table.iter(),
     );
     Ok(())
-}
-
-fn dir_size(path: &std::path::Path) -> io::Result<u64> {
-    let sizes = WalkDir::new(path)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file() || e.file_type().is_symlink())
-        .map(|e| Ok(e.metadata()?.len()))
-        .collect::<io::Result<Vec<_>>>()?;
-
-    Ok(sizes.iter().sum())
 }

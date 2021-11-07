@@ -20,8 +20,7 @@ use zstd::stream::raw::DParameter;
 use zstd::Decoder;
 
 use super::constants::{
-    DEFAULT_WINDOW_LOG_MAX, LOOSE_ID, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC,
-    PACK_INDEX_EXTENSION,
+    DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC, PACK_INDEX_EXTENSION,
 };
 use super::error::Error;
 use super::repository::Repository;
@@ -30,7 +29,7 @@ use crate::log::measure_ok;
 use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
 
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
-const EXTRA_ID_CHARS: &[char] = &['-', '_'];
+const EXTRA_ID_CHARS: &[char] = &['-', '_', '/'];
 
 #[derive(Debug)]
 /// Error used when parsing a [`SnapshotId`] fails.
@@ -46,7 +45,7 @@ impl Display for IdError {
             Self::BadFormat(s) => write!(f, "Unrecognized identifier format '{}'!", s),
             Self::InvalidPack(s) => write!(
                 f,
-                "Invalid pack identifier '{}'! Latin letters, digits, - and _ are allowed!",
+                "Invalid pack identifier '{}'! Latin letters, digits, -, _ and / are allowed!",
                 s
             ),
             Self::InvalidSnapshot(s) => write!(
@@ -64,7 +63,6 @@ impl std::error::Error for IdError {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PackId {
     Pack(String),
-    Loose,
 }
 
 impl PackId {
@@ -89,11 +87,7 @@ impl FromStr for PackId {
         if !PackId::is_valid(s) {
             return Err(IdError::InvalidPack(s.to_owned()));
         }
-        if s == LOOSE_ID {
-            Ok(PackId::Loose)
-        } else {
-            Ok(PackId::Pack(s.to_owned()))
-        }
+        Ok(PackId::Pack(s.to_owned()))
     }
 }
 
@@ -101,25 +95,6 @@ impl Display for PackId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             PackId::Pack(s) => write!(f, "{}", s),
-            PackId::Loose => write!(f, "loose"),
-        }
-    }
-}
-
-impl From<Option<String>> for PackId {
-    fn from(opt: Option<String>) -> Self {
-        match opt {
-            Some(s) => Self::Pack(s),
-            None => Self::Loose,
-        }
-    }
-}
-
-impl From<PackId> for Option<String> {
-    fn from(pack: PackId) -> Option<String> {
-        match pack {
-            PackId::Pack(name) => Some(name),
-            PackId::Loose => None,
         }
     }
 }
@@ -139,16 +114,6 @@ impl SnapshotId {
         }
         Ok(Self {
             pack,
-            tag: tag.to_owned(),
-        })
-    }
-
-    pub fn loose(tag: &str) -> Result<Self, IdError> {
-        if !Self::is_valid(tag) {
-            return Err(IdError::InvalidSnapshot(tag.to_owned()));
-        }
-        Ok(Self {
-            pack: PackId::Loose,
             tag: tag.to_owned(),
         })
     }
@@ -334,10 +299,11 @@ impl Pack {
     /// # Arguments
     ///
     /// * `pack_name` - The base filename ([`Path::file_stem`]) of the pack.
-    pub fn open<P>(repo: P, pack_name: &str) -> Result<Self, Error>
+    pub fn open<P>(repo: P, pack_name: &PackId) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
+        let PackId::Pack(pack_name) = pack_name;
         let mut packs_data = repo.as_ref().join(&*Repository::data_dir());
         packs_data.push(PACKS_DIR);
 
@@ -754,13 +720,6 @@ fn extract_files(
 mod tests {
     use super::*;
 
-    #[test]
-    fn loose_snapshot_id_parses() {
-        assert_eq!(
-            SnapshotId::loose("my-snapshot").unwrap(),
-            SnapshotId::from_str("loose/my-snapshot").unwrap()
-        );
-    }
     #[test]
     fn pack_id_validation_works() {
         // VALID

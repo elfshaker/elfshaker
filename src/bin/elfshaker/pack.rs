@@ -6,7 +6,10 @@ use log::info;
 use std::{error::Error, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
-use elfshaker::repo::{PackId, PackOptions, SnapshotId};
+use elfshaker::{
+    packidx::PackIndex,
+    repo::{PackId, PackOptions},
+};
 
 pub(crate) const SUBCOMMAND: &str = "pack";
 
@@ -20,9 +23,14 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Parse pack name
     let pack = matches.value_of("pack").unwrap();
     let pack = PackId::from_str(pack)?;
-    if matches!(pack, PackId::Loose) {
-        return Err(format!("'{}' is a reserved name!", pack).into());
-    }
+    let indexes = matches
+        .values_of("indexes")
+        .map(|opts| {
+            opts.into_iter()
+                .map(|s| PackId::from_str(s))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
 
     // Parse --compression-level
     let compression_level: i32 = matches.value_of("compression-level").unwrap().parse()?;
@@ -50,14 +58,39 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         n => n,
     };
 
-    // Open the repo and loose index
     let mut repo = open_repo_from_cwd()?;
-    let mut index = repo.loose_index()?;
+
+    let indexes = indexes
+        .map(Result::Ok)
+        .unwrap_or_else(|| repo.loose_packs())?;
+
+    // No point in creating an empty pack.
+    if indexes.is_empty() {
+        return Err("There are no loose snapshots!".into());
+    }
+
+    let mut new_index = PackIndex::default();
+
+    for pack_id in indexes {
+        assert!(
+            repo.is_pack_loose(&pack_id),
+            "packing non-loose indices not yet supported"
+        );
+        let index = repo.load_index(&pack_id)?;
+        eprintln!("Packing {} {}", pack_id, index.snapshots().len());
+        for s in index.snapshots() {
+            let entries = index.entries_from_snapshot(s.tag())?;
+            new_index.push_snapshot(s.tag(), &entries)?;
+        }
+    }
+
+    // TODO(peterwaller-arm): Compute deltas as they are pushed.
+    new_index.use_file_list_deltas()?;
 
     // Parse --frames
     let frames: u32 = match matches.value_of("frames").unwrap().parse()? {
         0 => {
-            let loose_size = index.objects().iter().map(|o| o.size).sum();
+            let loose_size = new_index.objects().iter().map(|o| o.size).sum();
             let frames = get_frame_size_hint(loose_size);
             info!("--frames=0: using suggested number of frames = {}", frames);
             frames
@@ -65,23 +98,15 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         n => n,
     };
 
-    // No point in creating an empty pack.
-    if index.is_empty() {
-        return Err("There are no loose snapshots!".into());
-    }
-
-    // Here we produce the index for the resulting pack file from the loose
-    // index. Use deltas for the differences between the snapshot file lists.
-    index.use_file_list_deltas()?;
     // Reorder objects in a way that is suitable for compression.
-    let mut object_indices: Vec<_> = (0..index.objects().len()).collect();
+    let mut object_indices: Vec<_> = (0..new_index.objects().len()).collect();
     // Sorting by object sizes has proven to be a good heuristic; we could allow
     // user-configurable heuristics in the future. Another useful heuristic
     // would be to group by name as well as size, e.g. key on (sum(size of
     // objects of given name), name).
-    object_indices.sort_unstable_by_key(|&o| index.objects()[o].size);
+    object_indices.sort_unstable_by_key(|&o| new_index.objects()[o].size);
     // Apply the new indices.
-    index.permute_objects(&object_indices)?;
+    new_index.permute_objects(&object_indices)?;
 
     // Print progress every 5%
     let reporter = create_percentage_print_reporter("Compressing objects", 5);
@@ -90,7 +115,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Create a pack using the ordered "loose" index.
     repo.create_pack(
         &pack,
-        &index,
+        &new_index,
         &PackOptions {
             compression_level,
             // We don't expose the windowLog option yet.
@@ -101,18 +126,18 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         &reporter,
     )?;
 
-    if let Some(head) = repo.head() {
-        if *head.pack() == PackId::Loose {
-            info!("Updating HEAD to point to the newly-created pack...");
-            // The current HEAD was referencing a snapshot in the loose
-            // store. Now that the snapshots has been packed, we need to update
-            // HEAD to reference the packed snapshot.
-            let new_head = SnapshotId::new(pack, head.tag()).unwrap();
-            repo.update_head(&new_head)?;
-        }
-    }
-    // Finally, delete the loose snapshots
-    repo.remove_loose_all()?;
+    // if let Some(head) = repo.head() {
+    //     if *head.pack() == PackId::Loose {
+    //         info!("Updating HEAD to point to the newly-created pack...");
+    //         // The current HEAD was referencing a snapshot in the loose
+    //         // store. Now that the snapshots has been packed, we need to update
+    //         // HEAD to reference the packed snapshot.
+    //         let new_head = SnapshotId::new(pack, head.tag()).unwrap();
+    //         repo.update_head(&new_head)?;
+    //     }
+    // }
+    // // Finally, delete the loose snapshots
+    // repo.remove_loose_all()?;
 
     Ok(())
 }
@@ -121,7 +146,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
     let compression_level_range = zstd::compression_level_range();
 
     App::new(SUBCOMMAND)
-        .about("Packs all loose snapshots into a pack file, freeing up significant amounts of disk space.")
+        .about("Packs the given snapshots into a pack file.")
         .arg(
             Arg::with_name("pack")
                 .takes_value(true)
@@ -159,6 +184,12 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                     frames can result in poorer compression. Specify 0 to \
                     auto-detect the appropriate number of frames to emit.")
                 .default_value("0")
+        )
+        .arg(
+            Arg::with_name("indexes")
+            .index(2)
+                .multiple(true)
+                .help("Specify the indexes of packs to include.")
         )
 }
 

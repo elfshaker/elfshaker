@@ -12,8 +12,7 @@ mod repository;
 #[doc(hidden)]
 pub use algo::{partition_by_u64, run_in_parallel};
 pub use constants::{
-    HEAD_FILE, INDEX_FILE, LOOSE_DIR, LOOSE_INDEX_FILE, PACKS_DIR, PACK_EXTENSION,
-    PACK_INDEX_EXTENSION, REPO_DIR,
+    HEAD_FILE, INDEX_FILE, LOOSE_DIR, PACKS_DIR, PACK_EXTENSION, PACK_INDEX_EXTENSION, REPO_DIR,
 };
 pub use error::Error;
 #[doc(hidden)]

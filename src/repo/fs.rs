@@ -22,22 +22,6 @@ pub fn get_last_modified(metadata: fs::Metadata) -> Option<SystemTime> {
         .max()
 }
 
-/// Reads a file, returning a byte slice. Returns [`None`], if the file does not exist.
-pub fn read_or_none<P>(path: P) -> io::Result<Option<Vec<u8>>>
-where
-    P: AsRef<Path>,
-{
-    let mut buf = vec![];
-    match File::open(path) {
-        Ok(mut file) => {
-            file.read_to_end(&mut buf)?;
-            Ok(Some(buf))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
 /// Ensures that the directory exists.
 /// Unlike [`fs::create_dir()`], this function does not return Err if the directory already exists.
 pub fn ensure_dir(path: &Path) -> io::Result<()> {

@@ -1,19 +1,18 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use std::{error::Error, str::FromStr};
+use std::error::Error;
 
 use clap::{App, Arg, ArgMatches};
 use log::{info, warn};
 
 use super::utils::open_repo_from_cwd;
-use elfshaker::repo::{ExtractOptions, PackId, SnapshotId};
+use elfshaker::repo::ExtractOptions;
 
 pub(crate) const SUBCOMMAND: &str = "extract";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let snapshot = matches.value_of("snapshot").unwrap();
-    let pack = matches.value_of("pack");
     let is_reset = matches.is_present("reset");
     let is_verify = matches.is_present("verify");
     let is_force = matches.is_present("force");
@@ -32,14 +31,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     };
 
     let mut repo = open_repo_from_cwd()?;
+    let new_head = repo.find_snapshot(snapshot)?;
 
-    // Determine the pack file to use.
-    let pack = match pack {
-        Some(pack) => PackId::from_str(pack)?,
-        None => repo.find_pack_with_snapshot(snapshot)?,
-    };
-
-    let new_head = SnapshotId::new(pack, snapshot)?;
     if repo.head().as_ref() == Some(&new_head) && !is_reset {
         // The specified snapshot is already extracted and --reset is not specified,
         // so this is a no-op.
@@ -74,18 +67,6 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .required(true)
                 .index(1)
                 .help("The tag of the snapshot to extract."),
-        )
-        .arg(
-            Arg::with_name("pack")
-                .takes_value(true)
-                .short("P")
-                .long("pack")
-                .value_name("name")
-                .help(
-                    "Specifies the pack to use when extracting the snapshot. \
-                        You generally only need to provide this flag when there \
-                        are multiple packs providing the same snapshot.",
-                ),
         )
         .arg(Arg::with_name("reset").long("reset").help(
             "Specifying this ignores the current HEAD and extract all files from the snapshot. \

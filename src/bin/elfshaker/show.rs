@@ -3,25 +3,20 @@
 
 use clap::{App, Arg, ArgMatches};
 use rand::RngCore;
-use std::{collections::HashMap, error::Error, str::FromStr};
+use std::{collections::HashMap, error::Error};
 
 use super::utils::open_repo_from_cwd;
-use elfshaker::repo::{ExtractOptions, PackId, SnapshotId};
+use elfshaker::repo::ExtractOptions;
 
 pub(crate) const SUBCOMMAND: &str = "show";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let pack = matches.value_of("pack");
     let snapshot = matches.value_of("snapshot").unwrap();
     let paths: Vec<_> = matches.values_of_os("path").unwrap().collect();
 
     let mut repo = open_repo_from_cwd()?;
-    let pack = match pack {
-        Some(pack) => PackId::from_str(pack)?,
-        None => repo.find_pack_with_snapshot(snapshot)?,
-    };
-    let snapshot = SnapshotId::new(pack.clone(), snapshot)?;
-    let pack_index = repo.load_index(&pack)?;
+    let snapshot = repo.find_snapshot(snapshot)?;
+    let pack_index = repo.load_index(snapshot.pack())?;
 
     let entries: HashMap<_, _> = pack_index
         .entries_from_snapshot(snapshot.tag())?
@@ -51,7 +46,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         let mut opts = ExtractOptions::default();
         opts.set_verify(true);
 
-        repo.extract_entries(&pack, &selected_entries, &temp_dir, opts)?;
+        repo.extract_entries(snapshot.pack(), &selected_entries, &temp_dir, opts)?;
 
         // Dump the contents of all entries to stdout.
         for e in &selected_entries {
@@ -76,14 +71,6 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .required(true)
                 .index(1)
                 .help("The snapshot in which to to look for the files."),
-        )
-        .arg(
-            Arg::with_name("pack")
-                .takes_value(true)
-                .short("P")
-                .long("pack")
-                .value_name("name")
-                .help("Specifies the pack file to use."),
         )
         .arg(
             Arg::with_name("path")

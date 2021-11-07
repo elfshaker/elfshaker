@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use super::constants::*;
+use super::{constants::*, pack::IdError};
 
 use std::{
     borrow::Cow,
@@ -217,6 +217,23 @@ impl Repository {
         })
     }
 
+    // Find snapshot parses a [pack_id:]snapshot_tag string, where the pack_id
+    // is optional. If pack_id is specified, it is an error if the snapshot is
+    // not found or is found in more than one pack.
+    pub fn find_snapshot(&self, maybe_canonical_snapshot_tag: &str) -> Result<SnapshotId, Error> {
+        if let Ok(s) = SnapshotId::from_str(maybe_canonical_snapshot_tag) {
+            Ok(s) // Given string specified the pack.
+        } else {
+            // Search packs.
+            let tag = maybe_canonical_snapshot_tag;
+            Ok(SnapshotId::new(self.find_pack_with_snapshot(tag)?, tag)?)
+        }
+    }
+
+    /// find_pack_with_snapshot searches through all packs looking for a
+    /// snapshot with the given name. Returns an error if there was no snapshot
+    /// with the given name, or if there is more than one pack with the given
+    /// name (in which case the snapshot is ambiguous).
     pub fn find_pack_with_snapshot(&self, snapshot: &str) -> Result<PackId, Error> {
         let packs = self
             .packs()?
@@ -240,6 +257,18 @@ impl Repository {
             1 => Ok(packs.into_iter().next().unwrap()),
             _ => Err(Error::AmbiguousSnapshotMatch(snapshot.to_owned(), packs)),
         }
+    }
+
+    pub fn is_pack(&self, pack_id: &str) -> Result<Option<PackId>, IdError> {
+        let data_dir = self.path.join(&*Repository::data_dir());
+        let pack_index_path = data_dir
+            .join(PACKS_DIR)
+            .join(pack_id)
+            .with_extension(PACK_INDEX_EXTENSION);
+        pack_index_path
+            .exists()
+            .then(|| PackId::from_str(pack_id))
+            .transpose()
     }
 
     pub fn is_pack_loose(&self, pack_id: &PackId) -> bool {
@@ -568,7 +597,7 @@ impl Repository {
     /// Updates the HEAD snapshot id.
     pub fn update_head(&mut self, snapshot_id: &SnapshotId) -> Result<(), Error> {
         let data_dir = self.path.join(&*Self::data_dir());
-        let snapshot_string = format!("{}", snapshot_id);
+        let snapshot_string = format!("{}\n", snapshot_id);
         ensure_dir(&self.temp_dir())?;
         write_file_atomic(
             snapshot_string.as_bytes(),
@@ -886,11 +915,11 @@ mod tests {
     #[test]
     fn extract_requires_force_if_no_timestamps() {
         let mut repo = Repository {
-            head: Some(SnapshotId::from_str("pack/snapshot").unwrap()),
+            head: Some(SnapshotId::from_str("pack:snapshot").unwrap()),
             head_time: None,
             path: "/some/path".into(),
         };
-        let snapshot = SnapshotId::from_str("pack/snapshot-2").unwrap();
+        let snapshot = SnapshotId::from_str("pack:snapshot-2").unwrap();
         let err1 = repo
             .extract_snapshot(snapshot.clone(), ExtractOptions::default())
             .unwrap_err();
@@ -915,7 +944,7 @@ mod tests {
             head_time: None,
             path: "/some/path".into(),
         };
-        let snapshot = SnapshotId::from_str("pack/snapshot").unwrap();
+        let snapshot = SnapshotId::from_str("pack:snapshot").unwrap();
         let err = repo
             .extract_snapshot(
                 snapshot.clone(),

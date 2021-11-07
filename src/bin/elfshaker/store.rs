@@ -16,7 +16,9 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let files0_from = matches.value_of("files0-from");
     let snapshot = matches.value_of("snapshot").unwrap();
     // Use snapshot name as pack name.
-    let snapshot = SnapshotId::new(PackId::Pack(snapshot.to_owned()), snapshot)?;
+    let pack_id = PathBuf::from(format!("loose/{}", snapshot));
+    let pack_id = PackId::Pack(pack_id.to_str().unwrap().to_owned());
+    let snapshot = SnapshotId::new(pack_id, snapshot)?;
 
     if files_from.is_some() && files0_from.is_some() {
         error!("Cannot specify both --files-from and --files0-from!");

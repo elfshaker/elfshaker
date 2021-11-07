@@ -8,7 +8,7 @@ use std::{error::Error, str::FromStr};
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 use elfshaker::{
     packidx::PackIndex,
-    repo::{PackId, PackOptions},
+    repo::{PackId, PackOptions, SnapshotId},
 };
 
 pub(crate) const SUBCOMMAND: &str = "pack";
@@ -71,12 +71,12 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let mut new_index = PackIndex::default();
 
-    for pack_id in indexes {
+    for pack_id in &indexes {
         assert!(
-            repo.is_pack_loose(&pack_id),
-            "packing non-loose indices not yet supported"
+            repo.is_pack_loose(pack_id),
+            "packing non-loose indexes not yet supported"
         );
-        let index = repo.load_index(&pack_id)?;
+        let index = repo.load_index(pack_id)?;
         eprintln!("Packing {} {}", pack_id, index.snapshots().len());
         for s in index.snapshots() {
             let entries = index.entries_from_snapshot(s.tag())?;
@@ -126,16 +126,17 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         &reporter,
     )?;
 
-    // if let Some(head) = repo.head() {
-    //     if *head.pack() == PackId::Loose {
-    //         info!("Updating HEAD to point to the newly-created pack...");
-    //         // The current HEAD was referencing a snapshot in the loose
-    //         // store. Now that the snapshots has been packed, we need to update
-    //         // HEAD to reference the packed snapshot.
-    //         let new_head = SnapshotId::new(pack, head.tag()).unwrap();
-    //         repo.update_head(&new_head)?;
-    //     }
-    // }
+    if let Some(head) = repo.head() {
+        if indexes.iter().any(|pack_id| head.pack() == pack_id) {
+            info!("Updating HEAD to point to the newly-created pack...");
+            // The current HEAD was referencing a snapshot an index which has
+            // been packed. Update HEAD to point into the new pack.
+            let new_head = SnapshotId::new(pack, head.tag()).unwrap();
+            repo.update_head(&new_head)?;
+        }
+    }
+
+    // TODO: New algo needs to take an exclusive repository lock and run GC.
     // // Finally, delete the loose snapshots
     // repo.remove_loose_all()?;
 

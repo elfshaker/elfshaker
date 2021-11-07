@@ -138,37 +138,30 @@ impl Eq for SnapshotId {}
 /// Prints the canonical form for [`SnapshotId`].
 impl Display for SnapshotId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "{}/{}", self.pack, self.tag)
+        write!(f, "{}:{}", self.pack, self.tag)
     }
 }
 
-/// Parses a [`SnapshotId`] from a canonical form string.
+/// Parses a [`SnapshotId`] from a canonical form string 'pack_name:snapshot_name'.
 impl FromStr for SnapshotId {
     type Err = IdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split('/').collect();
+        if let Some((pack, snapshot)) = s.trim_end().rsplit_once(':') {
+            if pack.is_empty() {
+                return Err(IdError::InvalidPack(pack.to_owned()));
+            }
+            if snapshot.is_empty() {
+                return Err(IdError::InvalidSnapshot(snapshot.to_owned()));
+            }
 
-        // Neither the snapshot pack filename nor the snapshot tag are
-        // allowed to contain forward slashes.
-        if parts.len() != 2 {
-            return Err(IdError::BadFormat(s.to_owned()));
+            Ok(SnapshotId {
+                pack: PackId::from_str(pack)?,
+                tag: snapshot.to_owned(),
+            })
+        } else {
+            Err(IdError::BadFormat(s.to_owned()))
         }
-
-        let pack = parts[0].to_owned();
-        if pack.is_empty() {
-            return Err(IdError::InvalidPack(pack));
-        }
-        // Whitespace at the end is ignored!
-        let tag = parts[1].trim_end().to_owned();
-        if tag.is_empty() {
-            return Err(IdError::InvalidSnapshot(tag));
-        }
-
-        Ok(SnapshotId {
-            pack: PackId::from_str(&pack)?,
-            tag,
-        })
     }
 }
 

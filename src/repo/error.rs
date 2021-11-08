@@ -48,7 +48,7 @@ impl Display for Error {
             Self::PackError(packerr) => packerr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
             Self::WalkDirError(wderr) => wderr.fmt(f),
-            Self::Utf8Error(s) => write!(f, "unable to interpret path as utf8: {:?}", s),
+            Self::Utf8Error(s) => write!(f, "Unable to interpret path as utf8: {:?}", s),
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
             Self::BrokenHeadRef(e) => write!(f, "Broken HEAD: {}", e),
             Self::CorruptPack => {

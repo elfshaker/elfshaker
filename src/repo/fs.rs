@@ -1,6 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
+use fs2::FileExt;
 use rand::RngCore;
 use std::{
     fs,
@@ -39,10 +40,13 @@ pub fn ensure_dir(path: &Path) -> io::Result<()> {
 /// NOTE: [`temp_dir`] and [`dest`] must be on the same filesystem!
 pub fn write_file_atomic(mut r: impl Read, temp_dir: &Path, dest: &Path) -> io::Result<()> {
     let temp_path = create_temp_path(temp_dir);
-    {
-        let mut temp_file = File::create(&temp_path)?;
-        io::copy(&mut r, &mut temp_file)?;
-    }
+    let mut temp_file = File::create(&temp_path)?;
+    // The presence of a lock on the file indicates that this tempfile is in
+    // use, in case a garbage collection process wants to know which files it
+    // can delete. The lock is dropped after the rename.
+    temp_file.try_lock_exclusive()?;
+    io::copy(&mut r, &mut temp_file)?;
+    temp_file.sync_data()?;
     fs::rename(temp_path, dest)
 }
 

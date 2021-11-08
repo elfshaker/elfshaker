@@ -13,19 +13,19 @@ pub(crate) const SUBCOMMAND: &str = "store";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let files_from = matches.value_of("files-from");
-    let files_from0 = matches.value_of("files-from0");
+    let files0_from = matches.value_of("files0-from");
     let snapshot = matches.value_of("snapshot").unwrap();
     let snapshot = SnapshotId::loose(snapshot)?;
     let is_update_supressed = matches.is_present("no-update-index");
 
-    if files_from.is_some() && files_from0.is_some() {
-        error!("Cannot specify both --files-from and --files-from0!");
+    if files_from.is_some() && files0_from.is_some() {
+        error!("Cannot specify both --files-from and --files0-from!");
         return Err("Invalid options!".into());
     }
 
     let files_from_and_delim = files_from
         .map(|file| (file, b'\n'))
-        .or_else(|| files_from0.map(|file| (file, b'\0')));
+        .or_else(|| files0_from.map(|file| (file, b'\0')));
 
     let files: Vec<_> = match files_from_and_delim {
         Some(("-", delim)) => read_files_list(std::io::stdin(), delim)?,
@@ -68,9 +68,9 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .help("Reads the list of files to include in the snapshot from the specified file. '-' is taken to mean stdin."),
         )
         .arg(
-            Arg::with_name("files-from0")
+            Arg::with_name("files0-from")
                 .takes_value(true)
-                .long("files-from0")
+                .long("files0-from")
                 .value_name("file")
                 .help("Reads the NUL-separated (ASCII \\0) list of files to include in the snapshot from the specified file. '-' is taken to mean stdin."),
         )

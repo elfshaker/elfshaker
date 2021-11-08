@@ -55,7 +55,7 @@ pub fn partition_by_u64<T, F: Fn(&T) -> u64>(xs: &[T], n: u32, eval: F) -> Vec<&
         return vec![];
     }
     // Limit n to number of items
-    let n = std::cmp::min(n, xs.len() as u32);
+    let n = std::cmp::max(std::cmp::min(n, xs.len() as u32), 1);
     let total = xs.iter().fold(0, |s, x| s + eval(x));
     let bound = total / n as u64;
 

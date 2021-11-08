@@ -497,7 +497,7 @@ impl Repository {
             partition_by_u64(index.objects(), opts.num_frames, |o| o.size as u64);
 
         let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
-            / object_partitions.len() as u32;
+            / std::cmp::max(1, object_partitions.len()) as u32;
 
         let task_opts = batch::CompressionOptions {
             window_log: opts.compression_window_log,
@@ -568,12 +568,8 @@ impl Repository {
         let mut index_bytes: Vec<u8> = vec![];
         rmp_serde::encode::write(&mut index_bytes, &index).expect("Serialization failed!");
 
-        // And write it atomically to the packs/ dir.
-        let index_path = {
-            let mut index_path = pack_path.clone();
-            index_path.set_file_name(format!("{}.{}", pack_name, PACK_INDEX_EXTENSION));
-            index_path
-        };
+        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
+        info!("Write index: {}", index_path.display());
         write_file_atomic(index_bytes.as_slice(), &temp_dir, &index_path)?;
 
         // Finally, move tha .pack file itself to the packs/ dir.

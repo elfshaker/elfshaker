@@ -7,8 +7,6 @@
 [[ "$TRACE" ]] && set -x
 set -euo pipefail
 shopt -s extglob
-# So that subshells see our shell options.
-export SHELLOPTS
 
 if [[ $# != 2 ]]; then
   echo "Usage: ./check.sh path/to/elfshaker path/to/file.pack"
@@ -78,11 +76,29 @@ before_test() {
   rm -rf !("elfshaker_data")
 }
 
+# This monstrosity is required rather than just `if "$@"`` because running a
+# function under an 'if' has the effect of suppressing set -e.
+get_exit_code() {
+  output_file=$1
+  shift
+  set +e
+  (
+    # Always trace in this shell, so that logs contain traces on failure.
+    set -ex
+    "$@"
+  ) &> "$output_file"
+  echo $?
+  set -e
+}
+
 run_test() {
   echo -n "Running '$*'... "
-  output_file=$(mktemp)
+
   before_test
-  if ("$@" > "$output_file" 2>&1); then
+
+  output_file=$(mktemp)
+  STATUS=$(get_exit_code "$output_file" "$@")
+  if [[ "$STATUS" == 0 ]]; then
     echo "OK"
   else
     echo "FAIL"

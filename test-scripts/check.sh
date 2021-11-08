@@ -178,7 +178,7 @@ test_store_empty_directory_works() {
   # Store in an empty directory should create a repository. Additionally, it's a
   # store of an empty pack. Make sure that is handled without crashing.
   "$elfshaker" --verbose store test
-  [ "$(elfshaker list | wc -l)" -eq 1 ]
+  [ "$("$elfshaker" list | wc -l)" -eq 1 ]
 }
 
 rand_megs() {
@@ -293,6 +293,24 @@ test_pack_two_snapshots_multiframe_works() {
   fi
 }
 
+test_pack_order_by_mtime() {
+  "$elfshaker" store test1
+  "$elfshaker" store test2
+  "$elfshaker" store test4 # 4
+  "$elfshaker" store test3 # 3. Lexical order != store order
+
+  # Ensure that the timestamps match the store order.
+  EPOCH="$(date)"
+  touch -d "$(date --date="$EPOCH"' +0 min')" elfshaker_data/packs/loose/test2.pack.idx
+  touch -d "$(date --date="$EPOCH"' +1 min')" elfshaker_data/packs/loose/test2.pack.idx
+  touch -d "$(date --date="$EPOCH"' +2 min')" elfshaker_data/packs/loose/test4.pack.idx # 4
+  touch -d "$(date --date="$EPOCH"' +3 min')" elfshaker_data/packs/loose/test3.pack.idx # 3. (Lex != store)
+
+  "$elfshaker" pack testpack
+  SNAPSHOTS=$("$elfshaker" list testpack 2> /dev/null | awk '{print $1}' | xargs)
+  [[ "${SNAPSHOTS}" == "test1 test2 test4 test3" ]]
+}
+
 test_show_from_pack_works() {
   "$elfshaker" extract --reset --verify "$pack":"$snapshot_a"
   file_path="$({ "$elfshaker" list "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
@@ -379,6 +397,7 @@ main() {
   run_test test_pack_two_snapshots_works
   run_test test_pack_two_snapshots_object_sort_works
   run_test test_pack_two_snapshots_multiframe_works
+  run_test test_pack_order_by_mtime
   run_test test_show_from_pack_works
   run_test test_show_from_loose_works
   run_test test_head_updated_after_packing

@@ -210,11 +210,30 @@ impl Repository {
 
     pub fn loose_packs(&self) -> Result<Vec<PackId>, Error> {
         self.packs().map(|packs| {
-            packs
+            let mut result: Vec<PackId> = packs
                 .into_iter()
                 .filter(|p| self.is_pack_loose(p))
-                .collect()
+                .collect();
+            result.sort_by_cached_key(|pack_id| {
+                self.pack_index_mtime(pack_id).map_or_else(
+                    |_| (SystemTime::UNIX_EPOCH, pack_id.clone()),
+                    |t| (t, pack_id.clone()),
+                )
+            });
+            result
         })
+    }
+
+    fn pack_index_mtime(&self, pack_id: &PackId) -> Result<SystemTime, Error> {
+        let pack_index_path = match pack_id {
+            PackId::Pack(name) => self
+                .path
+                .join(&*Repository::data_dir())
+                .join(PACKS_DIR)
+                .join(name)
+                .with_extension(PACK_INDEX_EXTENSION),
+        };
+        Ok(pack_index_path.metadata()?.modified()?)
     }
 
     // Find snapshot parses a [pack_id:]snapshot_tag string, where the pack_id

@@ -19,4 +19,4 @@ pub use error::Error;
 #[doc(hidden)]
 pub use pack::write_skippable_frame;
 pub use pack::{Pack, PackFrame, PackHeader, PackId, SnapshotId};
-pub use repository::{ExtractOptions, PackOptions, Repository, RepositoryIndex};
+pub use repository::{ExtractOptions, PackOptions, Repository};

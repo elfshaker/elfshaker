@@ -116,54 +116,44 @@ run_test() {
 
 test_list_works() {
   before_test
-  "$elfshaker" update-index
   "$elfshaker" list
 }
 
 test_extract_reset_on_empty_works() {
-  "$elfshaker" update-index
   "$elfshaker" list -P "$pack" "$snapshot_a"
   "$elfshaker" --verbose extract --reset --verify -P "$pack" "$snapshot_a"
   verify_snapshot "$pack" "$snapshot_a"
 }
 
 test_extract_again_works() {
-  "$elfshaker" update-index
   "$elfshaker" --verbose extract --reset --verify -P "$pack" "$snapshot_a"
   "$elfshaker" --verbose extract --verify -P "$pack" "$snapshot_a"
   verify_snapshot "$pack" "$snapshot_a"
 }
 
 test_extract_different_works() {
-  "$elfshaker" update-index
   "$elfshaker" --verbose extract --reset --verify -P "$pack" "$snapshot_a"
   "$elfshaker" --verbose extract --verify -P "$pack" "$snapshot_b"
   verify_snapshot "$pack" "$snapshot_b"
 }
 
 test_store_works() {
-  "$elfshaker" update-index
   "$elfshaker" --verbose extract --verify --reset -P "$pack" "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
-  "$elfshaker" --verbose update-index
   verify_snapshot loose "$snapshot_b"
 }
 
 test_store_and_extract_different_works() {
-  "$elfshaker" update-index
   "$elfshaker" --verbose extract --verify --reset -P "$pack" "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
-  "$elfshaker" --verbose update-index
   "$elfshaker" --verbose extract --verify -P "$pack" "$snapshot_a"
   verify_snapshot "$pack" "$snapshot_a"
 }
 
 test_store_twice_works() {
-  "$elfshaker" update-index
   "$elfshaker" --verbose extract --verify --reset -P "$pack" "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b-again"
-  "$elfshaker" --verbose update-index
   diff_output=$(diff <("$elfshaker" list -P loose "$snapshot_b" | sort) <("$elfshaker" list -P loose "$snapshot_b-again" | sort))
   if [[ -n "${diff_output// }" ]]; then
     echo "'$diff_output'"
@@ -172,12 +162,10 @@ test_store_twice_works() {
 }
 
 test_store_finds_new_files() {
-  "$elfshaker" update-index
   "$elfshaker" --verbose extract --verify --reset -P "$pack" "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
   test_file=$(mktemp -p .)
   "$elfshaker" --verbose store "$snapshot_b-mod"
-  "$elfshaker" --verbose update-index
   "$elfshaker" list -P loose "$snapshot_b-mod" | grep $(basename "$test_file") || {
     echo 'Failed to store newly created file!'
     exit 1
@@ -193,10 +181,8 @@ test_pack_simple_works() {
   rand_megs 1 > ./bar
   sha1_before=$(cat ./foo ./bar | sha1sum)
   # Pack the two files
-  "$elfshaker" --verbose update-index
   "$elfshaker" --verbose store SS-1
   "$elfshaker" --verbose pack --compression-level 1 P-1
-  "$elfshaker" --verbose update-index
   # Delete the files
   rm ./foo ./bar
   # Then extract them from the pack and verify the checksums
@@ -213,7 +199,6 @@ test_pack_two_snapshots_works() {
   rand_megs 1 > ./bar
   sha1_ss1=$(cat ./foo ./bar | sha1sum)
   # Store the two files in SS-1
-  "$elfshaker" --verbose update-index
   "$elfshaker" --verbose store SS-1
   # Modify the files
   rand_megs 1 > ./foo
@@ -226,7 +211,6 @@ test_pack_two_snapshots_works() {
   # Store the modified files in SS-2 and pack all into P-1
   "$elfshaker" --verbose store SS-2
   "$elfshaker" --verbose pack --compression-level 1 P-1
-  "$elfshaker" --verbose update-index
   # Then extract from the pack and verify the checksums
   "$elfshaker" --verbose extract --reset -P P-1 SS-1
   if [[ "$sha1_ss1" != $(cat ./foo ./bar | sha1sum) ]]; then
@@ -247,7 +231,6 @@ test_pack_two_snapshots_object_sort_works() {
   rand_megs 2 > ./bar
   sha1_ss1=$(cat ./foo ./bar | sha1sum)
   # Store the two files in SS-1
-  "$elfshaker" --verbose update-index
   "$elfshaker" --verbose store SS-1
   # Modify the files
   rand_megs 1 > ./foo
@@ -260,7 +243,6 @@ test_pack_two_snapshots_object_sort_works() {
   # Store the modified files in SS-2 and pack all into P-1
   "$elfshaker" --verbose store SS-2
   "$elfshaker" --verbose pack --compression-level 1 P-1
-  "$elfshaker" --verbose update-index
   # Then extract from the pack and verify the checksums
   "$elfshaker" --verbose extract --reset -P P-1 SS-1
   if [[ "$sha1_ss1" != $(cat ./foo ./bar | sha1sum) ]]; then
@@ -279,7 +261,6 @@ test_pack_two_snapshots_multiframe_works() {
   rand_megs 1 > ./bar
   sha1_ss1=$(cat ./foo ./bar | sha1sum)
   # Store the two files in SS-1
-  "$elfshaker" update-index
   "$elfshaker" store SS-1
   # Modify the files
   rand_megs 1 > ./foo
@@ -290,7 +271,6 @@ test_pack_two_snapshots_multiframe_works() {
   # When the number of frames is too large (> #objects), elfshaker should
   # silently emit less frames and not crash
   "$elfshaker" pack --compression-level 1 --frames 999 P-1
-  "$elfshaker" update-index
   # Then extract from the pack and verify the checksums
   "$elfshaker" extract --reset --verify -P P-1 SS-1
   if [[ "$sha1_ss1" != $(cat ./foo ./bar | sha1sum) ]]; then
@@ -305,7 +285,6 @@ test_pack_two_snapshots_multiframe_works() {
 }
 
 test_show_from_pack_works() {
-  "$elfshaker" update-index
   "$elfshaker" extract --reset --verify -P "$pack" "$snapshot_a"
   file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
   sha1_extract="$(sha1sum < "$file_path")"
@@ -317,10 +296,8 @@ test_show_from_pack_works() {
 }
 
 test_show_from_loose_works() {
-  "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
   "$elfshaker" store "$snapshot_a"
-  "$elfshaker" update-index
   file_path="$({ "$elfshaker" list -P "$pack" "$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
   sha1_extract="$(sha1sum < "$file_path")"
   sha1_show="$("$elfshaker" --verbose show -P loose "$snapshot_a" "$file_path" | sha1sum)"
@@ -331,11 +308,9 @@ test_show_from_loose_works() {
 }
 
 test_head_updated_after_packing() {
-  "$elfshaker" update-index
   rand_megs 1 > ./foo
   "$elfshaker" store test-snapshot
   "$elfshaker" pack --compression-level 1 test-pack
-  "$elfshaker" update-index
   if [[ "$(cat elfshaker_data/HEAD)" != "test-pack/test-snapshot" ]]; then
     echo 'HEAD was expected to point to the newly-created pack!'
     exit 1
@@ -343,7 +318,6 @@ test_head_updated_after_packing() {
 }
 
 test_touched_file_dirties_repo() {
-  "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
   find . -not -path "./elfshaker_data/*" -exec touch -d "$(date --date='now +10 sec')" {} +
   if "$elfshaker" extract --verbose --verify -P "$pack" "$snapshot_b"; then
@@ -353,7 +327,6 @@ test_touched_file_dirties_repo() {
 }
 
 test_dirty_repo_can_be_forced() {
-  "$elfshaker" update-index
   "$elfshaker" extract --verify --reset -P "$pack" "$snapshot_a"
   find . -not -path "./elfshaker_data/*" -exec touch -d "$(date --date='now +10 sec')" {} +
   if ! "$elfshaker" extract --verbose --force --verify -P "$pack" "$snapshot_b"; then
@@ -372,7 +345,6 @@ main() {
   cp "$input" ./elfshaker_data/packs/
   cp "$input.idx" ./elfshaker_data/packs/
 
-  "$elfshaker" update-index
 
   list_output=$(mktemp)
   # Grab 2 snapshots from the pack

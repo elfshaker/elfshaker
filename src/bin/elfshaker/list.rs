@@ -5,7 +5,7 @@ use clap::{App, Arg, ArgMatches};
 use std::{error::Error, io, path::Path, str::FromStr};
 use walkdir::WalkDir;
 
-use super::utils::{find_pack_with_snapshot, format_size, open_repo_from_cwd, print_table};
+use super::utils::{format_size, open_repo_from_cwd, print_table};
 use elfshaker::packidx::FileHandleList;
 use elfshaker::repo::{PackId, Repository, SnapshotId, LOOSE_DIR};
 
@@ -20,7 +20,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     if let Some(snapshot) = snapshot {
         let pack = match pack {
             Some(pack) => PackId::from_str(pack)?,
-            None => find_pack_with_snapshot(repo.index(), snapshot)?,
+            None => repo.find_pack_with_snapshot(snapshot)?,
         };
         let snapshot = SnapshotId::new(pack, snapshot)?;
         print_snapshot_summary(&repo, &snapshot)?;
@@ -66,10 +66,11 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 
 fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
-    for pack_id in &*repo.index().available_packs() {
+
+    for pack_id in repo.packs()? {
         match pack_id {
             PackId::Pack(pack_name) => {
-                let pack = repo.open_pack(pack_name)?;
+                let pack = repo.open_pack(&pack_name)?;
                 let size_str = if bytes {
                     pack.file_size().to_string()
                 } else {

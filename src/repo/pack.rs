@@ -19,13 +19,13 @@ use log::info;
 use zstd::stream::raw::DParameter;
 use zstd::Decoder;
 
-use super::algo::run_in_parallel;
 use super::constants::{
     DEFAULT_WINDOW_LOG_MAX, LOOSE_ID, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC,
     PACK_INDEX_EXTENSION,
 };
 use super::error::Error;
 use super::repository::Repository;
+use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
 use crate::log::measure_ok;
 use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
 
@@ -68,6 +68,14 @@ pub enum PackId {
 }
 
 impl PackId {
+    /// from_index_path returns Some(PackId::Pack(index_path)) with the pack
+    /// index extension trimmed, if the input ends in the PACK_INDEX_EXTENSION.
+    pub fn from_index_path(index_path: String) -> Option<PackId> {
+        index_path
+            .strip_suffix(DOT_PACK_INDEX_EXTENSION)
+            .map(|s| PackId::Pack(s.to_owned()))
+    }
+
     fn is_valid(s: &str) -> bool {
         s.chars()
             .all(|c| c.is_ascii_alphanumeric() || EXTRA_ID_CHARS.contains(&c))

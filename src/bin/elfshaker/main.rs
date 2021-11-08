@@ -7,7 +7,6 @@ mod list;
 mod pack;
 mod show;
 mod store;
-mod update_index;
 mod utils;
 
 use clap::{App, Arg, ArgMatches};
@@ -41,7 +40,6 @@ fn main() {
 fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     match matches.subcommand() {
         (extract::SUBCOMMAND, Some(matches)) => extract::run(matches),
-        (update_index::SUBCOMMAND, Some(matches)) => update_index::run(matches),
         (store::SUBCOMMAND, Some(matches)) => store::run(matches),
         (list::SUBCOMMAND, Some(matches)) => list::run(matches),
         (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
@@ -58,7 +56,6 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
 fn get_app() -> App<'static, 'static> {
     App::new("elfshaker")
         .subcommand(extract::get_app())
-        .subcommand(update_index::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())
         .subcommand(pack::get_app())

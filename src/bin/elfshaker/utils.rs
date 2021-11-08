@@ -2,10 +2,9 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use elfshaker::log::measure;
-use elfshaker::packidx::PackError;
 use elfshaker::progress::ProgressReporter;
-use elfshaker::repo::{Error as RepoError, PackId, Repository, RepositoryIndex, HEAD_FILE};
-use log::{error, info, trace};
+use elfshaker::repo::{Error as RepoError, Repository};
+use log::info;
 use std::io::Write;
 use std::sync::{
     atomic::{AtomicIsize, Ordering},
@@ -97,28 +96,6 @@ pub fn format_size(bytes: u64) -> String {
     format!("{:.3} MiB", bytes as f64 / 1024.0 / 1024.0)
 }
 
-/// Tries to find a pack that provides the snapshot using the repo index.
-pub fn find_pack_with_snapshot(
-    repo_index: &RepositoryIndex,
-    snapshot: &str,
-) -> Result<PackId, RepoError> {
-    // Try to locate this snapshot.
-    trace!("Looking for snapshot in top-level index...");
-    let packs = repo_index.find_packs(snapshot);
-    match packs.len() {
-        0 => Err(RepoError::PackError(PackError::SnapshotNotFound(
-            snapshot.to_owned(),
-        ))),
-        1 => Ok(packs[0].clone()),
-        _ => {
-            error!(
-                "The following pack files provide snapshot {}:\n{:?}\nSpecify which one to use with -P <pack>!",
-                snapshot, packs);
-            Err(RepoError::AmbiguousSnapshotMatch)
-        }
-    }
-}
-
 /// Opens the repo from the current work directory and logs some standard
 /// stats about the process.
 pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
@@ -129,19 +106,6 @@ pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
     info!("Opening repository took {:?}", elapsed);
     let repo = match open_result {
         Ok(repo) => repo,
-        Err(RepoError::CorruptRepositoryIndex) => {
-            error!("The repository index is corrupt or missing! Run update-index and try again.");
-            return Err(RepoError::CorruptRepositoryIndex);
-        }
-        Err(RepoError::CorruptHead) => {
-            let mut head_path = repo_path.join(&*Repository::data_dir());
-            head_path.push(HEAD_FILE);
-            error!(
-                "The repository HEAD file ({:?}) is corrupt! Remove the file and try again.",
-                head_path
-            );
-            return Err(RepoError::CorruptHead);
-        }
         Err(e) => return Err(e),
     };
     Ok(repo)

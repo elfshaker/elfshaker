@@ -11,23 +11,34 @@ pub(crate) const SUBCOMMAND: &str = "find";
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let term = matches.value_of("term").unwrap();
     let repo = open_repo_from_cwd()?;
-    let index = repo.index();
 
     let mut table = vec![];
-    for snapshot in index
-        .available_snapshots()
-        .iter()
-        .filter(|tag| tag.contains(term))
-    {
-        for pack in index.find_packs(snapshot) {
-            table.push([snapshot.to_string(), pack.to_string()])
+    for pack_id in repo.packs()? {
+        for snapshot in repo.load_index(&pack_id)?.snapshots() {
+            table.push([snapshot.tag().to_string(), pack_id.to_string()])
         }
     }
 
-    print_table(
-        Some(&["SNAPSHOT".to_owned(), "PACK".to_owned()]),
-        table.iter(),
-    );
+    let table = repo
+        .packs()?
+        .into_iter()
+        .flat_map(|p| {
+            repo.load_index(&p).map(|pack_index| {
+                pack_index
+                    .snapshots()
+                    .iter()
+                    .filter_map(|s| {
+                        s.tag()
+                            .contains(term)
+                            .then(|| std::array::IntoIter::new([s.tag().to_owned(), p.to_string()]))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .flatten();
+
+    let i = std::array::IntoIter::new(["SNAPSHOT".to_owned(), "PACK".to_owned()]);
+    print_table(Some(i), table);
     Ok(())
 }
 

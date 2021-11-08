@@ -185,6 +185,7 @@ impl Repository {
 
     pub fn packs(&self) -> Result<Vec<PackId>, Error> {
         let root = self.path.join(REPO_DIR).join(PACKS_DIR);
+        fs::create_dir_all(&root)?;
         WalkDir::new(&root)
             .into_iter()
             .filter_map(|dirent| {

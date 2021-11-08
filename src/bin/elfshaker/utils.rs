@@ -104,11 +104,7 @@ pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
     info!("Opening repository...");
     let (elapsed, open_result) = measure(|| Repository::open(&repo_path));
     info!("Opening repository took {:?}", elapsed);
-    let repo = match open_result {
-        Ok(repo) => repo,
-        Err(e) => return Err(e),
-    };
-    Ok(repo)
+    open_result
 }
 
 pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressReporter<'static> {
@@ -118,7 +114,8 @@ pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressRep
     let message = message.to_owned();
     ProgressReporter::new(move |checkpoint| {
         if let Some(remaining) = checkpoint.remaining {
-            let percentage = (100 * checkpoint.done / (checkpoint.done + remaining)) as isize;
+            let percentage =
+                (100 * checkpoint.done / std::cmp::max(1, checkpoint.done + remaining)) as isize;
             if percentage - current.load(Ordering::Acquire) >= step as isize {
                 current.store(percentage, Ordering::Release);
                 eprintln!("{}... {}%", message, percentage);

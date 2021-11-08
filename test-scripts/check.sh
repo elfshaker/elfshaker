@@ -172,6 +172,15 @@ test_store_finds_new_files() {
   }
 }
 
+test_store_empty_directory_works() {
+  mkdir -p emptydir
+  cd emptydir
+  # Store in an empty directory should create a repository. Additionally, it's a
+  # store of an empty pack. Make sure that is handled without crashing.
+  "$elfshaker" --verbose store test
+  [ "$(elfshaker list | wc -l)" -eq 1 ]
+}
+
 rand_megs() {
   dd if=/dev/urandom bs="$1M" count=1 iflag=fullblock
 }
@@ -345,7 +354,6 @@ main() {
   cp "$input" ./elfshaker_data/packs/
   cp "$input.idx" ./elfshaker_data/packs/
 
-
   list_output=$(mktemp)
   # Grab 2 snapshots from the pack
   "$elfshaker" list "$pack" 2>/dev/null | sed '1d' > "$list_output"
@@ -366,6 +374,7 @@ main() {
   run_test test_store_and_extract_different_works
   run_test test_store_twice_works
   run_test test_store_finds_new_files
+  run_test test_store_empty_directory_works
   run_test test_pack_simple_works
   run_test test_pack_two_snapshots_works
   run_test test_pack_two_snapshots_object_sort_works

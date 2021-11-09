@@ -1,55 +1,83 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
-
-use core::fmt;
-use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::fmt;
+use std::marker::PhantomData;
+use std::{borrow::Borrow, collections::HashMap, hash::Hash};
 
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// PathPool interns path strings.
-#[derive(Default, Clone)]
-pub struct PathPool {
-    entries: Vec<OsString>,
-    entry_map: HashMap<OsString, PathHandle>,
+// An EntryPool interns sets of values and provides [`Handle`]-based access to
+// them. Serializes to a single flat list with append semantics for newly-seen
+// elements.
+pub struct EntryPool<T> {
+    entries: Vec<T>,
+    // Provides hash-based lookup at runtime, but is not serialized to disk.
+    entry_map: HashMap<T, Handle>,
 }
 
-pub type PathHandle = u32;
+pub type Handle = u32;
 
-impl PathPool {
+impl<T> EntryPool<T>
+where
+    T: Eq + Hash,
+{
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// get returns the intern'd PathHandle.
-    pub fn get<P: AsRef<OsStr>>(&self, p: P) -> Option<PathHandle> {
-        self.entry_map.get(p.as_ref()).copied()
+    /// get returns the entry for the intern'd Handle, or None if absent.
+    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<Handle>
+    where
+        T: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.entry_map.get(k).copied()
     }
 
-    /// get_or_insert returns the intern'd PathHandle for the given string, or inserts it if not present.
-    pub fn get_or_insert<P: AsRef<OsStr>>(&mut self, p: P) -> PathHandle {
-        if let Some(h) = self.get(p.as_ref()) {
-            h
+    /// get_or_insert returns the intern'd Handle for the given object, or
+    /// inserts it if not present.
+    pub fn get_or_insert<Q>(&mut self, p: &Q) -> Handle
+    where
+        T: Borrow<Q>,
+        Q: ?Sized + Hash + Eq + ToOwned<Owned = T>,
+    {
+        if let Some(handle) = self.get(p) {
+            handle
         } else {
-            let h = self.entries.len() as PathHandle;
-            let p = p.as_ref().to_owned();
-            self.entries.push(p.clone());
-            self.entry_map.insert(p, h);
-            h
+            let handle = self.entries.len() as Handle;
+            self.entry_map.insert(p.to_owned(), handle);
+            self.entries.push(p.to_owned());
+            handle
         }
     }
 
-    // lookup the string for the given PathHandle.
-    pub fn lookup(&self, h: PathHandle) -> Option<&OsString> {
+    /// lookup the entry for the given Handle.
+    pub fn lookup(&self, h: Handle) -> Option<&T> {
         self.entries.get(h as usize)
     }
 }
 
+impl<T> Default for EntryPool<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            entry_map: HashMap::new(),
+        }
+    }
+}
+
 use std::iter::FromIterator;
-impl<'l> FromIterator<&'l OsString> for PathPool {
-    fn from_iter<I: IntoIterator<Item = &'l OsString>>(iter: I) -> Self {
-        let mut c = PathPool::new();
+impl<'l, T, Q> FromIterator<&'l Q> for EntryPool<T>
+where
+    T: Borrow<Q> + Eq + Hash,
+    Q: 'l + ?Sized + Hash + Eq + ToOwned<Owned = T>,
+{
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = &'l Q>,
+    {
+        let mut c = EntryPool::<T>::new();
         for i in iter {
             c.get_or_insert(i);
         }
@@ -57,28 +85,36 @@ impl<'l> FromIterator<&'l OsString> for PathPool {
     }
 }
 
-impl<'de> Deserialize<'de> for PathPool {
-    fn deserialize<D>(deserializer: D) -> Result<PathPool, D::Error>
+impl<'de, T> Deserialize<'de> for EntryPool<T>
+where
+    T: Deserialize<'de> + Hash + Eq + Clone,
+{
+    fn deserialize<D>(deserializer: D) -> Result<EntryPool<T>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct VisitPathPool;
-        impl<'de> Visitor<'de> for VisitPathPool {
-            type Value = PathPool;
-            fn visit_seq<V>(self, mut seq: V) -> Result<PathPool, V::Error>
+        struct VisitEntryPool<T>(PhantomData<T>);
+
+        impl<'de, T> Visitor<'de> for VisitEntryPool<T>
+        where
+            T: Deserialize<'de> + Hash + Eq + Clone,
+        {
+            type Value = EntryPool<T>;
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<EntryPool<T>, V::Error>
             where
                 V: SeqAccess<'de>,
             {
                 let mut result = if let Some(len) = seq.size_hint() {
-                    PathPool {
+                    EntryPool {
                         entries: Vec::with_capacity(len),
                         entry_map: HashMap::with_capacity(len),
                     }
                 } else {
-                    PathPool::new()
+                    EntryPool::<T>::new()
                 };
-                while let Some(elem) = seq.next_element::<OsString>()? {
-                    result.get_or_insert(elem);
+                while let Some(elem) = seq.next_element::<T>()? {
+                    result.get_or_insert(&elem);
                 }
                 Ok(result)
             }
@@ -87,11 +123,14 @@ impl<'de> Deserialize<'de> for PathPool {
             }
         }
 
-        deserializer.deserialize_seq(VisitPathPool)
+        deserializer.deserialize_seq(VisitEntryPool(PhantomData::<T>))
     }
 }
 
-impl Serialize for PathPool {
+impl<T> Serialize for EntryPool<T>
+where
+    T: Serialize,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -102,11 +141,13 @@ impl Serialize for PathPool {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::*;
 
     #[test]
     fn basic_pathpool_test() {
-        let mut p = PathPool::new();
+        let mut p = EntryPool::new();
         // Not present.
         let handle = p.get(&OsString::from("foo"));
         assert_eq!(handle, None);
@@ -131,7 +172,7 @@ mod tests {
             .map(Into::into)
             .collect();
 
-        let pool = PathPool::from_iter(paths.iter());
+        let pool = EntryPool::from_iter(paths.iter());
         let handles = paths
             .iter()
             .map(|p| pool.get(p).unwrap())
@@ -140,7 +181,7 @@ mod tests {
         let mut encoded: Vec<u8> = vec![];
         rmp_serde::encode::write(&mut encoded, &pool).unwrap();
 
-        let decoded: PathPool = rmp_serde::decode::from_read(&*encoded).unwrap();
+        let decoded: EntryPool<OsString> = rmp_serde::decode::from_read(&*encoded).unwrap();
 
         // Same handles given original paths.
         let decoded_handles = paths

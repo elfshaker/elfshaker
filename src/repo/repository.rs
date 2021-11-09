@@ -456,7 +456,7 @@ impl Repository {
         .into_iter()
         .collect::<io::Result<Vec<_>>>()?;
 
-        let mut index = PackIndex::default();
+        let mut index = PackIndex::new();
         index.push_snapshot(snapshot.tag(), &pack_entries)?;
 
         let loose_path = self.path().join(REPO_DIR).join(PACKS_DIR).join(LOOSE_DIR);

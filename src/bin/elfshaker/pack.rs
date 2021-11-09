@@ -69,7 +69,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         return Err("There are no loose snapshots!".into());
     }
 
-    let mut new_index = PackIndex::default();
+    let mut new_index = PackIndex::new();
 
     for pack_id in &indexes {
         assert!(

@@ -3,7 +3,7 @@
 
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
-use crate::pathpool::{PathHandle, PathPool};
+use crate::pathpool::{EntryPool, Handle};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -15,7 +15,7 @@ use std::iter::FromIterator;
 #[derive(Debug, Clone)]
 pub enum PackError {
     CompleteListNeeded,
-    PathNotFound(PathHandle),
+    PathNotFound(Handle),
     ObjectNotFound,
     SnapshotNotFound(String),
     /// A snapshot with that tag is already present in the pack
@@ -109,7 +109,7 @@ impl ObjectEntry {
 /// [`FileHandle`] is the representation that gets written to disk.
 #[derive(Hash, PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct FileHandle {
-    pub path: PathHandle,
+    pub path: Handle,
     // Index into [`PackIndex::objects`].
     pub object: ObjectHandle,
 }
@@ -117,7 +117,7 @@ pub struct FileHandle {
 impl Eq for FileHandle {}
 
 impl FileHandle {
-    pub fn new(path: PathHandle, object: ObjectHandle) -> Self {
+    pub fn new(path: Handle, object: ObjectHandle) -> Self {
         Self { path, object }
     }
 }
@@ -244,9 +244,9 @@ impl FileEntry {
 }
 
 /// Contains the metadata needed to extract files from a pack file.
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct PackIndex {
-    path_pool: PathPool,
+    path_pool: EntryPool<OsString>,
     objects: Vec<ObjectEntry>,
     snapshots: Vec<Snapshot>,
 
@@ -255,12 +255,18 @@ pub struct PackIndex {
     current: HashSet<FileHandle>,
 }
 
+impl Default for PackIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PackIndex {
-    pub fn new(path_pool: PathPool, objects: Vec<ObjectEntry>, snapshots: Vec<Snapshot>) -> Self {
+    pub fn new() -> Self {
         Self {
-            path_pool,
-            objects,
-            snapshots,
+            path_pool: EntryPool::new(),
+            objects: Vec::new(),
+            snapshots: Vec::new(),
             current: HashSet::new(),
         }
     }
@@ -348,7 +354,7 @@ impl PackIndex {
                     .objects
                     .get(x.object.0 as usize)
                     .ok_or(PackError::ObjectNotFound)?;
-                Ok(FileEntry::new(path.into(), object.clone()))
+                Ok(FileEntry::new(path.clone(), object.clone()))
             })
             .collect::<Result<Vec<_>, PackError>>()
     }

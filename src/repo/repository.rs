@@ -112,10 +112,6 @@ pub struct ExtractResult {
 pub struct Repository {
     /// The path containing the [`Repository::data_dir`] directory.
     path: PathBuf,
-    /// The ID of the currently extracted snapshot or None, if nothing has been extracted yet.
-    head: Option<SnapshotId>,
-    /// The time HEAD was last modified.
-    head_time: Option<SystemTime>,
 }
 
 impl Repository {
@@ -137,45 +133,45 @@ impl Repository {
             return Err(Error::RepositoryNotFound);
         }
 
-        let (head, head_time) = Self::read_head(&data_dir.join(HEAD_FILE))?;
-
-        if let Some(id) = head.as_ref() {
-            info!("Current HEAD: {}/{}", id.pack(), id.tag());
-        } else {
-            info!("Current HEAD: None");
-        }
-
         Ok(Repository {
             path: path.as_ref().to_owned(),
-            head,
-            head_time,
         })
     }
 
     // Reads the state of HEAD. If the file does not exist, returns None values.
     // If ctime/mtime cannot be determined, returns None.
-    fn read_head(path: &Path) -> Result<(Option<SnapshotId>, Option<SystemTime>), Error> {
-        let mut file = match File::open(path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
-            result => result,
-        }?;
+    pub fn read_head(&self) -> Result<(Option<SnapshotId>, Option<SystemTime>), Error> {
+        let path = self.path.join(&*Self::data_dir()).join(HEAD_FILE);
 
-        let metadata = file.metadata()?;
-        let time = get_last_modified(metadata);
-        let mut buf = vec![];
-        file.read_to_end(&mut buf)?;
-        let text = std::str::from_utf8(&buf).map_err(|_| Error::CorruptHead)?;
-        let snapshot = SnapshotId::from_str(text).map_err(|_| Error::CorruptHead)?;
-        Ok((Some(snapshot), time))
+        let (head, mtime) = match File::open(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
+            Err(e) => return Err(e.into()),
+            Ok(mut file) => {
+                let metadata = file.metadata()?;
+                let time = get_last_modified(metadata);
+                let mut buf = vec![];
+                file.read_to_end(&mut buf)?;
+
+                let text = std::str::from_utf8(&buf).map_err(|_| Error::CorruptHead)?;
+                let snapshot = SnapshotId::from_str(text).map_err(|_| Error::CorruptHead)?;
+                (Some(snapshot), time)
+            }
+        };
+
+        info!(
+            "Current HEAD: {}",
+            match &head {
+                Some(head) => head.to_string(),
+                None => "None".to_owned(),
+            }
+        );
+
+        Ok((head, mtime))
     }
 
     /// The base path of the repository.
     pub fn path(&self) -> &Path {
         &self.path
-    }
-    /// The currently extracted snapshot.
-    pub fn head(&self) -> &Option<SnapshotId> {
-        &self.head
     }
 
     /// Open the pack.
@@ -323,7 +319,9 @@ impl Repository {
         snapshot_id: SnapshotId,
         opts: ExtractOptions,
     ) -> Result<ExtractResult, Error> {
-        if self.head.is_some() && self.head_time.is_none() && !opts.force() {
+        let (head, head_time) = self.read_head()?;
+
+        if head.is_some() && head_time.is_none() && !opts.force() {
             warn!("The OS/filesystem does not support file creation timestamps!");
             return Err(Error::DirtyWorkDir);
         }
@@ -332,11 +330,10 @@ impl Repository {
         let source_index = self.load_index(snapshot_id.pack())?;
 
         let entries = source_index.entries_from_snapshot(snapshot_id.tag())?;
-        let (new_entries, old_entries) = if opts.reset || !self.head().is_some() {
+        let (new_entries, old_entries) = if opts.reset || head.is_none() {
             // Extract all, remove nothing
             (entries, vec![])
-        } else {
-            let head = self.head().as_ref().unwrap();
+        } else if let Some(head) = head {
             // HEAD and new snapshot packs might differ
             if snapshot_id.pack() == head.pack() {
                 let head_entries = source_index.entries_from_snapshot(head.tag())?;
@@ -352,6 +349,8 @@ impl Repository {
                 })?;
                 Self::compute_entry_diff(&head_entries, &entries)
             }
+        } else {
+            unreachable!();
         };
 
         // There is no point in deleting files which will be overwritten by the extract, so
@@ -371,7 +370,7 @@ impl Repository {
                 path_buf.clear();
                 path_buf.push(&self.path);
                 path_buf.push(&entry.path);
-                self.check_for_changes(&path_buf)?;
+                self.check_changed_since(head_time.unwrap(), &path_buf)?;
             }
         }
         for path in &removed_paths {
@@ -619,7 +618,6 @@ impl Repository {
             &self.temp_dir(),
             &data_dir.join(HEAD_FILE),
         )?;
-        self.head = Some(snapshot_id.clone());
         Ok(())
     }
 
@@ -695,11 +693,7 @@ impl Repository {
         (added, removed)
     }
 
-    fn check_for_changes(&self, path: &Path) -> Result<(), Error> {
-        assert!(
-            self.head_time.is_some(),
-            "check_for_changes cannot be called when HEAD time is unknown!"
-        );
+    fn check_changed_since(&self, head_time: SystemTime, path: &Path) -> Result<(), Error> {
         let last_modified = fs::metadata(&path)
             // The modification date of the file is unknown, there is no other
             // option to fallback on, so we mark the directory as dirty.
@@ -712,7 +706,7 @@ impl Repository {
             // other option to fallback on, so we mark the directory as dirty.
             .and_then(|metadata| get_last_modified(metadata).ok_or(Error::DirtyWorkDir))?;
 
-        if self.head_time.unwrap() < last_modified {
+        if head_time < last_modified {
             warn!(
                 "File {} is more recent than the current HEAD!",
                 path.to_string_lossy()
@@ -721,6 +715,7 @@ impl Repository {
             // been modified unexpectedly!
             return Err(Error::DirtyWorkDir);
         }
+
         Ok(())
     }
 
@@ -925,51 +920,5 @@ mod tests {
         assert!(removed
             .iter()
             .any(|e| path_b == e.path && path_b_old_checksum == e.object.checksum));
-    }
-
-    #[test]
-    fn extract_requires_force_if_no_timestamps() {
-        let mut repo = Repository {
-            head: Some(SnapshotId::from_str("pack:snapshot").unwrap()),
-            head_time: None,
-            path: "/some/path".into(),
-        };
-        let snapshot = SnapshotId::from_str("pack:snapshot-2").unwrap();
-        let err1 = repo
-            .extract_snapshot(snapshot.clone(), ExtractOptions::default())
-            .unwrap_err();
-        let err2 = repo
-            .extract_snapshot(
-                snapshot.clone(),
-                ExtractOptions {
-                    force: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap_err();
-
-        assert!(matches!(err1, Error::DirtyWorkDir));
-        assert!(!matches!(err2, Error::DirtyWorkDir));
-    }
-
-    #[test]
-    fn extract_does_not_require_force_or_timestamp_when_none_head() {
-        let mut repo = Repository {
-            head: None,
-            head_time: None,
-            path: "/some/path".into(),
-        };
-        let snapshot = SnapshotId::from_str("pack:snapshot").unwrap();
-        let err = repo
-            .extract_snapshot(
-                snapshot.clone(),
-                ExtractOptions {
-                    force: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap_err();
-
-        assert!(!matches!(err, Error::DirtyWorkDir));
     }
 }

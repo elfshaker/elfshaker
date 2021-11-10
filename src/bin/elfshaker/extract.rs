@@ -33,15 +33,20 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let mut repo = open_repo_from_cwd()?;
     let new_head = repo.find_snapshot(snapshot)?;
 
-    if repo.head().as_ref() == Some(&new_head) && !is_reset {
-        // The specified snapshot is already extracted and --reset is not specified,
-        // so this is a no-op.
-        warn!(
-            "HEAD is already at {} and --reset is not specified. Exiting early...",
-            repo.head().as_ref().unwrap()
-        );
-        return Ok(());
-    }
+    match repo.read_head()? {
+        (Some(h), _) if h == new_head && !is_reset => {
+            // The specified snapshot is already extracted and --reset is not specified,
+            // so this is a no-op.
+            warn!(
+                "HEAD is already at {} and --reset is not specified. Exiting early...",
+                h,
+            );
+            return Ok(());
+
+        },
+        _ => {},
+    };
+
 
     let mut opts = ExtractOptions::default();
     opts.set_verify(is_verify);

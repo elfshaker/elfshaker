@@ -126,7 +126,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         &reporter,
     )?;
 
-    if let Some(head) = repo.head() {
+    if let (Some(head), _) = repo.read_head()? {
         if indexes.iter().any(|pack_id| head.pack() == pack_id) {
             info!("Updating HEAD to point to the newly-created pack...");
             // The current HEAD was referencing a snapshot an index which has

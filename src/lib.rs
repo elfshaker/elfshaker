@@ -3,8 +3,8 @@
 
 pub mod atomicfile;
 pub mod batch;
+pub mod entrypool;
 pub mod log;
 pub mod packidx;
-pub mod pathpool;
 pub mod progress;
 pub mod repo;

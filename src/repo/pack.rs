@@ -511,7 +511,7 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
     hasher.input(buf);
     hasher.result(&mut checksum);
     if &checksum != exp_checksum {
-        return Err(PackError::ChecksumMismatch.into());
+        return Err(PackError::ChecksumMismatch(*exp_checksum, checksum).into());
     }
     Ok(())
 }

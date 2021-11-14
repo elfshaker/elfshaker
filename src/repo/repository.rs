@@ -647,7 +647,7 @@ impl Repository {
             let expected_checksums = entries.iter().map(|e| &e.object.checksum);
             for (expected, actual) in expected_checksums.zip(checksums) {
                 if *expected != actual {
-                    return Err(PackError::ChecksumMismatch.into());
+                    return Err(PackError::ChecksumMismatch(*expected, actual).into());
                 }
             }
         }

@@ -20,7 +20,7 @@ pub enum PackError {
     SnapshotNotFound(String),
     /// A snapshot with that tag is already present in the pack
     SnapshotAlreadyExists(String, String),
-    ChecksumMismatch,
+    ChecksumMismatch(ObjectChecksum, ObjectChecksum),
 }
 
 impl std::error::Error for PackError {}
@@ -40,7 +40,12 @@ impl std::fmt::Display for PackError {
                 "A snapshot with the tag '{}' is already present in the pack '{}'!",
                 s, p,
             ),
-            PackError::ChecksumMismatch => write!(f, "The object checksum did not match!"),
+            PackError::ChecksumMismatch(exp, got) => write!(
+                f,
+                "The object checksum did not match! exp {} got {}",
+                hex::encode(exp),
+                hex::encode(got)
+            ),
         }
     }
 }

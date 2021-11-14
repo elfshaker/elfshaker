@@ -438,10 +438,7 @@ impl Repository {
         let threads = num_cpus::get();
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
-            let mut buf = vec![];
-            let mut file = File::open(&file_path)?;
-            file.read_to_end(&mut buf)?;
-
+            let buf = fs::read(&file_path)?;
             let mut checksum = [0u8; 20];
             let mut hasher = Sha1::new();
             hasher.input(&buf);

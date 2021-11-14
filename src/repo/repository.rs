@@ -535,7 +535,7 @@ impl Repository {
             |objects| {
                 let paths = objects
                     .iter()
-                    .map(|o| build_loose_object_path(&self.path, &o.checksum))
+                    .map(|o| self.loose_object_path(&o.checksum))
                     .collect::<Vec<_>>();
 
                 let mut buf = vec![];
@@ -632,10 +632,7 @@ impl Repository {
             dest_path.push(&entry.path);
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;
-            fs::copy(
-                build_loose_object_path(&self.path, &entry.object.checksum),
-                &dest_path,
-            )?;
+            fs::copy(self.loose_object_path(&entry.object.checksum), &dest_path)?;
         }
 
         if verify {
@@ -733,7 +730,7 @@ impl Repository {
         temp_dir: &Path,
         checksum: &ObjectChecksum,
     ) -> io::Result<()> {
-        let obj_path = build_loose_object_path(&self.path, checksum);
+        let obj_path = self.loose_object_path(checksum);
         if obj_path.exists() {
             // No need to do anything. Object writes are atomic, so if an object
             // with the same checksum already exists, there is no need to do anything.
@@ -745,21 +742,21 @@ impl Repository {
         write_file_atomic(&mut reader, temp_dir, &obj_path)?;
         Ok(())
     }
-}
 
-fn build_loose_object_path(repo_path: &Path, checksum: &ObjectChecksum) -> PathBuf {
-    let checksum_str = hex::encode(&checksum[..]);
-    let mut obj_path = repo_path.join(&*Repository::data_dir());
-    // $REPO_DIR/$LOOSE
-    obj_path.push(LOOSE_DIR);
+    pub fn loose_object_path(&self, checksum: &ObjectChecksum) -> PathBuf {
+        let checksum_str = hex::encode(&checksum[..]);
+        let mut obj_path = self.path.join(&*Repository::data_dir());
+        // $REPO_DIR/$LOOSE
+        obj_path.push(LOOSE_DIR);
 
-    // $REPO_DIR/$LOOSE/FA/
-    obj_path.push(&checksum_str[..2]);
-    // $REPO_DIR/$LOOSE/FA/F0/
-    obj_path.push(&checksum_str[2..4]);
-    // $REPO_DIR/$LOOSE/FA/F0/FAF0F0F0FAFAF0F0F0FAFAF0F0
-    obj_path.push(&checksum_str[4..]);
-    obj_path
+        // $REPO_DIR/$LOOSE/FA/
+        obj_path.push(&checksum_str[..2]);
+        // $REPO_DIR/$LOOSE/FA/F0/
+        obj_path.push(&checksum_str[2..4]);
+        // $REPO_DIR/$LOOSE/FA/F0/FAF0F0F0FAFAF0F0F0FAFAF0F0
+        obj_path.push(&checksum_str[4..]);
+        obj_path
+    }
 }
 
 /// Cleans the list of file paths relative to the repository root,
@@ -816,7 +813,8 @@ mod tests {
             0xFA, 0xF0, 0xDE, 0xAD, 0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0, 0xFA, 0xF0, 0xDE, 0xAD,
             0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0,
         ];
-        let path = super::build_loose_object_path("/repo".as_ref(), &checksum);
+        let repo = Repository{path: "/repo".into()};
+        let path = repo.loose_object_path(&checksum);
         assert_eq!(
             format!(
                 "/repo/{}/{}/fa/f0/deadbeefbadc0de0faf0deadbeefbadc0de0",

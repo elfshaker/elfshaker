@@ -533,16 +533,23 @@ impl Repository {
             opts.num_workers as usize,
             object_partitions.into_iter(),
             |objects| {
-                let paths = objects
-                    .iter()
-                    .map(|o| self.loose_object_path(&o.checksum))
-                    .collect::<Vec<_>>();
+                let object_readers = objects.iter().map(|handle| {
+                    // TODO: Method of obtaining readers from packs? Or we can
+                    // just assume packs first get unpacked.
+                    Ok(Box::new(File::open(
+                        self.loose_object_path(&handle.checksum),
+                    )?))
+                });
 
                 let mut buf = vec![];
                 // Compress all the object files.
-                let r =
-                    batch::compress_files(&mut buf, &paths, &task_opts, &ProgressReporter::dummy())
-                        .map(move |bytes| (bytes, buf));
+                let r = batch::compress_files(
+                    &mut buf,
+                    object_readers,
+                    &task_opts,
+                    &ProgressReporter::dummy(),
+                )
+                .map(move |bytes| (bytes, buf));
                 // Update done count.
                 let done = done_task_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
                 // And report the change.

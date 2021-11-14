@@ -7,7 +7,7 @@ use crate::progress::ProgressReporter;
 use crate::repo::run_in_parallel;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
-use std::{fs, fs::File, io, io::Read, path::Path};
+use std::{fs, io::{self, Read, Write}, path::Path};
 use zstd::stream::raw::CParameter;
 use zstd::Encoder;
 
@@ -44,15 +44,16 @@ pub struct CompressionOptions {
 /// * `opts` - the compression options
 ///
 ///
-pub fn compress_files<W, P>(
+pub fn compress_files<W, I, R>(
     pack_file: W,
-    object_paths: &[P],
+    object_readers: I,
     opts: &CompressionOptions,
     reporter: &ProgressReporter,
 ) -> io::Result<u64>
 where
-    W: io::Write,
-    P: AsRef<Path>,
+    W: Write,
+    I: ExactSizeIterator<Item = io::Result<R>>,
+    R: Read,
 {
     assert!(opts.num_workers > 0);
     // Initialize encoder.
@@ -62,17 +63,18 @@ where
     encoder.set_parameter(CParameter::EnableLongDistanceMatching(true))?;
     encoder.set_parameter(CParameter::WindowLog(opts.window_log))?;
 
+    let n_objects = object_readers.len();
     let mut processed_bytes = 0;
-
-    for (i, obj) in object_paths.iter().enumerate() {
+    for (i, obj) in object_readers.enumerate() {
         // TODO(peterwaller-arm): Verify object checksums here, abort on mismatch.
-        let mut file = File::open(&obj)?;
-        let bytes = io::copy(&mut file, &mut encoder)?;
+        let mut obj = obj?;
+        // let mut file = File::open(&obj)?;
+        let bytes = io::copy(&mut obj, &mut encoder)?;
         processed_bytes += bytes;
-        reporter.checkpoint(i, Some(object_paths.len() - i));
+        reporter.checkpoint(i, Some(n_objects - i));
     }
 
-    reporter.checkpoint(object_paths.len(), Some(0));
+    reporter.checkpoint(n_objects, Some(0));
     // Important to call .finish()
     encoder.finish()?;
     Ok(processed_bytes)

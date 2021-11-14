@@ -5,7 +5,6 @@ use clap::{App, Arg, ArgMatches};
 use std::{error::Error, path::Path};
 
 use super::utils::{format_size, open_repo_from_cwd, print_table};
-use elfshaker::packidx::FileHandleList;
 use elfshaker::repo::{PackId, Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "list";
@@ -82,10 +81,7 @@ fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Err
         // TODO: Provide an snapshot iterator instead.
         let snapshot = pack_index.find_snapshot(snapshot.tag()).unwrap();
         // Get a snapshot with a complete file list.
-        let file_count = match snapshot.list() {
-            FileHandleList::Complete(list) => list.len(),
-            _ => unreachable!(),
-        };
+        let file_count = snapshot.n_added();
         table.push([snapshot.tag().to_owned(), file_count.to_string()]);
     }
 

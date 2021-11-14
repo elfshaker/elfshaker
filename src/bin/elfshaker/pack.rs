@@ -84,9 +84,6 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // TODO(peterwaller-arm): Compute deltas as they are pushed.
-    new_index.use_file_list_deltas()?;
-
     // Parse --frames
     let frames: u32 = match matches.value_of("frames").unwrap().parse()? {
         0 => {

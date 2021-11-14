@@ -200,7 +200,7 @@ fn leak_static_str(s: String) -> &'static str {
 /// This is the built-in heuristic that tells us how many frames to use based on
 /// the data size. 1 frame / 512 MiB
 const FRAME_PER_DATA_SIZE: u64 = 512 * 1024 * 1024;
-fn get_frame_size_hint(loose_size: u64) -> u32 {
+fn get_frame_size_hint(object_size_total: u64) -> u32 {
     // Divide by FRAME_PER_DATA_SIZE, rounding up
-    ((loose_size + FRAME_PER_DATA_SIZE - 1) / FRAME_PER_DATA_SIZE) as u32
+    ((object_size_total + FRAME_PER_DATA_SIZE - 1) / FRAME_PER_DATA_SIZE) as u32
 }

@@ -7,7 +7,7 @@ use crate::progress::ProgressReporter;
 use crate::repo::run_in_parallel;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
-use std::{fs::File, io, io::Read, path::Path};
+use std::{fs, fs::File, io, io::Read, path::Path};
 use zstd::stream::raw::CParameter;
 use zstd::Encoder;
 
@@ -16,11 +16,8 @@ pub fn compute_checksums<P>(paths: &[P]) -> io::Result<Vec<ObjectChecksum>>
 where
     P: AsRef<Path> + Sync,
 {
-    run_in_parallel(num_cpus::get(), paths.iter(), |x| {
-        let mut buf = vec![];
-        let mut file = File::open(&x)?;
-        file.read_to_end(&mut buf)?;
-
+    run_in_parallel(num_cpus::get(), paths.iter(), |path| {
+        let buf = fs::read(path)?;
         let checksum_buf = &mut [0u8; 20];
         let mut hasher = Sha1::new();
         hasher.input(&buf);

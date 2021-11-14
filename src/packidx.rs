@@ -3,7 +3,7 @@
 
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
-use crate::pathpool::{EntryPool, Handle};
+use crate::entrypool::{EntryPool, Handle};
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -99,8 +99,8 @@ impl ObjectEntry {
 
 /// A [`FileHandle`] identifies a file stored in a pack. It contains two
 /// handles: a [`PathHandle`], which can be used to get the path of the file
-/// from the [`PathPool`], and an [`ObjectHandle`], which can be used to get the
-/// corresponding [`ObjectEntry`].
+/// from the index path_pool, and an [`ObjectHandle`], which can be used to get
+/// the corresponding [`ObjectEntry`].
 ///
 /// [`FileEntry`] and [`FileHandle`] can both be used to find the path and
 /// object of a file, but [`FileHandle`] has an additional level of indirection,

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
+use std::iter::FromIterator;
 
 /// Error type used in the packidx module.
 #[derive(Debug, Clone)]
@@ -106,7 +107,7 @@ impl ObjectEntry {
 /// because it stores handles, not the actual values themselves.
 ///
 /// [`FileHandle`] is the representation that gets written to disk.
-#[derive(Hash, PartialEq, Clone, Serialize, Deserialize, Debug)]
+#[derive(Hash, PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct FileHandle {
     pub path: PathHandle,
     // Index into [`PackIndex::objects`].
@@ -129,6 +130,18 @@ pub struct ChangeSet<T> {
     removed: Vec<T>,
 }
 
+impl FromIterator<FileHandle> for ChangeSet<FileHandle> {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = FileHandle>,
+    {
+        Self {
+            added: iter.into_iter().collect(),
+            removed: Vec::new(),
+        }
+    }
+}
+
 impl<T> ChangeSet<T> {
     pub fn new(added: Vec<T>, removed: Vec<T>) -> Self {
         Self { added, removed }
@@ -142,69 +155,29 @@ impl<T> ChangeSet<T> {
     }
 }
 
-/// A list of packed files can be stored either as a complete list of file
-/// references or as a delta to be applied to the previous list.
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub enum FileHandleList {
-    Complete(Vec<FileHandle>),
-    Delta(ChangeSet<FileHandle>),
-}
-
 /// A snapshot is identified by a string tag and specifies a list of files.
 ///
 /// The list of files can be a complete list or a list diff.
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Snapshot {
     tag: String,
-    list: FileHandleList,
+    list: ChangeSet<FileHandle>,
 }
 
 impl Snapshot {
-    pub fn new(tag: &str, list: FileHandleList) -> Self {
+    pub fn new(tag: &str, list: ChangeSet<FileHandle>) -> Self {
         Self {
             tag: tag.to_owned(),
             list,
         }
     }
 
+    pub fn n_added(&self) -> usize {
+        self.list.added.len()
+    }
+
     pub fn tag(&self) -> &str {
         &self.tag
-    }
-
-    pub fn list(&self) -> &FileHandleList {
-        &self.list
-    }
-
-    pub fn compute_deltas<'a, I>(mut snapshots: I) -> Result<Vec<Snapshot>, PackError>
-    where
-        I: Iterator<Item = &'a Snapshot>,
-    {
-        let mut results: Vec<Snapshot> = vec![];
-        match snapshots.next() {
-            Some(first) => results.push(first.clone()),
-            None => return Ok(vec![]),
-        };
-        // We keep track of the complete set of files at the current snapshot.
-        let mut complete: HashSet<FileHandle> = results.last().unwrap().create_set()?;
-        for snapshot in snapshots {
-            match &snapshot.list {
-                FileHandleList::Complete(c) => {
-                    let set: HashSet<_, _> = c.iter().cloned().collect();
-                    let changes = Self::get_changes(&mut complete, &set);
-                    results.push(Snapshot {
-                        tag: snapshot.tag.clone(),
-                        list: changes,
-                    });
-                }
-                FileHandleList::Delta(d) => {
-                    // Snapshot is already in delta format.
-                    Self::apply_changes(&mut complete, d);
-                    results.push(snapshot.clone());
-                }
-            }
-        }
-
-        Ok(results)
     }
 
     fn apply_changes(set: &mut HashSet<FileHandle>, changes: &ChangeSet<FileHandle>) {
@@ -212,10 +185,14 @@ impl Snapshot {
             assert!(set.remove(removed));
         }
         for added in &changes.added {
-            assert!(set.insert(added.clone()));
+            assert!(set.insert(*added));
         }
     }
-    fn get_changes(set: &mut HashSet<FileHandle>, next: &HashSet<FileHandle>) -> FileHandleList {
+
+    pub fn get_changes(
+        set: &mut HashSet<FileHandle>,
+        next: &HashSet<FileHandle>,
+    ) -> ChangeSet<FileHandle> {
         let mut added = vec![];
         let mut removed = vec![];
 
@@ -224,7 +201,7 @@ impl Snapshot {
             // Look for things that are in the previous snapshot `set`,
             // but not in the snapshot after that `next`.
             if !next.contains(file) {
-                removed.push(file.clone());
+                removed.push(*file);
             }
         }
 
@@ -232,33 +209,20 @@ impl Snapshot {
             // Look for things that are in the new snapshot,
             // but not in the one preceding it.
             if !set.contains(file) {
-                added.push(file.clone());
+                added.push(*file);
             }
         }
 
         for file in &added {
             // File was added in the new snapshot
-            assert!(set.insert(file.clone()));
+            assert!(set.insert(*file));
         }
         for file in &removed {
             // File was removed in the new snapshot
             assert!(set.remove(file));
         }
 
-        FileHandleList::Delta(ChangeSet { added, removed })
-    }
-
-    fn create_set(&self) -> Result<HashSet<FileHandle>, PackError> {
-        let mut set = HashSet::new();
-        match &self.list {
-            FileHandleList::Complete(c) => {
-                for file in c {
-                    assert!(set.insert(file.clone()));
-                }
-            }
-            FileHandleList::Delta(_) => return Err(PackError::CompleteListNeeded),
-        }
-        Ok(set)
+        ChangeSet { added, removed }
     }
 }
 
@@ -285,6 +249,10 @@ pub struct PackIndex {
     path_pool: PathPool,
     objects: Vec<ObjectEntry>,
     snapshots: Vec<Snapshot>,
+
+    // When snapshots are pushed, maintain the current state of the filesystem.
+    #[serde(skip)]
+    current: HashSet<FileHandle>,
 }
 
 impl PackIndex {
@@ -293,6 +261,7 @@ impl PackIndex {
             path_pool,
             objects,
             snapshots,
+            current: HashSet::new(),
         }
     }
 
@@ -309,41 +278,18 @@ impl PackIndex {
     }
 
     pub fn find_snapshot(&self, tag: &str) -> Option<Snapshot> {
-        let snapshot_idx = self.snapshots.iter().position(|s| s.tag == tag)?;
-        let base_idx = match self.snapshots[0..=snapshot_idx]
-            .iter()
-            .rposition(|s| matches!(s.list, FileHandleList::Complete(_)))
-        {
-            Some(x) => x,
-            None => panic!("{:?}", PackError::CompleteListNeeded),
-        };
-
-        let base_snapshot = &self.snapshots[base_idx];
-        if base_snapshot.tag == tag {
-            return Some(base_snapshot.clone());
-        }
-
-        let mut set = Snapshot::create_set(base_snapshot).unwrap();
-
-        for snapshot in self.snapshots[base_idx + 1..=snapshot_idx].iter() {
-            match snapshot.list {
-                FileHandleList::Delta(ref d) => {
-                    Snapshot::apply_changes(&mut set, d);
-                }
-                FileHandleList::Complete(_) => unreachable!(),
+        let mut current = HashSet::new();
+        for snapshot in &self.snapshots {
+            Snapshot::apply_changes(&mut current, &snapshot.list);
+            if snapshot.tag == tag {
+                return Some(Snapshot {
+                    tag: tag.into(),
+                    list: ChangeSet::from_iter(current),
+                });
             }
         }
 
-        Some(Snapshot {
-            tag: tag.into(),
-            list: FileHandleList::Complete(set.into_iter().collect()),
-        })
-    }
-
-    /// Converts all snapshots' file lists (but the first) to the delta/changeset format.
-    pub fn use_file_list_deltas(&mut self) -> Result<(), PackError> {
-        self.snapshots = Snapshot::compute_deltas(self.snapshots().iter())?;
-        Ok(())
+        None
     }
 
     /// Applies a new ordering to the objects entries ([`PackIndex::objects`]).
@@ -413,12 +359,8 @@ impl PackIndex {
             .find_snapshot(tag)
             .ok_or_else(|| PackError::SnapshotNotFound(tag.to_owned()))?;
 
-        // Convert the FileHandleList into a list of entries to write to disk.
-        let entries = match snapshot.list {
-            FileHandleList::Complete(ref list) => self.entries(list.iter().cloned())?,
-            _ => unreachable!(),
-        };
-        Ok(entries)
+        assert_eq!(0, snapshot.list.removed.len());
+        self.entries(snapshot.list.added.into_iter())
     }
 
     /// Create and add a new snapshot compatible with the loose
@@ -450,7 +392,7 @@ impl PackIndex {
             .map(|(i, o)| (o.checksum, i))
             .collect();
 
-        let files: Vec<_> = input
+        let files = input
             .iter()
             .map(|e| {
                 FileHandle::new(
@@ -460,9 +402,10 @@ impl PackIndex {
             })
             .collect();
 
-        // Finally, push the new snapshot
-        self.snapshots
-            .push(Snapshot::new(tag, FileHandleList::Complete(files)));
+        // Compute delta against last pushed snapshot (temporary implementation).
+        let changeset = Snapshot::get_changes(&mut self.current, &files);
+        self.current = files;
+        self.snapshots.push(Snapshot::new(tag, changeset));
 
         Ok(())
     }
@@ -492,21 +435,12 @@ where
     F: Fn(&mut FileHandle),
 {
     for snapshot in snapshots {
-        match snapshot.list {
-            FileHandleList::Complete(ref mut files) => {
-                for file in files {
-                    f(file);
-                }
-            }
-            FileHandleList::Delta(ref mut changeset) => {
-                for file in &mut changeset.added {
-                    f(file);
-                }
-                for file in &mut changeset.removed {
-                    f(file);
-                }
-            }
-        };
+        for file in &mut snapshot.list.added {
+            f(file);
+        }
+        for file in &mut snapshot.list.removed {
+            f(file);
+        }
     }
 }
 

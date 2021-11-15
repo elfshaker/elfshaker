@@ -239,13 +239,24 @@ impl Snapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileEntry {
     pub path: OsString,
-    pub object: ObjectEntry,
+    pub checksum: ObjectChecksum,
+    pub metadata: ObjectMetadata,
 }
 
 impl FileEntry {
-    pub fn new(path: OsString, object: ObjectEntry) -> Self {
-        Self { path, object }
+    pub fn new(path: OsString, checksum: ObjectChecksum, metadata: ObjectMetadata) -> Self {
+        Self {
+            path,
+            checksum,
+            metadata,
+        }
     }
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ObjectMetadata {
+    pub offset: u64,
+    pub size: u64,
 }
 
 /// Contains the metadata needed to extract files from a pack file.
@@ -359,7 +370,14 @@ impl PackIndex {
                     .objects
                     .get(x.object.0 as usize)
                     .ok_or(PackError::ObjectNotFound)?;
-                Ok(FileEntry::new(path.clone(), object.clone()))
+                Ok(FileEntry::new(
+                    path.clone(),
+                    object.checksum,
+                    ObjectMetadata {
+                        offset: object.offset,
+                        size: object.size,
+                    },
+                ))
             })
             .collect::<Result<Vec<_>, PackError>>()
     }
@@ -389,8 +407,8 @@ impl PackIndex {
         // the loose storage
         let new_objects: Vec<_> = input
             .iter()
-            .filter(|x| !existing_objects.contains(&x.object.checksum))
-            .map(|x| x.object.clone())
+            .filter(|x| !existing_objects.contains(&x.checksum))
+            .map(|x| ObjectEntry::new(x.checksum, x.metadata.offset, x.metadata.size))
             .collect();
 
         // Add the new set of objects.
@@ -408,7 +426,7 @@ impl PackIndex {
             .map(|e| {
                 FileHandle::new(
                     self.path_pool.get_or_insert(&e.path),
-                    ObjectHandle(object_indices[&e.object.checksum] as u32),
+                    ObjectHandle(object_indices[&e.checksum] as u32),
                 )
             })
             .collect();

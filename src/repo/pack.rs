@@ -25,8 +25,8 @@ use super::constants::{
 use super::error::Error;
 use super::repository::Repository;
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
-use crate::log::measure_ok;
-use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
+use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
+use crate::{log::measure_ok, packidx::ObjectMetadata};
 
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
 const EXTRA_ID_CHARS: &[char] = &['-', '_', '/'];
@@ -452,7 +452,7 @@ impl Pack {
             .flat_map(|entries| {
                 entries
                     .iter()
-                    .map(|e| e.object.offset + e.object.size)
+                    .map(|e| e.metadata.offset + e.metadata.offset)
                     .max()
             })
             .sum::<u64>();
@@ -573,17 +573,17 @@ fn assign_to_frames(
             .iter()
             // Find the index of the frame containing the object (objects are
             // assumed to not be split across two frames)
-            .rposition(|&x| x <= entry.object.offset)
+            .rposition(|&x| x <= entry.metadata.offset)
             .ok_or(Error::CorruptPack)?;
         // Compute the offset relative to that frame.
-        let local_offset = entry.object.offset - frame_decompressed_offset[frame_index];
+        let local_offset = entry.metadata.offset - frame_decompressed_offset[frame_index];
         let local_entry = FileEntry::new(
             entry.path.clone(),
-            ObjectEntry::new(
-                entry.object.checksum,
-                local_offset, // Replace global offset -> local offset
-                entry.object.size,
-            ),
+            entry.checksum,
+            ObjectMetadata {
+                offset: local_offset, // Replace global offset -> local offset
+                size: entry.metadata.size,
+            },
         );
         frames[frame_index].push(local_entry);
     }
@@ -656,8 +656,8 @@ fn extract_files(
     let mut entries: Vec<FileEntry> = entries.to_vec();
     // Sort objects to allow for forward-only seeking
     entries.sort_by(|x, y| {
-        let offset_x = x.object.offset;
-        let offset_y = y.object.offset;
+        let offset_x = x.metadata.offset;
+        let offset_y = y.metadata.offset;
         offset_x.cmp(&offset_y)
     });
 
@@ -669,25 +669,25 @@ fn extract_files(
         let mut path_buf = PathBuf::new();
         let mut pos = 0;
         for entry in entries {
-            let object = entry.object;
+            let metadata = &entry.metadata;
             // Seek forward
-            let discard_bytes = object.offset - pos;
+            let discard_bytes = metadata.offset - pos;
             // Check if we need to read a new object.
             // The current position in stream can be AFTER the object offset only
             // if the previous and this object are the same. This is because the objects
             // are sorted by offset, and the current position is set to the offset at the
             // end of each object, after that object is consumed.
-            if pos <= object.offset {
+            if pos <= metadata.offset {
                 stats.seek_time += measure_ok(|| reader.seek(discard_bytes))?.0.as_secs_f64();
                 // Resize buf
-                buf.resize(object.size as usize, 0);
+                buf.resize(metadata.size as usize, 0);
                 // Read object
                 stats.object_time += measure_ok(|| reader.read_exact(&mut buf[..]))?
                     .0
                     .as_secs_f64();
-                pos = object.offset + object.size;
+                pos = metadata.offset + metadata.size;
                 if verify {
-                    stats.verify_time += measure_ok(|| verify_object(&buf[..], &object.checksum))?
+                    stats.verify_time += measure_ok(|| verify_object(&buf[..], &entry.checksum))?
                         .0
                         .as_secs_f64();
                 }

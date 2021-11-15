@@ -23,9 +23,12 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{create_temp_path, ensure_dir, get_last_modified, write_file_atomic};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
-use crate::batch;
-use crate::packidx::{FileEntry, ObjectChecksum, ObjectEntry, PackError, PackIndex};
+use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
+use crate::{
+    batch,
+    packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
+};
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 
@@ -447,7 +450,11 @@ impl Repository {
 
             Ok(FileEntry::new(
                 file_path.into(),
-                ObjectEntry::loose(checksum, buf.len() as u64),
+                checksum,
+                ObjectMetadata {
+                    offset: LOOSE_OBJECT_OFFSET,
+                    size: buf.len() as u64,
+                },
             ))
         })
         .into_iter()
@@ -639,12 +646,12 @@ impl Repository {
             dest_path.push(&entry.path);
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;
-            fs::copy(self.loose_object_path(&entry.object.checksum), &dest_path)?;
+            fs::copy(self.loose_object_path(&entry.checksum), &dest_path)?;
         }
 
         if verify {
             let checksums = batch::compute_checksums(&dest_paths)?;
-            let expected_checksums = entries.iter().map(|e| &e.object.checksum);
+            let expected_checksums = entries.iter().map(|e| &e.checksum);
             for (expected, actual) in expected_checksums.zip(checksums) {
                 if *expected != actual {
                     return Err(PackError::ChecksumMismatch(*expected, actual).into());
@@ -668,11 +675,11 @@ impl Repository {
         // but not, for example, the offset of the object in the pack file.
         let from_lookup: HashMap<_, _> = from_entries
             .iter()
-            .map(|e| ((&e.path, &e.object.checksum), e))
+            .map(|e| ((&e.path, &e.checksum), e))
             .collect();
         let to_lookup: HashMap<_, _> = to_entries
             .iter()
-            .map(|e| ((&e.path, &e.object.checksum), e))
+            .map(|e| ((&e.path, &e.checksum), e))
             .collect();
 
         let mut added = vec![];
@@ -820,7 +827,9 @@ mod tests {
             0xFA, 0xF0, 0xDE, 0xAD, 0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0, 0xFA, 0xF0, 0xDE, 0xAD,
             0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0,
         ];
-        let repo = Repository{path: "/repo".into()};
+        let repo = Repository {
+            path: "/repo".into(),
+        };
         let path = repo.loose_object_path(&checksum);
         assert_eq!(
             format!(
@@ -911,16 +920,16 @@ mod tests {
         assert_eq!(2, added.len());
         assert!(added
             .iter()
-            .any(|e| path_a == e.path && path_a_new_checksum == e.object.checksum));
+            .any(|e| path_a == e.path && path_a_new_checksum == e.checksum));
         assert!(added
             .iter()
-            .any(|e| path_b == e.path && path_b_new_checksum == e.object.checksum));
+            .any(|e| path_b == e.path && path_b_new_checksum == e.checksum));
         assert_eq!(2, removed.len());
         assert!(removed
             .iter()
-            .any(|e| path_a == e.path && path_a_old_checksum == e.object.checksum));
+            .any(|e| path_a == e.path && path_a_old_checksum == e.checksum));
         assert!(removed
             .iter()
-            .any(|e| path_b == e.path && path_b_old_checksum == e.object.checksum));
+            .any(|e| path_b == e.path && path_b_old_checksum == e.checksum));
     }
 }

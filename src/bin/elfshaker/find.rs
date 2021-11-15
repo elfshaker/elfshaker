@@ -14,8 +14,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let mut table = vec![];
     for pack_id in repo.packs()? {
-        for snapshot in repo.load_index(&pack_id)?.snapshots() {
-            table.push([snapshot.tag().to_string(), pack_id.to_string()])
+        for snapshot in repo.load_index(&pack_id)?.snapshot_names() {
+            table.push([snapshot.to_string(), pack_id.to_string()])
         }
     }
 
@@ -25,12 +25,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         .flat_map(|p| {
             repo.load_index(&p).map(|pack_index| {
                 pack_index
-                    .snapshots()
+                    .snapshot_names()
                     .iter()
                     .filter_map(|s| {
-                        s.tag()
-                            .contains(term)
-                            .then(|| std::array::IntoIter::new([s.tag().to_owned(), p.to_string()]))
+                        s.contains(term)
+                            .then(|| std::array::IntoIter::new([s.to_string(), p.to_string()]))
                     })
                     .collect::<Vec<_>>()
             })

@@ -77,10 +77,10 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             "packing non-loose indexes not yet supported"
         );
         let index = repo.load_index(pack_id)?;
-        eprintln!("Packing {} {}", pack_id, index.snapshots().len());
-        for s in index.snapshots() {
-            let entries = index.entries_from_snapshot(s.tag())?;
-            new_index.push_snapshot(s.tag(), entries)?;
+        eprintln!("Packing {} {}", pack_id, index.snapshot_names().len());
+        for s in index.snapshot_names() {
+            let entries = index.entries_from_snapshot(s)?;
+            new_index.push_snapshot(s.to_owned(), entries)?;
         }
     }
 

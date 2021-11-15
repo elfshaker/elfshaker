@@ -61,7 +61,7 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
             match pack_id {
                 PackId::Pack(s) => s,
             },
-            pack_index.snapshots().len().to_string(),
+            pack_index.snapshot_names().len().to_string(),
             size_str,
         ]);
     }
@@ -77,12 +77,12 @@ fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Err
     let mut table = vec![];
 
     let pack_index = repo.load_index(&pack)?;
-    for snapshot in pack_index.snapshots() {
+    for snapshot in pack_index.snapshot_names() {
         // TODO: Provide an snapshot iterator instead.
-        let snapshot = pack_index.find_snapshot(snapshot.tag()).unwrap();
-        // Get a snapshot with a complete file list.
-        let file_count = snapshot.n_added();
-        table.push([snapshot.tag().to_owned(), file_count.to_string()]);
+        // EXPENSIVE!
+        let entries = pack_index.resolve_snapshot(snapshot).unwrap();
+        let file_count = entries.len();
+        table.push([snapshot.to_owned(), file_count.to_string()]);
     }
 
     print_table(

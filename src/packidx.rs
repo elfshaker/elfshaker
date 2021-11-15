@@ -68,7 +68,7 @@ pub const LOOSE_OBJECT_OFFSET: u64 = std::u64::MAX;
 /// [`FileHandle`] is the representation that gets written to disk.
 #[derive(Hash, PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct FileHandle {
-    pub path: Handle, // offset into path_pool
+    pub path: Handle,   // offset into path_pool
     pub object: Handle, // ofset into object_pool
 }
 
@@ -215,11 +215,12 @@ pub struct ObjectMetadata {
 /// Contains the metadata needed to extract files from a pack file.
 #[derive(Serialize, Deserialize)]
 pub struct PackIndex {
+    snapshot_names: Vec<String>,
+    snapshot_deltas: Vec<ChangeSet<FileHandle>>,
+
     path_pool: EntryPool<OsString>,
     object_pool: EntryPool<ObjectChecksum>,
     object_metadata: HashMap<Handle, ObjectMetadata>,
-
-    snapshots: Vec<Snapshot>,
 
     // When snapshots are pushed, maintain the current state of the filesystem.
     #[serde(skip)]
@@ -235,10 +236,13 @@ impl Default for PackIndex {
 impl PackIndex {
     pub fn new() -> Self {
         Self {
+            snapshot_names: Vec::new(),
+            snapshot_deltas: Vec::new(),
+
             path_pool: EntryPool::new(),
             object_pool: EntryPool::new(),
             object_metadata: HashMap::new(),
-            snapshots: Vec::new(),
+
             current: HashSet::new(),
         }
     }
@@ -316,55 +320,41 @@ impl PackIndex {
         })
     }
 
-    pub fn snapshots(&self) -> &[Snapshot] {
-        &self.snapshots
+    pub fn snapshot_names(&self) -> &Vec<String> {
+        &self.snapshot_names
     }
-
-    /// Returns true if the pack index is empty.
-    pub fn is_empty(&self) -> bool {
-        self.snapshots.is_empty()
+    pub fn has_snapshot(&self, needle: &str) -> bool {
+        self.snapshot_names.iter().any(|s| s.eq(needle))
     }
-
-    pub fn find_snapshot(&self, tag: &str) -> Option<Snapshot> {
+    pub fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
         let mut current = HashSet::new();
-        for snapshot in &self.snapshots {
-            Snapshot::apply_changes(&mut current, &snapshot.list);
-            if snapshot.tag == tag {
-                return Some(Snapshot {
-                    tag: tag.into(),
-                    list: ChangeSet::from_iter(current),
-                });
+        for (tag, delta) in self.snapshot_names.iter().zip(self.snapshot_deltas.iter()) {
+            Snapshot::apply_changes(&mut current, delta);
+            if tag == needle {
+                return Some(current.into_iter().collect());
             }
         }
-
         None
     }
     pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<FileEntry>, PackError> {
-        let snapshot = self
-            .find_snapshot(tag)
+        let handles = self
+            .resolve_snapshot(tag)
             .ok_or_else(|| PackError::SnapshotNotFound(tag.to_owned()))?;
 
-        assert_eq!(0, snapshot.list.removed.len());
-        snapshot
-            .list
-            .added
-            .iter()
-            .map(|h| self.handle_to_entry(h))
+        handles
+            .into_iter()
+            .map(|h| self.handle_to_entry(&h))
             .collect::<Result<Vec<_>, _>>()
     }
-
     /// Create and add a new snapshot compatible with the loose
     /// index format. The list of [`FileEntry`] is the files to record in the snapshot.
     pub fn push_snapshot(
         &mut self,
-        tag: &str,
+        tag: String,
         input: impl IntoIterator<Item = FileEntry>,
     ) -> Result<(), PackError> {
-        if self.snapshots().iter().any(|s| s.tag == tag) {
-            return Err(PackError::SnapshotAlreadyExists(
-                "<unknown>".into(),
-                tag.to_owned(),
-            ));
+        if self.snapshot_names.contains(&tag) {
+            return Err(PackError::SnapshotAlreadyExists("<unknown>".into(), tag));
         }
 
         let files = input
@@ -374,9 +364,10 @@ impl PackIndex {
             .collect::<Result<_, _>>()?;
 
         // Compute delta against last pushed snapshot (temporary implementation).
-        let changeset = Snapshot::get_changes(&mut self.current, &files);
+        let delta = Snapshot::get_changes(&mut self.current, &files);
         self.current = files;
-        self.snapshots.push(Snapshot::new(tag, changeset));
+        self.snapshot_names.push(tag);
+        self.snapshot_deltas.push(delta);
         Ok(())
     }
 }

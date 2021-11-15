@@ -258,12 +258,7 @@ impl Repository {
             .into_iter()
             .filter_map(|pack_id| {
                 self.load_index(&pack_id)
-                    .map(|idx| {
-                        idx.snapshots()
-                            .iter()
-                            .any(|s| s.tag() == snapshot)
-                            .then(|| pack_id)
-                    })
+                    .map(|idx| idx.has_snapshot(snapshot).then(|| pack_id))
                     .transpose()
             })
             .collect::<Result<Vec<PackId>, Error>>()?;
@@ -461,7 +456,7 @@ impl Repository {
         .collect::<io::Result<Vec<_>>>()?;
 
         let mut index = PackIndex::new();
-        index.push_snapshot(snapshot.tag(), pack_entries)?;
+        index.push_snapshot(snapshot.tag().to_owned(), pack_entries)?;
 
         let loose_path = self.path().join(REPO_DIR).join(PACKS_DIR).join(LOOSE_DIR);
         ensure_dir(&loose_path)?;

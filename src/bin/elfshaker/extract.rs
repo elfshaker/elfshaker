@@ -42,11 +42,9 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
                 h,
             );
             return Ok(());
-
-        },
-        _ => {},
+        }
+        _ => {}
     };
-
 
     let mut opts = ExtractOptions::default();
     opts.set_verify(is_verify);

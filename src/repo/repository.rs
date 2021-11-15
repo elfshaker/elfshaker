@@ -304,7 +304,7 @@ impl Repository {
                 .with_extension(PACK_INDEX_EXTENSION),
         };
         info!("Load index {} {}", pack_id, pack_index_path.display());
-        Pack::parse_index(std::io::BufReader::new(File::open(pack_index_path)?))
+        Ok(PackIndex::load(pack_index_path)?)
     }
 
     /// Checks-out the specified snapshot.
@@ -477,12 +477,7 @@ impl Repository {
         let loose_path = self.path().join(REPO_DIR).join(PACKS_DIR).join(LOOSE_DIR);
         ensure_dir(&loose_path)?;
 
-        let mut buf = vec![];
-        // This should not fail, unless there is an error in the implementation.
-        rmp_serde::encode::write(&mut buf, &index).expect("Serialization failed!");
-        write_file_atomic(
-            buf.as_slice(),
-            &self.temp_dir(),
+        index.save(
             &loose_path
                 .join(snapshot.tag())
                 .with_extension(PACK_INDEX_EXTENSION),
@@ -604,15 +599,11 @@ impl Repository {
         pack_writer.flush()?;
         drop(pack_writer);
 
-        // Serialize the index.
-        let mut index_bytes: Vec<u8> = vec![];
-        rmp_serde::encode::write(&mut index_bytes, &index).expect("Serialization failed!");
-
         let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
         info!("Write index: {}", index_path.display());
-        write_file_atomic(index_bytes.as_slice(), &temp_dir, &index_path)?;
+        index.save(index_path)?;
 
-        // Finally, move tha .pack file itself to the packs/ dir.
+        // Finally, move the .pack file itself to the packs/ dir.
         fs::rename(&temp_path, &pack_path)?;
 
         Ok(())

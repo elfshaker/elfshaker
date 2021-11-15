@@ -307,7 +307,7 @@ impl Pack {
         pack_path.set_extension(PACK_EXTENSION);
 
         info!("Reading pack index {:?}...", pack_index_path);
-        let pack_index = Self::parse_index(std::io::BufReader::new(File::open(pack_index_path)?))?;
+        let pack_index = PackIndex::load(&pack_index_path)?;
 
         info!("Opening pack file {:?}...", pack_path);
 
@@ -374,21 +374,6 @@ impl Pack {
         let frame_reader = PackReader::Compressed(reader);
 
         Ok((file_size, header, vec![frame_reader]))
-    }
-
-    /// Parses the data fom the reader into a [`PackIndex`].
-    pub fn parse_index<R>(pack_index: R) -> Result<PackIndex, Error>
-    where
-        R: Read,
-    {
-        let index: PackIndex = rmp_serde::decode::from_read(pack_index).map_err(|e| match e {
-            // Bubble IO errors up.
-            rmp_serde::decode::Error::InvalidMarkerRead(e)
-            | rmp_serde::decode::Error::InvalidDataRead(e) => Error::IOError(e),
-            // Everything else indicates a broken pack index and is non-actionable.
-            _ => Error::CorruptPackIndex,
-        })?;
-        Ok(index)
     }
 
     /// The base filename ([`Path::file_stem`]) of the pack.

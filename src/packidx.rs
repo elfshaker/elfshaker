@@ -6,15 +6,20 @@
 use crate::entrypool::{EntryPool, Handle};
 use crate::repo::partition_by_u64;
 
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use serde::de::{SeqAccess, Visitor};
+use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
+use std::fmt;
+use std::fs::File;
 use std::hash::Hash;
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::iter::FromIterator;
 use std::ops::ControlFlow;
+use std::path::Path;
 
 /// Error type used in the packidx module.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum PackError {
     CompleteListNeeded,
     PathNotFound(Handle),
@@ -23,6 +28,11 @@ pub enum PackError {
     /// A snapshot with that tag is already present in the pack
     SnapshotAlreadyExists(String, String),
     ChecksumMismatch(ObjectChecksum, ObjectChecksum),
+    IOError(std::io::Error),
+    DeserializeError(rmp_serde::decode::Error),
+    SerializeError(rmp_serde::encode::Error),
+    BadMagic,
+    BadPackVersion([u8; 4]),
 }
 
 impl std::error::Error for PackError {}
@@ -48,7 +58,38 @@ impl std::fmt::Display for PackError {
                 hex::encode(exp),
                 hex::encode(got)
             ),
+            PackError::IOError(e) => write!(f, "Reading pack index: {}", e),
+            PackError::DeserializeError(e) => {
+                write!(f, "Deserialization failed, corrupt pack index: {}", e)
+            }
+            PackError::SerializeError(e) => {
+                write!(f, "Serialization failed: {}", e)
+            }
+            PackError::BadMagic => write!(f, "Bad pack magic, expected ELFS!"),
+            PackError::BadPackVersion(v) => write!(
+                f,
+                "Pack version is too recent ({:?}), please upgrade elfshaker!",
+                v
+            ),
         }
+    }
+}
+
+impl From<std::io::Error> for PackError {
+    fn from(err: std::io::Error) -> Self {
+        Self::IOError(err)
+    }
+}
+
+impl From<rmp_serde::decode::Error> for PackError {
+    fn from(err: rmp_serde::decode::Error) -> Self {
+        Self::DeserializeError(err)
+    }
+}
+
+impl From<rmp_serde::encode::Error> for PackError {
+    fn from(err: rmp_serde::encode::Error) -> Self {
+        Self::SerializeError(err)
     }
 }
 
@@ -226,17 +267,17 @@ pub struct ObjectMetadata {
 }
 
 /// Contains the metadata needed to extract files from a pack file.
-#[derive(Serialize, Deserialize)]
 pub struct PackIndex {
     snapshot_names: Vec<String>,
     snapshot_deltas: Vec<ChangeSet<FileHandle>>,
 
     path_pool: EntryPool<OsString>,
     object_pool: EntryPool<ObjectChecksum>,
-    object_metadata: HashMap<Handle, ObjectMetadata>,
+    object_metadata: BTreeMap<Handle, ObjectMetadata>,
 
     // When snapshots are pushed, maintain the current state of the filesystem.
-    #[serde(skip)]
+    // Not stored on disk.
+    // TODO: Move this onto a separate builder class.
     current: HashSet<FileHandle>,
 }
 
@@ -254,7 +295,7 @@ impl PackIndex {
 
             path_pool: EntryPool::new(),
             object_pool: EntryPool::new(),
-            object_metadata: HashMap::new(),
+            object_metadata: BTreeMap::new(),
 
             current: HashSet::new(),
         }
@@ -395,5 +436,138 @@ impl PackIndex {
             }
         }
         Ok(None)
+    }
+}
+
+impl PackIndex {
+    pub fn load<P: AsRef<Path>>(p: P) -> Result<PackIndex, PackError> {
+        let rd = File::open(p.as_ref())?;
+        let mut rd = BufReader::new(rd);
+        Self::read_magic(&mut rd)?;
+
+        Ok(rmp_serde::decode::from_read(rd)?)
+    }
+
+    pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
+        // TODO: Use AtomicCreateFile.
+        let wr = File::create(p.as_ref())?;
+        let mut wr = BufWriter::new(wr);
+        Self::write_magic(&mut wr)?;
+
+        rmp_serde::encode::write(&mut wr, self)?;
+        Ok(())
+    }
+
+    fn read_magic(rd: &mut impl Read) -> Result<(), PackError> {
+        let mut magic = [0; 4];
+        rd.read_exact(&mut magic)?;
+        if magic.ne(&*b"ELFS") {
+            return Err(PackError::BadMagic);
+        }
+        let mut version = [0; 4];
+        rd.read_exact(&mut version)?;
+        if version.gt(&[0, 0, 0, 1]) {
+            return Err(PackError::BadPackVersion(version));
+        }
+        Ok(())
+    }
+
+    fn write_magic(wr: &mut impl Write) -> std::io::Result<()> {
+        wr.write_all(&*b"ELFS")?;
+        wr.write_all(&[0, 0, 0, 1])?;
+        Ok(())
+    }
+}
+
+struct VisitPackIndex {
+    load_mode: LoadMode,
+}
+
+#[derive(PartialEq)]
+enum LoadMode {
+    Full,
+    OnlySnapshots,
+}
+
+fn next_expecting<'de, T, V, E>(seq: &mut V) -> Result<T, E>
+where
+    T: Deserialize<'de>,
+    V: SeqAccess<'de>,
+    E: serde::de::Error + std::convert::From<<V as serde::de::SeqAccess<'de>>::Error>,
+{
+    seq.next_element::<T>()?
+        .ok_or_else(|| serde::de::Error::custom(format!("expected {}", std::any::type_name::<T>())))
+}
+
+impl<'de> Visitor<'de> for VisitPackIndex {
+    type Value = PackIndex;
+
+    fn visit_seq<V>(self, mut seq: V) -> Result<PackIndex, V::Error>
+    where
+        V: SeqAccess<'de>,
+    {
+        let mut result = PackIndex::new();
+        result.snapshot_names = next_expecting(&mut seq)?;
+        if self.load_mode == LoadMode::OnlySnapshots {
+            return Ok(result);
+        }
+        result.snapshot_deltas = next_expecting(&mut seq)?;
+        result.path_pool = next_expecting(&mut seq)?;
+        result.object_pool = next_expecting(&mut seq)?;
+        let md: Vec<ObjectMetadata> = next_expecting(&mut seq)?;
+        result.object_metadata = md
+            .into_iter()
+            .enumerate()
+            .map(|(i, md)| ((i as Handle), md))
+            .collect();
+
+        Ok(result)
+    }
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("PathIndex")
+    }
+}
+
+impl<'de> Deserialize<'de> for PackIndex {
+    fn deserialize<D>(deserializer: D) -> Result<PackIndex, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(VisitPackIndex {
+            load_mode: LoadMode::Full,
+        })
+    }
+}
+
+impl PackIndex {
+    fn deserialize_only_snapshots<'de, D>(deserializer: D) -> Result<PackIndex, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(VisitPackIndex {
+            load_mode: LoadMode::OnlySnapshots,
+        })
+    }
+}
+
+impl Serialize for PackIndex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut s = serializer.serialize_tuple(5)?;
+        s.serialize_element(&self.snapshot_names)?;
+        s.serialize_element(&self.snapshot_deltas)?;
+        s.serialize_element(&self.path_pool)?;
+        s.serialize_element(&self.object_pool)?;
+        // Ordering comes from BTreeMap keys, so is for free.
+        s.serialize_element(
+            &self
+                .object_metadata
+                .values()
+                .cloned()
+                .collect::<Vec<ObjectMetadata>>(),
+        )?;
+        s.end()
     }
 }

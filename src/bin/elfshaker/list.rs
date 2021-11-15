@@ -100,8 +100,8 @@ fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<()
     let entries = pack_index.entries_from_snapshot(snapshot.tag()).unwrap();
     for entry in entries {
         table.push([
-            hex::encode(entry.object.checksum).to_string(),
-            entry.object.size.to_string(),
+            hex::encode(entry.checksum).to_string(),
+            entry.metadata.size.to_string(),
             Path::display(entry.path.as_ref()).to_string(),
         ]);
     }

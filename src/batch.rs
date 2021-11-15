@@ -7,7 +7,11 @@ use crate::progress::ProgressReporter;
 use crate::repo::run_in_parallel;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
-use std::{fs, io::{self, Read, Write}, path::Path};
+use std::{
+    fs,
+    io::{self, Read, Write},
+    path::Path,
+};
 use zstd::stream::raw::CParameter;
 use zstd::Encoder;
 

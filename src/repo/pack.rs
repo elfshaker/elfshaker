@@ -525,15 +525,6 @@ fn write_object(buf: &[u8], path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-impl fmt::Debug for Pack {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Pack")
-            .field("name", &self.name)
-            .field("index", &self.index)
-            .finish()
-    }
-}
-
 /// Returns a list of the frame offsets, computed
 /// using the order and sizes of the given frames.
 fn compute_frame_offsets(frames: &[PackFrame]) -> Vec<u64> {
@@ -713,6 +704,10 @@ fn extract_files(
 mod tests {
     use super::*;
 
+    fn make_md(offset: u64, size: u64) -> ObjectMetadata {
+        ObjectMetadata { offset, size }
+    }
+
     #[test]
     fn pack_id_validation_works() {
         // VALID
@@ -752,8 +747,8 @@ mod tests {
             decompressed_size: 1000,
         }];
         let entries = [
-            FileEntry::new("A".into(), ObjectEntry::new([0; 20], 50, 200)),
-            FileEntry::new("B".into(), ObjectEntry::new([1; 20], 50, 200)),
+            FileEntry::new("A".into(), [0; 20], make_md(50, 1)),
+            FileEntry::new("B".into(), [1; 20], make_md(50, 1)),
         ];
         let result = assign_to_frames(&frames, &entries).unwrap();
         assert_eq!(1, result.len());
@@ -772,16 +767,16 @@ mod tests {
             },
         ];
         let entries = [
-            FileEntry::new("A".into(), ObjectEntry::new([0; 20], 800, 200)),
-            FileEntry::new("B".into(), ObjectEntry::new([1; 20], 1200, 200)),
+            FileEntry::new("A".into(), [0; 20], make_md(800, 200)),
+            FileEntry::new("B".into(), [1; 20], make_md(1200, 200)),
         ];
         let frame_1_entries = [
             // Offset is same
-            FileEntry::new("A".into(), ObjectEntry::new([0; 20], 800, 200)),
+            FileEntry::new("A".into(), [0; 20], make_md(800, 200)),
         ];
         let frame_2_entries = [
             // Offset 1200 -> 200
-            FileEntry::new("B".into(), ObjectEntry::new([1; 20], 200, 200)),
+            FileEntry::new("B".into(), [1; 20], make_md(200, 200)),
         ];
         let result = assign_to_frames(&frames, &entries).unwrap();
         assert_eq!(2, result.len());

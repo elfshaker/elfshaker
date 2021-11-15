@@ -80,30 +80,20 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         eprintln!("Packing {} {}", pack_id, index.snapshots().len());
         for s in index.snapshots() {
             let entries = index.entries_from_snapshot(s.tag())?;
-            new_index.push_snapshot(s.tag(), &entries)?;
+            new_index.push_snapshot(s.tag(), entries)?;
         }
     }
 
     // Parse --frames
     let frames: u32 = match matches.value_of("frames").unwrap().parse()? {
         0 => {
-            let loose_size = new_index.objects().iter().map(|o| o.size).sum();
+            let loose_size = new_index.object_size_total();
             let frames = get_frame_size_hint(loose_size);
             info!("--frames=0: using suggested number of frames = {}", frames);
             frames
         }
         n => n,
     };
-
-    // Reorder objects in a way that is suitable for compression.
-    let mut object_indices: Vec<_> = (0..new_index.objects().len()).collect();
-    // Sorting by object sizes has proven to be a good heuristic; we could allow
-    // user-configurable heuristics in the future. Another useful heuristic
-    // would be to group by name as well as size, e.g. key on (sum(size of
-    // objects of given name), name).
-    object_indices.sort_unstable_by_key(|&o| new_index.objects()[o].size);
-    // Apply the new indices.
-    new_index.permute_objects(&object_indices)?;
 
     // Print progress every 5%
     let reporter = create_percentage_print_reporter("Compressing objects", 5);
@@ -112,7 +102,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Create a pack using the ordered "loose" index.
     repo.create_pack(
         &pack,
-        &new_index,
+        new_index,
         &PackOptions {
             compression_level,
             // We don't expose the windowLog option yet.

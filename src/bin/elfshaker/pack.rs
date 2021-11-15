@@ -3,7 +3,7 @@
 
 use clap::{App, Arg, ArgMatches};
 use log::info;
-use std::{error::Error, str::FromStr};
+use std::{error::Error, ops::ControlFlow, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 use elfshaker::{
@@ -78,10 +78,13 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         );
         let index = repo.load_index(pack_id)?;
         eprintln!("Packing {} {}", pack_id, index.snapshot_names().len());
-        for s in index.snapshot_names() {
-            let entries = index.entries_from_snapshot(s)?;
-            new_index.push_snapshot(s.to_owned(), entries)?;
-        }
+        index.for_each_snapshot(|snapshot, entries| {
+            if let Err(e) = new_index.push_snapshot(snapshot.to_owned(), entries.clone()) {
+                ControlFlow::Break(Result::<(), _>::Err(e))
+            } else {
+                ControlFlow::Continue(())
+            }
+        })?;
     }
 
     // Parse --frames

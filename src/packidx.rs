@@ -9,7 +9,9 @@ use crate::repo::partition_by_u64;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::hash::Hash;
 use std::iter::FromIterator;
+use std::ops::ControlFlow;
 
 /// Error type used in the packidx module.
 #[derive(Debug, Clone)]
@@ -111,6 +113,15 @@ impl<T> ChangeSet<T> {
     pub fn removed(&self) -> &[T] {
         &self.removed
     }
+    pub fn map<F, U, E>(&self, f: F) -> Result<ChangeSet<U>, E>
+    where
+        F: Fn(&Vec<T>) -> Result<Vec<U>, E>,
+    {
+        Ok(ChangeSet {
+            added: f(&self.added)?,
+            removed: f(&self.removed)?,
+        })
+    }
 }
 
 /// A snapshot is identified by a string tag and specifies a list of files.
@@ -138,15 +149,17 @@ impl Snapshot {
         &self.tag
     }
 
-    fn apply_changes(set: &mut HashSet<FileHandle>, changes: &ChangeSet<FileHandle>) {
+    fn apply_changes<T>(set: &mut HashSet<T>, changes: &ChangeSet<T>)
+    where
+        T: Eq + Hash + Clone,
+    {
         for removed in &changes.removed {
             assert!(set.remove(removed));
         }
         for added in &changes.added {
-            assert!(set.insert(*added));
+            assert!(set.insert(added.clone()));
         }
     }
-
     pub fn get_changes(
         set: &mut HashSet<FileHandle>,
         next: &HashSet<FileHandle>,
@@ -189,7 +202,7 @@ impl Snapshot {
 /// This is a practical representation to have at runtime, but has a higher
 /// memory cost, compared to [`FileHandle`], contains handles to the path and to
 /// the object metadata.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileEntry {
     pub path: OsString,
     pub checksum: ObjectChecksum,
@@ -206,7 +219,7 @@ impl FileEntry {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct ObjectMetadata {
     pub offset: u64,
     pub size: u64,
@@ -336,14 +349,12 @@ impl PackIndex {
         }
         None
     }
-    pub fn entries_from_snapshot(&self, tag: &str) -> Result<Vec<FileEntry>, PackError> {
-        let handles = self
-            .resolve_snapshot(tag)
-            .ok_or_else(|| PackError::SnapshotNotFound(tag.to_owned()))?;
-
+    pub fn entries_from_handles<'l>(
+        &self,
+        handles: impl Iterator<Item = &'l FileHandle>,
+    ) -> Result<Vec<FileEntry>, PackError> {
         handles
-            .into_iter()
-            .map(|h| self.handle_to_entry(&h))
+            .map(|h| self.handle_to_entry(h))
             .collect::<Result<Vec<_>, _>>()
     }
     /// Create and add a new snapshot compatible with the loose
@@ -359,7 +370,6 @@ impl PackIndex {
 
         let files = input
             .into_iter()
-            .into_iter()
             .map(|e| self.entry_to_handle(&e))
             .collect::<Result<_, _>>()?;
 
@@ -369,5 +379,21 @@ impl PackIndex {
         self.snapshot_names.push(tag);
         self.snapshot_deltas.push(delta);
         Ok(())
+    }
+    // Call the closure F with materialized file entries for each snapshot.
+    pub fn for_each_snapshot<'l, F, S>(&'l self, mut f: F) -> Result<Option<S>, PackError>
+    where
+        F: FnMut(&'l str, &HashSet<FileEntry>) -> ControlFlow<S>,
+    {
+        let mut complete = HashSet::new();
+        let snapshot_deltas = self.snapshot_names.iter().zip(self.snapshot_deltas.iter());
+        for (snapshot, deltas) in snapshot_deltas {
+            let deltas = deltas.map(|handles| self.entries_from_handles(handles.iter()))?;
+            Snapshot::apply_changes(&mut complete, &deltas);
+            if let ControlFlow::Break(output) = f(snapshot, &complete) {
+                return Ok(Some(output));
+            }
+        }
+        Ok(None)
     }
 }

@@ -18,7 +18,7 @@ use std::{
 use log::{error, info, warn};
 use walkdir::WalkDir;
 
-use super::algo::{partition_by_u64, run_in_parallel};
+use super::algo::run_in_parallel;
 use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{create_temp_path, ensure_dir, get_last_modified, write_file_atomic};
@@ -461,7 +461,7 @@ impl Repository {
         .collect::<io::Result<Vec<_>>>()?;
 
         let mut index = PackIndex::new();
-        index.push_snapshot(snapshot.tag(), &pack_entries)?;
+        index.push_snapshot(snapshot.tag(), pack_entries)?;
 
         let loose_path = self.path().join(REPO_DIR).join(PACKS_DIR).join(LOOSE_DIR);
         ensure_dir(&loose_path)?;
@@ -492,7 +492,7 @@ impl Repository {
     pub fn create_pack(
         &mut self,
         pack: &PackId,
-        index: &PackIndex,
+        index: PackIndex,
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {
@@ -513,10 +513,10 @@ impl Repository {
         ensure_dir(&temp_dir)?;
         let temp_path = create_temp_path(&temp_dir);
 
+        let (index, ordering) = index.compute_object_offsets_and_ordering();
+
         // Gather a list of all objects to compress.
-        // The `index.objects()` list should be pre-sorted for optimal compression.
-        let object_partitions =
-            partition_by_u64(index.objects(), opts.num_frames, |o| o.size as u64);
+        let object_partitions = index.objects_partitioned_by_size(opts.num_frames, &ordering);
 
         let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
             / std::cmp::max(1, object_partitions.len()) as u32;
@@ -540,11 +540,11 @@ impl Repository {
             opts.num_workers as usize,
             object_partitions.into_iter(),
             |objects| {
-                let object_readers = objects.iter().map(|handle| {
+                let object_readers = objects.iter().map(|&handle| {
                     // TODO: Method of obtaining readers from packs? Or we can
                     // just assume packs first get unpacked.
                     Ok(Box::new(File::open(
-                        self.loose_object_path(&handle.checksum),
+                        self.loose_object_path(index.handle_to_checksum(handle)),
                     )?))
                 });
 
@@ -821,6 +821,11 @@ fn is_elfshaker_data_path(p: &Path) -> bool {
 mod tests {
     use super::*;
 
+    static EXAMPLE_MD: ObjectMetadata = ObjectMetadata {
+        size: 1,
+        offset: LOOSE_OBJECT_OFFSET,
+    };
+
     #[test]
     fn building_loose_object_paths_works() {
         let checksum = [
@@ -862,14 +867,8 @@ mod tests {
         let path = "/path/to/A";
         let old_checksum = [0; 20];
         let new_checksum = [1; 20];
-        let old_entries = [FileEntry::new(
-            path.into(),
-            ObjectEntry::loose(old_checksum, 1),
-        )];
-        let new_entries = [FileEntry::new(
-            path.into(),
-            ObjectEntry::loose(new_checksum, 1),
-        )];
+        let old_entries = [FileEntry::new(path.into(), old_checksum, EXAMPLE_MD)];
+        let new_entries = [FileEntry::new(path.into(), new_checksum, EXAMPLE_MD)];
         let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
         assert_eq!(1, added.len());
         assert_eq!(path, added[0].path);
@@ -885,12 +884,13 @@ mod tests {
         let path_b_old_checksum = [0; 20];
         let path_a_new_checksum = [1; 20];
         let old_entries = [
-            FileEntry::new(path_a.into(), ObjectEntry::loose(path_a_old_checksum, 1)),
-            FileEntry::new(path_b.into(), ObjectEntry::loose(path_b_old_checksum, 1)),
+            FileEntry::new(path_a.into(), path_a_old_checksum, EXAMPLE_MD),
+            FileEntry::new(path_b.into(), path_b_old_checksum, EXAMPLE_MD),
         ];
         let new_entries = [FileEntry::new(
             path_a.into(),
-            ObjectEntry::loose(path_a_new_checksum, 1),
+            path_a_new_checksum,
+            EXAMPLE_MD,
         )];
         let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
         assert_eq!(1, added.len());
@@ -909,12 +909,12 @@ mod tests {
         let path_b_old_checksum = [1; 20];
         let path_b_new_checksum = [0; 20];
         let old_entries = [
-            FileEntry::new(path_a.into(), ObjectEntry::loose(path_a_old_checksum, 1)),
-            FileEntry::new(path_b.into(), ObjectEntry::loose(path_b_old_checksum, 1)),
+            FileEntry::new(path_a.into(), path_a_old_checksum, EXAMPLE_MD),
+            FileEntry::new(path_b.into(), path_b_old_checksum, EXAMPLE_MD),
         ];
         let new_entries = [
-            FileEntry::new(path_a.into(), ObjectEntry::loose(path_a_new_checksum, 1)),
-            FileEntry::new(path_b.into(), ObjectEntry::loose(path_b_new_checksum, 1)),
+            FileEntry::new(path_a.into(), path_a_new_checksum, EXAMPLE_MD),
+            FileEntry::new(path_b.into(), path_b_new_checksum, EXAMPLE_MD),
         ];
         let (added, removed) = Repository::compute_entry_diff(&old_entries, &new_entries);
         assert_eq!(2, added.len());

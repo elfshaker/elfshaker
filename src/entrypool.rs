@@ -56,6 +56,10 @@ where
     pub fn lookup(&self, h: Handle) -> Option<&T> {
         self.entries.get(h as usize)
     }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.entries.iter()
+    }
 }
 
 impl<T> Default for EntryPool<T> {

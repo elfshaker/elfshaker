@@ -327,24 +327,40 @@ impl Repository {
         // Open the pack and find the snapshot specified in SnapshotId.
         let source_index = self.load_index(snapshot_id.pack())?;
 
-        let entries = source_index.entries_from_snapshot(snapshot_id.tag())?;
+        let entries = source_index
+            .resolve_snapshot(snapshot_id.tag())
+            .expect("failed to resolve snapshot"); // TODO: Temporary.
+        let entries = source_index.entries_from_handles(entries.iter())?;
+
         let (new_entries, old_entries) = if opts.reset || head.is_none() {
             // Extract all, remove nothing
             (entries, vec![])
         } else if let Some(head) = head {
             // HEAD and new snapshot packs might differ
             if snapshot_id.pack() == head.pack() {
-                let head_entries = source_index.entries_from_snapshot(head.tag())?;
+                let head_entries = source_index.entries_from_handles(
+                    source_index
+                        .resolve_snapshot(head.tag())
+                        .expect("failed to resolve snapshot")
+                        .iter(), // TODO: Temporary.
+                )?;
                 Self::compute_entry_diff(&head_entries, &entries)
             } else {
                 let head_index = self.load_index(head.pack())?;
-                let head_entries = head_index.entries_from_snapshot(head.tag()).map_err(|e| {
-                    if matches!(e, PackError::SnapshotNotFound(_)) {
-                        Error::BrokenHeadRef(Box::new(Error::PackError(e)))
-                    } else {
-                        Error::PackError(e)
-                    }
-                })?;
+                let head_entries = head_index
+                    .entries_from_handles(
+                        head_index
+                            .resolve_snapshot(head.tag())
+                            .expect("failed to resolve snapshot")
+                            .iter(), // TODO: Temporary.
+                    )
+                    .map_err(|e| {
+                        if matches!(e, PackError::SnapshotNotFound(_)) {
+                            Error::BrokenHeadRef(Box::new(Error::PackError(e)))
+                        } else {
+                            Error::PackError(e)
+                        }
+                    })?;
                 Self::compute_entry_diff(&head_entries, &entries)
             }
         } else {

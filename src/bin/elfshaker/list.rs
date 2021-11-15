@@ -2,7 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
-use std::{error::Error, path::Path};
+use std::{error::Error, ops::ControlFlow, path::Path};
 
 use super::utils::{format_size, open_repo_from_cwd, print_table};
 use elfshaker::repo::{PackId, Repository, SnapshotId};
@@ -76,14 +76,12 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
 fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    let pack_index = repo.load_index(&pack)?;
-    for snapshot in pack_index.snapshot_names() {
-        // TODO: Provide an snapshot iterator instead.
-        // EXPENSIVE!
-        let entries = pack_index.resolve_snapshot(snapshot).unwrap();
-        let file_count = entries.len();
-        table.push([snapshot.to_owned(), file_count.to_string()]);
-    }
+    repo.load_index(&pack)?
+        .for_each_snapshot(|snapshot, entries| {
+            let file_count = entries.len();
+            table.push([snapshot.to_owned(), file_count.to_string()]);
+            ControlFlow::<(), ()>::Continue(())
+        })?;
 
     print_table(
         Some(&["SNAPSHOT".to_owned(), "FILES".to_owned()]),
@@ -95,10 +93,12 @@ fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Err
 fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
-    // Get a snapshot with a complete file list.
-    let pack_index = repo.load_index(snapshot.pack())?;
-    let entries = pack_index.entries_from_snapshot(snapshot.tag()).unwrap();
-    for entry in entries {
+    let idx = repo.load_index(snapshot.pack())?;
+    let handles = idx
+        .resolve_snapshot(snapshot.tag())
+        .expect("failed to resolve snapshot"); // TODO: Temporary.
+
+    for entry in idx.entries_from_handles(handles.iter())? {
         table.push([
             hex::encode(entry.checksum).to_string(),
             entry.metadata.size.to_string(),

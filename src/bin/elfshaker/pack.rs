@@ -77,7 +77,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             "packing non-loose indexes not yet supported"
         );
         let index = repo.load_index(pack_id)?;
-        eprintln!("Packing {} {}", pack_id, index.snapshot_names().len());
+        eprintln!("Packing {} {}", pack_id, index.snapshot_tags().len());
         index.for_each_snapshot(|snapshot, entries| {
             if let Err(e) = new_index.push_snapshot(snapshot.to_owned(), entries.clone()) {
                 ControlFlow::Break(Result::<(), _>::Err(e))

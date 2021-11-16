@@ -268,7 +268,7 @@ pub struct ObjectMetadata {
 
 /// Contains the metadata needed to extract files from a pack file.
 pub struct PackIndex {
-    snapshot_names: Vec<String>,
+    snapshot_tags: Vec<String>,
     snapshot_deltas: Vec<ChangeSet<FileHandle>>,
 
     path_pool: EntryPool<OsString>,
@@ -290,7 +290,7 @@ impl Default for PackIndex {
 impl PackIndex {
     pub fn new() -> Self {
         Self {
-            snapshot_names: Vec::new(),
+            snapshot_tags: Vec::new(),
             snapshot_deltas: Vec::new(),
 
             path_pool: EntryPool::new(),
@@ -374,15 +374,15 @@ impl PackIndex {
         })
     }
 
-    pub fn snapshot_names(&self) -> &Vec<String> {
-        &self.snapshot_names
+    pub fn snapshot_tags(&self) -> &[String] {
+        &self.snapshot_tags
     }
     pub fn has_snapshot(&self, needle: &str) -> bool {
-        self.snapshot_names.iter().any(|s| s.eq(needle))
+        self.snapshot_tags.iter().any(|s| s.eq(needle))
     }
     pub fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
         let mut current = HashSet::new();
-        for (tag, delta) in self.snapshot_names.iter().zip(self.snapshot_deltas.iter()) {
+        for (tag, delta) in self.snapshot_tags.iter().zip(self.snapshot_deltas.iter()) {
             Snapshot::apply_changes(&mut current, delta);
             if tag == needle {
                 return Some(current.into_iter().collect());
@@ -405,7 +405,7 @@ impl PackIndex {
         tag: String,
         input: impl IntoIterator<Item = FileEntry>,
     ) -> Result<(), PackError> {
-        if self.snapshot_names.contains(&tag) {
+        if self.snapshot_tags.contains(&tag) {
             return Err(PackError::SnapshotAlreadyExists("<unknown>".into(), tag));
         }
 
@@ -417,7 +417,7 @@ impl PackIndex {
         // Compute delta against last pushed snapshot (temporary implementation).
         let delta = Snapshot::get_changes(&mut self.current, &files);
         self.current = files;
-        self.snapshot_names.push(tag);
+        self.snapshot_tags.push(tag);
         self.snapshot_deltas.push(delta);
         Ok(())
     }
@@ -427,7 +427,7 @@ impl PackIndex {
         F: FnMut(&'l str, &HashSet<FileEntry>) -> ControlFlow<S>,
     {
         let mut complete = HashSet::new();
-        let snapshot_deltas = self.snapshot_names.iter().zip(self.snapshot_deltas.iter());
+        let snapshot_deltas = self.snapshot_tags.iter().zip(self.snapshot_deltas.iter());
         for (snapshot, deltas) in snapshot_deltas {
             let deltas = deltas.map(|handles| self.entries_from_handles(handles.iter()))?;
             Snapshot::apply_changes(&mut complete, &deltas);
@@ -507,7 +507,7 @@ impl<'de> Visitor<'de> for VisitPackIndex {
         V: SeqAccess<'de>,
     {
         let mut result = PackIndex::new();
-        result.snapshot_names = next_expecting(&mut seq)?;
+        result.snapshot_tags = next_expecting(&mut seq)?;
         if self.load_mode == LoadMode::OnlySnapshots {
             return Ok(result);
         }
@@ -556,7 +556,7 @@ impl Serialize for PackIndex {
         S: Serializer,
     {
         let mut s = serializer.serialize_tuple(5)?;
-        s.serialize_element(&self.snapshot_names)?;
+        s.serialize_element(&self.snapshot_tags)?;
         s.serialize_element(&self.snapshot_deltas)?;
         s.serialize_element(&self.path_pool)?;
         s.serialize_element(&self.object_pool)?;

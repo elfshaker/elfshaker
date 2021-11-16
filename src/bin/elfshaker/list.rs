@@ -61,7 +61,7 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
             match pack_id {
                 PackId::Pack(s) => s,
             },
-            pack_index.snapshot_names().len().to_string(),
+            pack_index.snapshot_tags().len().to_string(),
             size_str,
         ]);
     }

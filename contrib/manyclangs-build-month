@@ -113,6 +113,10 @@ _manyclangs_build_parts() {
     done
 }
 
+loose_sorted() {
+    $(cd elfshaker_data/packs; echo loose/* | sed 's/.pack.idx//g')
+}
+
 main() {
     YEAR="$1"
     MONTH="$2"
@@ -161,7 +165,7 @@ main() {
             | pv --progress --fineta --timer --average-rate --line-mode --size "$COMMIT_COUNT" > /dev/null \
             ;
 
-    time elfshaker pack --verbose "aarch64-ubuntu2004-manyclangs-$YEAR$MONTH"
+    time elfshaker pack --verbose "aarch64-ubuntu2004-manyclangs-$YEAR$MONTH" $(loose_sorted)
 }
 
 case "${1:--h}" in

@@ -93,7 +93,7 @@ where
 
 /// Formats file sizes to human-readable format.
 pub fn format_size(bytes: u64) -> String {
-    format!("{:.3} MiB", bytes as f64 / 1024.0 / 1024.0)
+    format!("{:.3}MiB", bytes as f64 / 1024.0 / 1024.0)
 }
 
 /// Opens the repo from the current work directory and logs some standard

@@ -20,7 +20,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             print_pack_summary(&repo, pack_id)?;
         } else {
             let snapshot = repo.find_snapshot(snapshot_or_pack)?;
-            print_snapshot_summary(&repo, &snapshot)?;
+            print_snapshot_summary(&repo, &snapshot, bytes)?;
         }
     } else {
         print_repo_summary(&repo, bytes)?;
@@ -54,9 +54,12 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
     for pack_id in repo.packs()? {
         let pack_index = repo.load_index(&pack_id)?;
 
-        let pack = repo.open_pack(&pack_id)?;
+        let maybe_pack = repo.open_pack(&pack_id);
+        if !maybe_pack.is_ok() {
+            continue;
+        }
+        let pack = maybe_pack?;
 
-        // TODO(peterwaller-arm): Some size calculation.
         let size_str = if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) };
         // TODO(peterwaller-arm): Some size calculation.
         table.push([
@@ -92,7 +95,7 @@ fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<(), Box<dyn Error>> {
+fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId, bytes: bool) -> Result<(), Box<dyn Error>> {
     let mut table = vec![];
 
     let idx = repo.load_index(snapshot.pack())?;
@@ -103,10 +106,12 @@ fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId) -> Result<()
     for entry in idx.entries_from_handles(handles.iter())? {
         table.push([
             hex::encode(entry.checksum).to_string(),
-            entry.metadata.size.to_string(),
+            if bytes { entry.metadata.size.to_string() } else { format_size(entry.metadata.size) },
             Path::display(entry.path.as_ref()).to_string(),
         ]);
     }
+
+    table.sort_by(|row1, row2| row1[2].cmp(&row2[2]));
 
     print_table(
         Some(&["CHECKSUM".to_owned(), "SIZE".to_owned(), "FILE".to_owned()]),

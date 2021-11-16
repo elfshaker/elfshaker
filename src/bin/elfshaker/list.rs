@@ -62,7 +62,6 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
             "-".to_string()
         };
 
-        // TODO(peterwaller-arm): Some size calculation.
         table.push([
             match pack_id {
                 PackId::Pack(s) => s,

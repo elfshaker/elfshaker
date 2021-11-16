@@ -54,12 +54,9 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
     for pack_id in repo.packs()? {
         let pack_index = repo.load_index(&pack_id)?;
 
-        let maybe_pack = repo.open_pack(&pack_id);
-        let size_str = if maybe_pack.is_ok() {
-            let pack = maybe_pack?;
-            if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) }
-        } else {
-            "-".to_string()
+        let size_str = match repo.open_pack(&pack_id) {
+            Ok(pack) => if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) },
+            _ => "-".to_string()
         };
 
         table.push([

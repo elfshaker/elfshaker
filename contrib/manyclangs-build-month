@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-[[ "$TRACE" ]] && set -x
+[[ "${TRACE-}" ]] && set -x
 set -euo pipefail
 
 print_help() {
@@ -44,6 +44,8 @@ _manyclangs_build_part() {
     MONTH=$2
     PART=$3
     BUILDNAME=mc-build-"$YEAR""$MONTH"-part"$PART"
+    BUILD_DIR="$PWD/${BUILDNAME}"
+
     COMMIT_LIST="$PWD/manyclangs-commit-list.txt.$PART"
 
     ELFSHAKER_DATA=${ELFSHAKER_DATA-$PWD/elfshaker_data}
@@ -75,8 +77,11 @@ _manyclangs_build_part() {
 
     while read -r COMMIT_SHA SNAPSHOT_NAME
     do
+        echo "Building commit $SNAPSHOT_NAME"
         # Handy comand which sets the sources in ./llvm ./clang to the right
-        # contents efficiently (including removing files which have gone).
+        # contents efficiently (including removing files which have gone). It
+        # makes use of the $GIT_INDEX_FILE to keep track of the old state so is
+        # efficient.
         GIT_WORK_TREE=.. \
         git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
             ../{llvm,clang} :^../{llvm,clang}/test
@@ -87,7 +92,7 @@ _manyclangs_build_part() {
         if manyclangs-build "$COMMIT_SHA"
         then
             # Build success, capture object hashes and store to elfshaker.
-            _manyclangs_list_files0_to_pack | xargs -0 -P32 sha1sum | awk '{print $1" "$2}' | sort -k2,2 > "${HASHES_DIR}"/"${SNAPSHOT_NAME}".txt
+            _manyclangs_list_files0_to_pack | xargs -0 -P$(nproc) sha1sum | awk '{print $1" "$2}' | sort -k2,2 > "${HASHES_DIR}"/"${SNAPSHOT_NAME}".txt
             _manyclangs_list_files0_to_pack | elfshaker store --verbose --files0-from=- "$SNAPSHOT_NAME"
         else
             # On failure, capture the build log.
@@ -98,10 +103,15 @@ _manyclangs_build_part() {
 
         echo Built "$SNAPSHOT_NAME" 1>&30 # for pv progress output.
     done < "${COMMIT_LIST}"
+
+    if [[ -z "${MANYCLANGS_NODELETE-}" ]]
+    then
+        rm -r "${BUILD_DIR}"
+    fi
 }
 
 _manyclangs_build_parts() {
-    [[ "$TRACE" ]] && set -x
+    [[ "${TRACE-}" ]] && set -x
     set -euo pipefail # exported function, fresh shell.
     YEAR=$1
     MONTH=$2
@@ -113,18 +123,8 @@ _manyclangs_build_parts() {
     done
 }
 
-loose_sorted() {
-    $(cd elfshaker_data/packs; echo loose/* | sed 's/.pack.idx//g')
-}
-
-main() {
-    YEAR="$1"
-    MONTH="$2"
-    date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
-
-    BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
-
-    DEPS=(jq compdb2line ninja cmake "clang${BUILDER_CLANG_VERSION_SUFFIX}" "clang++${BUILDER_CLANG_VERSION_SUFFIX}")
+sanity_check() {
+    DEPS=(jobserver jq compdb2line ninja cmake "clang${BUILDER_CLANG_VERSION_SUFFIX}" "clang++${BUILDER_CLANG_VERSION_SUFFIX}")
     MISSING_DEPS=()
     for DEP in "${DEPS[@]}"
     do
@@ -138,6 +138,7 @@ main() {
     then
         echo "Missing some binaries from \$PATH: ${MISSING_DEPS[*]}"
         echo "Note that compdb2line is part of this project and needs installing."
+        echo "jobserver can be found as part of https://github.com/olsner/jobclient"
         exit 1
     fi
 
@@ -146,26 +147,82 @@ main() {
         echo 'Run with GIT_DIR set to path/to/llvm-project/.git or from inside a repository.'
         exit 1
     fi
+}
 
-    commits_for_month "$YEAR" "$MONTH" > manyclangs-commit-list.txt
+progress_bar() {
+    COMMIT_COUNT=$1
+    pv --bytes --progress --fineta --timer --average-rate --line-mode --size "$COMMIT_COUNT" > /dev/null
+}
+
+apply_limit() {
+    if [ -z "${MANYCLANGS_LIMIT-}" ]; then cat; else head -n "$MANYCLANGS_LIMIT"; fi
+}
+
+apply_subset() {
+    if [ -z "${MANYCLANGS_SUBSET-}" ]; then cat; else awk 'NR%'"$MANYCLANGS_SUBSET"' == 0 { print }'; fi
+}
+
+main() {
+    sanity_check
+
+    echo
+
+    YEAR="$1"
+    MONTH="$2"
+    date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
+
+    BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
+
+    commits_for_month "$YEAR" "$MONTH"  > manyclangs-commit-list.txt
+    apply_limit < manyclangs-commit-list.txt | apply_subset > manyclangs-commit-list.txt.subset
+    mv manyclangs-commit-list.txt.subset manyclangs-commit-list.txt
     COMMIT_COUNT=$(wc -l manyclangs-commit-list.txt | awk '{print $1}')
 
-    NPARTS=20 # Divide work into small equal-ish-sized parts.
-    NPARALLEL=5 # Number of parts to run in parallel.
-    split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
+    NPARALLEL=${MANYCLANGS_NPARALLEL-5} # Number of parts to run in parallel.
 
-    export -f _manyclangs_build_parts _manyclangs_build_part _manyclangs_list_files0_to_pack
-    # A few extra slots, since we loose at least one to the build system and we
-    # don't expect every job to take 100% CPU.
-    JOBSLOP=5
-    jobserver -j$(($(nproc) + JOBSLOP)) \
-        xargs --max-procs=$NPARALLEL -n1 \
-        bash -c '_manyclangs_build_parts "$@"' -- "$YEAR" "$MONTH" \
-            <<<$(seq -f '%02.0f' 00 $(( NPARTS - 1 ))) \
-            | pv --progress --fineta --timer --average-rate --line-mode --size "$COMMIT_COUNT" > /dev/null \
+    if [[ "$NPARALLEL" != 1 ]] || command -v ninja-jobclient &> /dev/null
+    then
+        NPARTS=${MANYCLANGS_NPARTS-20} # Divide work into small equal-ish-sized parts.
+        split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
+
+        export -f _manyclangs_build_parts _manyclangs_build_part _manyclangs_list_files0_to_pack
+        # A few extra slots, since we loose at least one to the build system and we
+        # don't expect every job to take 100% CPU.
+        JOBSLOP=5
+        command time -v \
+            jobserver -j$(($(nproc) + JOBSLOP)) \
+            xargs --max-procs=$NPARALLEL -n1 \
+            bash -c '_manyclangs_build_parts "$@"' -- "$YEAR" "$MONTH" \
+                <<<$(seq -f '%02.0f' 00 $(( NPARTS - 1 ))) \
+                | progress_bar "$COMMIT_COUNT" \
+                ;
+    else
+        echo '
+NOTE: ninja-jobclient is unavailable; falling back to serial builds, which will
+make less good use of compute resource owing to builds being serialized by high
+compilation time of few compilation units.
+
+To obtain this, build a fork of ninja with this pull request applied, and put
+the binary in your path as ninja-jobclient.
+
+https://github.com/ninja-build/ninja/pull/1140
+
+Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
+'
+        sleep 5
+        # Build everything in one part.
+        mv manyclangs-commit-list.txt{,.00}
+        time _manyclangs_build_parts "$YEAR" "$MONTH" 00 \
+            | progress_bar "$COMMIT_COUNT" \
             ;
+    fi
 
-    time elfshaker pack --verbose "aarch64-ubuntu2004-manyclangs-$YEAR$MONTH" $(loose_sorted)
+    # Globs are already sorted.
+    SNAPSHOTS_SORTED=(elfshaker_data/packs/loose/*)
+    SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]%.pack.idx}")
+    SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]#elfshaker_data/packs/}")
+
+    time elfshaker pack --verbose "aarch64-ubuntu2004-manyclangs-$YEAR$MONTH" "${SNAPSHOTS_SORTED[@]}"
 }
 
 case "${1:--h}" in

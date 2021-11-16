@@ -5,6 +5,8 @@
 [[ "$TRACE" ]] && set -x
 set -euo pipefail
 
+BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
+
 awk_inplace() {
     for LAST in "$@"; do :; done
     TMP="$(mktemp)"
@@ -25,31 +27,54 @@ patch_llvm_version() {
     awk_inplace -c -v commit="\"$1\"" 'FNR==NR{ if (/#include/) p=NR; next} 1; FNR==p{ print "#define LLVM_VERSION_INFO " commit }' ../llvm/lib/Support/CommandLine.cpp ../llvm/lib/Support/CommandLine.cpp
 }
 
+default_target_binaries() {
+    # The set of files appearing in the position ` -o bin/<file> `
+    # when you type 'ninja'.
+    ninja -t commands | sed -En 's|^.* -o (bin/[^ ]+) .*$|\1|p'
+}
+
+default_target_rules() {
+    # The set of rules appearing in the position:
+    #   build bin/<file>: <rule> ...
+    # for each binary listed in the default target.
+    grep -E "$(echo 'build ('"$(default_target_binaries | tr '\n' '|')"'):')" build.ninja | awk '{print $3}'
+}
+
+library_rules() {
+    # The set of rules which produce static libraries. No need to be too
+    # selective here -- having extra is not harmful, since they will only have
+    # an effect if used by a binary.
+    ninja -t rules | grep -E 'C(XX)?_(STATIC|SHARED)_LIBRARY_LINKER'
+}
+
+symlink_rules() {
+    # Rules which produce symlinks.
+    echo CMAKE_SYMLINK_EXECUTABLE CMAKE_SYMLINK_LIBRARY CUSTOM_COMMAND
+}
+
 create_link_script() {
-    # Save all link lines as functions
-    ninja -t rules | grep 'CXX_EXECUTABLE_LINKER\|CXX_STATIC_LIBRARY' \
-        | grep -Ev '\-test|\-fuzzer' \
-        | xargs ninja -t compdb \
-        | compdb2line build-lines-with-output \
-        | awk '{print $1"(){"; $1=""; print $0; print "}"}'
-    # Save all symlinks in bin/
-    find ./bin/ -maxdepth 1 -type l | while read -r SYMLINK; do
-        LINK_NAME="$(basename "$SYMLINK")"
-        LINK_TARGET="$(readlink "$SYMLINK")"
-        echo "$LINK_NAME(){ $LINK_TARGET; ln -sf $LINK_TARGET $SYMLINK; }"
-    done
-    cat << EOF
-mkdir ./bin |& true
-if [ \$# -eq 0 ]; then
-    compgen -A function | while read -r FUNC; do { "\$FUNC" & } done
-else
-    for ARG in "\$@"; do { "\$ARG" & } done
-fi
-wait
-EOF
+    # Produce a script which can link the binaries.
+
+    # Problem: Want to identify set of things to include in the link script.
+    # Can't just take all executables, since some of them may be unused/untested
+    # and break the build for long periods of time.
+
+    COMPDB2LINE_ARGS=(
+        '-link-cmd-suffix='"${BUILDER_CLANG_VERSION_SUFFIX}"
+        # Drop these, which point to the build directory and aren't used for linking.
+        '-prune=-fmacro-prefix-map='
+        '-prune=-ffile-prefix-map='
+        # Version scripts have absolute paths.
+        '-prune=-Wl,--version-script,'
+        '-replacement=-fuse-ld=:-fuse-ld=$LINKSCRIPT_LLD'
+        'link-script'
+    )
+    ninja -t compdb $(default_target_rules) $(library_rules) $(symlink_rules) \
+        | compdb2line "${COMPDB2LINE_ARGS[@]}"
 }
 
 object_compdb() {
+    # Produce the compdb for all object files.
     ninja -t rules | grep -E '^C(XX)?_COMPILER__' | xargs ninja -t compdb
 }
 
@@ -91,10 +116,13 @@ main() {
             { print }
         ' build.ninja
 
-        # Append a manyclangs-targets build rule to ninja. This is preferable to
-        # manually invoking ninja because you can only pass so many things at the
-        # command line and ninja doesn't accept response files as a parameter.
-        object_compdb | jq -r '"build manyclangs-targets: phony clang-resource-headers " + ([.[].output] | join(" "))' >> build.ninja
+        # Do this before rewriting TARGET_FILE.
+        # Create the link script.
+        create_link_script > ./link.sh
+        chmod +x link.sh
+
+        # Avoid writing binaries out to disk, saves disk space when we're writing to tmpfs.
+        sed -Ei '/TARGET_FILE = bin\/(clang-ast-dump|(clang|llvm)-tblgen)/!s|TARGET_FILE = bin/.*|TARGET_FILE = /dev/null|' build.ninja
     fi
 
     patch_clang_version "$COMMIT_SHA"
@@ -124,11 +152,24 @@ main() {
     # Clobber the resource directories since they're cheap to remake.
     rm -rf lib/clang
 
+    # Use a jobclient-enabled ninja, if available.
+    NINJA=ninja
+    if command -v ninja-jobclient &> /dev/null
+    then
+        NINJA=ninja-jobclient
+    fi
+
     # Use FILECLONE if possible to save disk space/bandwidth.
     # CCACHE_SLOPPINESS=time_macros is because the clang sources contain
     # __TIME__ etc in order to implement them in the compiler, but do not
-    # actually use them.
-    if time CCACHE_FILECLONE=1 CCACHE_SLOPPINESS=time_macros ninja manyclangs-targets |& tee build.log
+    # actually use them. include_file_ctime,include_file_mtime are because we
+    # know no-one else will be modifying header files which may be newly checked
+    # out.
+    if time CCACHE_FILECLONE=1 \
+        CCACHE_NOCOMPRESS=1\
+        CCACHE_SLOPPINESS=time_macros,include_file_ctime,include_file_mtime
+        CCACHE_COMPILERCHECK=string:manyclangs-clang${BUILDER_CLANG_VERSION_SUFFIX} \
+        "${NINJA}" |& tee build.log
     then
         # On build success, the log is not very interesting, so delete it.
         rm build.log
@@ -136,9 +177,6 @@ main() {
         echo Build failed.
         exit 1
     fi
-
-    create_link_script > ./link.sh
-    chmod +x link.sh
 }
 
 main "$@"

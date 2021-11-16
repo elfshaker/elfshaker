@@ -42,7 +42,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .help("Prints the contents of the specified snapshot or pack."),
         )
         .arg(
-            Arg::with_name("b")
+            Arg::with_name("bytes")
                 .long("--bytes")
                 .help("Print the sizes in bytes."),
         )
@@ -54,8 +54,11 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
     for pack_id in repo.packs()? {
         let pack_index = repo.load_index(&pack_id)?;
 
+        let pack = repo.open_pack(&pack_id)?;
+
         // TODO(peterwaller-arm): Some size calculation.
-        let size_str = if bytes { "0".into() } else { format_size(1) };
+        let size_str = if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) };
+        // TODO(peterwaller-arm): Some size calculation.
         table.push([
             match pack_id {
                 PackId::Pack(s) => s,

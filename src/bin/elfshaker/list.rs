@@ -44,7 +44,6 @@ pub(crate) fn get_app() -> App<'static, 'static> {
         .arg(
             Arg::with_name("b")
                 .long("--bytes")
-                .value_name("bytes")
                 .help("Print the sizes in bytes."),
         )
 }

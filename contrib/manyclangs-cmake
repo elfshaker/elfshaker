@@ -61,6 +61,7 @@ FLAGS=(
     "-DCMAKE_CXX_COMPILER=clang++${BUILDER_CLANG_VERSION_SUFFIX}"
     "-DCMAKE_C_FLAGS=${COMPILER_FLAGS[*]}"
     "-DCMAKE_CXX_FLAGS=${COMPILER_FLAGS[*]}"
+    # Full path is required due to -no-canonical-prefixes
     "-DLLVM_USE_LINKER=${LLVM_USE_LINKER-/usr/bin/ld.lld"${BUILDER_CLANG_VERSION_SUFFIX}"}"
 
     # These are necessary for reproducibility in conjunction with
@@ -75,6 +76,9 @@ FLAGS=(
     # Try to minimize dependencies, at the expense of minor features.
     "-DLLVM_ENABLE_LIBXML2=Off"
     "-DLLVM_ENABLE_ZLIB=Off"
+    "-DLLVM_ENABLE_Z3_SOLVER=Off"
+    # Faster builds(?)
+    "-DCLANG_TOOLING_BUILD_AST_INTROSPECTION=Off"
 
     # Shrink ninja files.
     "-DCLANG_INCLUDE_TESTS=Off"

@@ -55,12 +55,13 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
         let pack_index = repo.load_index(&pack_id)?;
 
         let maybe_pack = repo.open_pack(&pack_id);
-        if !maybe_pack.is_ok() {
-            continue;
-        }
-        let pack = maybe_pack?;
+        let size_str = if maybe_pack.is_ok() {
+            let pack = maybe_pack?;
+            if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) }
+        } else {
+            "-".to_string()
+        };
 
-        let size_str = if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) };
         // TODO(peterwaller-arm): Some size calculation.
         table.push([
             match pack_id {

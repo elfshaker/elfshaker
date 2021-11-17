@@ -88,6 +88,7 @@ _manyclangs_build_part() {
             ../{llvm,clang} :^../{llvm,clang}/test
 
         echo "$COMMIT_SHA" > COMMIT_SHA
+        date
 
         # manyclangs-build takes care of removing object files not produced by
         # the build system. consume non-zero exit status if present and

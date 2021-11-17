@@ -222,7 +222,7 @@ set -euo pipefail
 				// '-ot' returns true of lhs older than rhs or if lhs doesn't exist and rhs does.
 				bw.WriteString("[[ ")
 				bw.WriteString(mustQuote(output))
-				bw.WriteString(" -ot \"${BASH_SOURCE[0]}\" ]] || return 0 && ")
+				bw.WriteString(" -ot COMMIT_SHA ]] || return 0 && ")
 			}
 
 			// Check for input .so files.

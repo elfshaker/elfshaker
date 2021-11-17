@@ -36,6 +36,7 @@ _manyclangs_list_files0_to_pack() {
             -or -name README \
             -or -name 'LICENSE*' \
             -or -name '*.log' \
+            -or -name 'COMMIT_SHA' \
             \) -printf '%P\0'
 }
 
@@ -86,6 +87,8 @@ _manyclangs_build_part() {
         git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
             ../{llvm,clang} :^../{llvm,clang}/test
 
+        echo "$COMMIT_SHA" > COMMIT_SHA
+
         # manyclangs-build takes care of removing object files not produced by
         # the build system. consume non-zero exit status if present and
         # continue.
@@ -100,6 +103,7 @@ _manyclangs_build_part() {
             { echo BUILD_FAILED; echo build.log; } | elfshaker store --verbose --files-from=- "$SNAPSHOT_NAME"
             rm BUILD_FAILED
         fi
+
 
         echo Built "$SNAPSHOT_NAME" 1>&30 # for pv progress output.
     done < "${COMMIT_LIST}"

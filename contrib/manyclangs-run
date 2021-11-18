@@ -28,7 +28,7 @@ main() {
         read -r SNAPSHOT PACK || exit 125
         TIMEFORMAT="elfshaker extracted $SHA in %R seconds"
         time (
-            (cd "$ELFSHAKER_DIR" && elfshaker extract -P "$PACK" "$SNAPSHOT" || exit 125)
+            (cd "$ELFSHAKER_DIR" && elfshaker extract "$PACK:$SNAPSHOT" || exit 125)
             (cd "$ELFSHAKER_DIR/build"; rm -r ./bin || true; mkdir ./bin; bash ./link.sh || exit 125)
         )
 

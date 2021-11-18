@@ -1,4 +1,4 @@
-# `elfshaker`: 1.6TIB -> 100MiB, with 1s access time
+# `elfshaker`: 400 GiB -> 100 MiB, with 1s access time
 
 elfshaker is a low-footprint, high-performance version control system fine-tuned for binaries.
 

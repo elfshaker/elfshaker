@@ -18,6 +18,51 @@ print_help() {
     echo 'Otherwise, the exit code is the code returned by COMMAND.'
 }
 
+get_file_arch() {
+    readelf -h "$1" | grep Machine | awk '{$1=""; print $0}' | tr -d ' '
+}
+
+has_docker_image() {
+    docker image inspect "$1" &>/dev/null
+}
+
+run_docker_image() {
+    docker run --rm --mount type=bind,source="$(realpath "$ELFSHAKER_DIR")",target=/elfshaker "$@"
+}
+
+link_and_run() {
+    rm -r ./bin || true
+    mkdir -p ./bin
+
+    COMMAND_BASENAME="$(basename "$1")"
+    LINK_AND_RUN_COMMAND="bash ./link.sh $COMMAND_BASENAME || exit 125; ./bin/$@"
+
+    if [ "${USE_DOCKER_QEMU-,,}" = "aarch64" ]; then
+        TEST_OBJECT=lib/Object/CMakeFiles/LLVMObject.dir/Object.cpp.o
+        HOST_ARCH="$(get_file_arch /bin/cat)"
+        TARGET_ARCH="$(get_file_arch "$TEST_OBJECT")"
+        if [ "$HOST_ARCH" != "$TARGET_ARCH" ] && [ "$TARGET_ARCH" = "AArch64" ]; then
+            if ! command -v docker &> /dev/null; then
+                echo "The architecture of the executables you are attempting to run is '$TARGET_ARCH'."
+                echo "We support running these on '$HOST_ARCH' through emulation, but require docker to do so."
+                echo "Please install docker. https://www.docker.com/"
+                exit 125
+            elif ! has_docker_image manyclangs-qemu-aarch64 &>/dev/null; then
+                echo 'You need the manyclangs-qemu-aarch64 docker image to run manyclangs with AArch64 emulation.'
+                echo 'See https://github.com/elfshaker/manyclangs/blob/main/docker-qemu-aarch64/README.md for instructions.'
+                exit 1
+            else
+                run_docker_image manyclangs-qemu-aarch64 bash -c "$LINK_AND_RUN_COMMAND"
+            fi
+        else
+            echo "Running $TARGET_ARCH binaries on $HOST_ARCH via the manyclangs-qemu-aarch64 docker image is not supported!"
+            exit 1
+        fi
+    else
+        $LINK_AND_RUN_COMMAND
+    fi
+}
+
 main() {
     ELFSHAKER_DIR="$1"
     COMITTISH="$2"
@@ -30,12 +75,9 @@ main() {
         COMMAND_BASENAME="$(basename "${COMMAND[0]}")"
         time (
             (cd "$ELFSHAKER_DIR" && elfshaker extract "$PACK:$SNAPSHOT" || exit 125)
-            (cd "$ELFSHAKER_DIR"; rm -r ./bin || true; mkdir ./bin; bash ./link.sh "$COMMAND_BASENAME" || exit 125)
         )
 
-        # Resolve path to binary (could be relative to $ELFSHAKER_DIR or not)
-        COMMAND[0]="$(cd "$ELFSHAKER_DIR" && which "${COMMAND[0]}" | xargs realpath --no-symlinks)"
-        "${COMMAND[@]}"
+        link_and_run "${COMMAND[@]}"
     }
 }
 

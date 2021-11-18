@@ -27,9 +27,10 @@ main() {
     (cd "$ELFSHAKER_DIR" && elfshaker find "$SHA") | {
         read -r SNAPSHOT PACK || exit 125
         TIMEFORMAT="elfshaker extracted $SHA in %R seconds"
+        COMMAND_BASENAME="$(basename "${COMMAND[0]}")"
         time (
             (cd "$ELFSHAKER_DIR" && elfshaker extract "$PACK:$SNAPSHOT" || exit 125)
-            (cd "$ELFSHAKER_DIR/build"; rm -r ./bin || true; mkdir ./bin; bash ./link.sh || exit 125)
+            (cd "$ELFSHAKER_DIR"; rm -r ./bin || true; mkdir ./bin; bash ./link.sh "$COMMAND_BASENAME" || exit 125)
         )
 
         # Resolve path to binary (could be relative to $ELFSHAKER_DIR or not)

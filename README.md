@@ -1,12 +1,12 @@
-# `elfshaker`
+# `elfshaker`: 1.6TIB -> 100MiB, with 1s access time
+
 elfshaker is a low-footprint, high-performance version control system fine-tuned for binaries.
 
 - elfshaker is a CLI tool written in the [Rust programming language](https://www.rust-lang.org/).
 
-- It stores snapshots of directories into highly-compressed pack files and provides fast on-demand access to the stored files. It is particularly good for storing lots of similar files.
+- It stores snapshots of directories into highly-compressed pack files and provides fast on-demand access to the stored files. It is particularly good for storing lots of similar files, for example object files from an incremental build.
 
-- It is also the storage system used by the [manyclangs project](https://github.com/elfshaker/manyclangs), a parent project which accelerates bisection of [LLVM](https://llvm.org/) by a factor of 60x!
-This is done by extracting builds of LLVM on-demand from locally stored elfshaker packs, each of which contains ~1,800 builds and is about 100 MiB in size, even though the full originals would take TiBs to store! Extracting a single builds takes 2-4s on modern hardware.
+- It allows few-second access to any commit of clang with the [manyclangs project](https://github.com/elfshaker/manyclangs). For example, this accelerates bisection of [LLVM](https://llvm.org/) by a factor of 60x! This is done by extracting builds of LLVM on-demand from locally stored elfshaker packs, each of which contains ~1,800 builds and is about 100 MiB in size, even though the full originals would take TiBs to store! Extracting a single builds takes 2-4s on modern hardware.
 
 ## Getting started
 
@@ -21,13 +21,12 @@ The following platforms are used for our CI tests:
 But we aim to support all popular Linux platforms, macOS and Windows in production.
 
 We officially support the following architectures:
-- AArch64 (release tag is `aarch64`)
-- x86-64 (release tag is `x86_64`)
+- AArch64
+- x86-64
 
 ## Current Status
 
-elfshaker is production ready! The file format and directory structure is stable.
-Packs files created with the current elfshaker version will remain compatible with future versions.
+The file format and directory structure is stable. We intend that pack files created with the current elfshaker version will remain compatible with future versions. Please kick the tyres and do your own validation, and file bugs if you find any. We have done a fair amount of validation for our use cases but there may be things we haven't needed yet, so please start a discussion and file issues/patches.
 
 ## Documentation
 

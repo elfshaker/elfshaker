@@ -84,6 +84,7 @@ build_system_is_clean() {
 
 main() {
     COMMIT_SHA="${1-$(git rev-parse HEAD)}"
+    echo "Building $COMMIT_SHA" > build.log
 
     if [[ -e CMakeCache.txt ]] && ! build_system_is_clean; then
         # Build system is out of date. Rebuild from empty to avoid any
@@ -97,7 +98,7 @@ main() {
         ABS_BASE_PATH=$(realpath $REL_LLVM_PATH/../)/
         REL_BASE_PATH=$(realpath --relative-to=. "$ABS_BASE_PATH")/
 
-        command time -f 'Configured with manyclangs-cmake in %E' manyclangs-cmake "${REL_LLVM_PATH}"
+        command time -f 'Configured with manyclangs-cmake in %E' manyclangs-cmake "${REL_LLVM_PATH}" |& tee -a build.log
 
         # [determinism] Prevent absolute build path from leaking into llvm-config build variables.
         echo '#define LLVM_SRC_ROOT "/llvm-project/llvm"' >> ./tools/llvm-config/BuildVariables.inc
@@ -169,7 +170,7 @@ main() {
         CCACHE_NOCOMPRESS=1\
         CCACHE_SLOPPINESS=time_macros,include_file_ctime,include_file_mtime
         CCACHE_COMPILERCHECK=string:manyclangs-clang${BUILDER_CLANG_VERSION_SUFFIX} \
-        "${NINJA}" |& tee build.log
+        "${NINJA}" |& tee -a build.log
     then
         # On build success, the log is not very interesting, so delete it.
         rm build.log

@@ -8,9 +8,18 @@ elfshaker is a low-footprint, high-performance version control system fine-tuned
 
 - It allows few-second access to any commit of clang with the [manyclangs project](https://github.com/elfshaker/manyclangs). For example, this accelerates bisection of [LLVM](https://llvm.org/) by a factor of 60x! This is done by extracting builds of LLVM on-demand from locally stored elfshaker packs, each of which contains ~1,800 builds and is about 100 MiB in size, even though the full originals would take TiBs to store! Extracting a single builds takes 2-4s on modern hardware.
 
-## Getting started
+## [Installation guide](docs/users/installing.md)
 
-*See our [Installation guide](docs/users/installing.md) for instructions.*
+## [Usage guide](docs/users/usage.md)
+
+## Quickstart
+
+1. Consult our [installation](docs/users/installing.md) and [usage guide](docs/users/usage.md), make sure you know what you're doing.
+2. `elfshaker store <snapshot>` -- capture the state of the current working directory into a named snapshot `<snapshot>`.
+3. `elfshaker pack <pack name>` -- capture all 'loose' snapshots into a single pack file (this is what gets you the compression win).
+4. `elfshaker extract <snapshot>` -- restore the state of a previous snapshot into the current working directory.
+
+For more detail, take a look at our [workflow documentation](https://github.com/elfshaker/elfshaker/blob/main/docs/users/usage.md#workflow).
 
 ## System Compatibility
 
@@ -28,9 +37,6 @@ We officially support the following architectures:
 
 The file format and directory structure is stable. We intend that pack files created with the current elfshaker version will remain compatible with future versions. Please kick the tyres and do your own validation, and file bugs if you find any. We have done a fair amount of validation for our use cases but there may be things we haven't needed yet, so please start a discussion and file issues/patches.
 
-## Documentation
-
-*See our [Usage guide](docs/users/usage.md) for instructions.*
 
 ## Contributing
 

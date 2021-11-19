@@ -14,13 +14,15 @@ elfshaker is a low-footprint, high-performance version control system fine-tuned
 
 Or, "how on earth do you get such a phenomenal result?".
 
-It works particularly well for our [presented use case](https://github.com/elfshaker/manyclangs) because it has these properties:
+It works particularly well for our [presented use case](https://github.com/elfshaker/manyclangs) because storing pre-link object files has these properties:
 
 * There are many files,
-* Most of them don't change very often,
+* Most of them don't change very often so there are a lot of duplicate files,
 * When they do change, the deltas of the binaries are not huge.
 
-We achieve this in manyclangs by compiling object code with the `-ffunction-sections` and `-fdata-sections` compiler flags. This has the effect that if you 'insert' a function into a translation unit, the insertion does not cause all of the addresses to change across the whole object file. If you looked at the binary delta on the executable from such a change, it will be large, because all of the absolute addresses after the insertion will change, and references to those addresses will change. These address changes are not handled well by compression algorithms, resulting in a poor compression ratio. The effect of this is large: if you compress many revisions of clang executables together, you will see a compression ratio of something like 20%. This is pretty good! But elfshaker achieves a ratio of something closer to 0.01% (or 10,000x), amortized across many builds.
+We achieve this in manyclangs by compiling object code with the `-ffunction-sections` and `-fdata-sections` compiler flags. This has the effect that if you 'insert' a function into a translation unit, the insertion does not cause all of the addresses to change across the whole object file.
+
+If you looked at the binary delta on the linked executable from such a change, it will be large, because all of the absolute addresses after the insertion will change, and references to those addresses will change. These address changes are not handled well by compression algorithms, resulting in a poor compression ratio. The effect of this is large: if you compress many revisions of clang executables together, you will see a compression ratio of something like 20%. This is pretty good! But elfshaker achieves a ratio of something closer to 0.01% (or 10,000x), amortized across many builds.
 
 
 ## [Installation guide](docs/users/installing.md)

@@ -8,7 +8,7 @@ elfshaker is a low-footprint, high-performance version control system fine-tuned
 
 - It stores snapshots of directories into highly-compressed pack files and provides fast on-demand access to the stored files. It is particularly good for storing lots of similar files, for example object files from an incremental build.
 
-- It allows few-second access to any commit of clang with the [manyclangs project](https://github.com/elfshaker/manyclangs). For example, this accelerates bisection of [LLVM](https://llvm.org/) by a factor of 60x! This is done by extracting builds of LLVM on-demand from locally stored elfshaker packs, each of which contains ~1,800 builds and is about 100 MiB in size, even though the full originals would take TiBs to store! Extracting a single builds takes 2-4s on modern hardware.
+- It allows few-second access to any commit of clang with the [manyclangs project](https://github.com/elfshaker/manyclangs). For example, this accelerates bisection of [LLVM](https://llvm.org/) by a factor of 60x! This is done by extracting builds of LLVM on-demand from locally stored elfshaker packs, each of which contains ~1,800 builds and is about 100 MiB in size, even though the full originals would take TiBs to store! Extracting a single build takes 2-4s on modern hardware.
 
 ## †Applicability
 
@@ -55,7 +55,7 @@ The file format and directory structure is stable. We intend that pack files cre
 
 ## Contributing
 
-*Contributions are highly-appreciated.*
+*Contributions are highly appreciated.*
 Refer to our [Contributing guide](docs/contributors/contributing.md).
 
 <!-- TODO(veselink1): 🛈 View the [elfshaker API reference](https://elfshaker.github.io/docs). -->

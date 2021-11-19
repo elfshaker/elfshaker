@@ -5,7 +5,7 @@
 
 2. Extract to any location you would like and add the directory to your path:
 ```bash
-mkdir -p ~/.local/opt && mkdir -p ~/.local/bin && tar -xf "elfshaker-Release-$(uname -m).tar.gz" -C ~/.local/opt && ln -s ~/.local/opt/elfshaker/bin/elfshaker ~/.local/bin/elfshaker
+mkdir -p ~/.local/opt && mkdir -p ~/.local/bin && tar -xf "elfshaker_v0.9.0_$(uname -m)-unknown-linux-musl.tar.gz" -C ~/.local/opt && ln -s ~/.local/opt/elfshaker/elfshaker ~/.local/bin/elfshaker
 ```
 <details>
   <summary>Formatted version of the above one-liner</summary>
@@ -13,8 +13,8 @@ mkdir -p ~/.local/opt && mkdir -p ~/.local/bin && tar -xf "elfshaker-Release-$(u
 ```bash
 mkdir -p ~/.local/opt
 mkdir -p ~/.local/bin
-tar -xf "elfshaker-Release-$(uname -m).tar.gz" -C ~/.local/opt
-ln -s ~/.local/opt/elfshaker/bin/elfshaker ~/.local/bin/elfshaker
+tar -xf "elfshaker_v0.9.0_$(uname -m)-unknown-linux-musl.tar.gz" -C ~/.local/opt
+ln -s ~/.local/opt/elfshaker/elfshaker ~/.local/bin/elfshaker
 ```
 </details>
 

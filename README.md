@@ -12,7 +12,7 @@ elfshaker is a low-footprint, high-performance version control system fine-tuned
 
 ## †Applicability
 
-Or, "how on earth do you get such a phenominal result?".
+Or, "how on earth do you get such a phenomenal result?".
 
 It works particularly well for our [presented use case](https://github.com/elfshaker/manyclangs) because it has these properties:
 

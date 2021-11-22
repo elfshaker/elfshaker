@@ -67,7 +67,7 @@ elfshaker store --help
 
 ### Implementation
 1. Compute the checksums for all input file names.
-2. Compare these checksums against the set all loose objects (objects stored as part of a loose snapshot; not in a pack).
+2. Compare these checksums against the set of all loose objects (objects stored as part of a loose snapshot; not in a pack).
 3. Store any new files as objects in the loose object store.
 4. Create a loose pack index `<snapshot>.pack.idx` representing the snapshot in `./elfshaker_data/packs/loose`.
 5. Sets the current snapshot reference `elfshaker_data/HEAD` to the string `loose/<snapshot>:<snapshot>`.
@@ -104,7 +104,7 @@ elfshaker pack <pack> [--frames N]
 
 ### Example
 ```bash
-elfshaker my-pack --frames 8
+elfshaker pack my-pack --frames 8
 ```
 
 ### Description

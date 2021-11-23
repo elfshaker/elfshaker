@@ -5,7 +5,7 @@ use clap::{App, Arg, ArgMatches};
 use rand::RngCore;
 use std::{collections::HashMap, error::Error};
 
-use super::utils::open_repo_from_cwd;
+use super::utils::{open_repo_from_cwd, open_file};
 use elfshaker::repo::ExtractOptions;
 
 pub(crate) const SUBCOMMAND: &str = "show";
@@ -60,7 +60,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         // Dump the contents of all entries to stdout.
         for e in &selected_entries {
             let path = temp_dir.join(&e.path);
-            std::io::copy(&mut std::fs::File::open(path)?, &mut std::io::stdout())?;
+            std::io::copy(&mut open_file(path)?, &mut std::io::stdout())?;
         }
         Ok(())
     };

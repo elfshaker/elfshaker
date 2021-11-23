@@ -17,6 +17,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::iter::FromIterator;
 use std::ops::ControlFlow;
 use std::path::Path;
+use super::utils::open_file;
 
 /// Error type used in the packidx module.
 #[derive(Debug)]
@@ -441,7 +442,7 @@ impl PackIndex {
 
 impl PackIndex {
     pub fn load<P: AsRef<Path>>(p: P) -> Result<PackIndex, PackError> {
-        let rd = File::open(p.as_ref())?;
+        let rd = open_file(p.as_ref())?;
         let mut rd = BufReader::new(rd);
         Self::read_magic(&mut rd)?;
 

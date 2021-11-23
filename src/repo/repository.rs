@@ -23,6 +23,7 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{create_temp_path, ensure_dir, get_last_modified, write_file_atomic};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
+use super::utils::open_file;
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
@@ -549,7 +550,7 @@ impl Repository {
                 let object_readers = objects.iter().map(|&handle| {
                     // TODO: Method of obtaining readers from packs? Or we can
                     // just assume packs first get unpacked.
-                    Ok(Box::new(File::open(
+                    Ok(Box::new(open_file(
                         self.loose_object_path(index.handle_to_checksum(handle)),
                     )?))
                 });

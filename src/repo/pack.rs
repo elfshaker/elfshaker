@@ -24,7 +24,7 @@ use super::constants::{
 };
 use super::error::Error;
 use super::repository::Repository;
-use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
+use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION, utils::open_file};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
 
@@ -325,7 +325,7 @@ impl Pack {
 
     /// Opens the pack file for reading.
     fn open_pack(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
-        let file = File::open(&pack_path)?;
+        let file = open_file(&pack_path)?;
         let file_size = file.metadata()?.len();
         let mut reader = io::BufReader::new(file);
 
@@ -344,7 +344,7 @@ impl Pack {
         let frame_readers = frame_offsets
             .iter()
             .map(|offset| -> Result<_, Error> {
-                let mut reader = File::open(&pack_path)?;
+                let mut reader = open_file(&pack_path)?;
                 io::Seek::seek(&mut reader, io::SeekFrom::Start(header_size + offset))?;
                 let mut reader = Decoder::new(reader)?;
                 reader.set_parameter(DParameter::WindowLogMax(DEFAULT_WINDOW_LOG_MAX))?;
@@ -359,7 +359,7 @@ impl Pack {
 
     /// Backwards-compatible open_pack for the legacy pack format (no skippable frame/no header).
     fn open_pack_legacy(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
-        let file = File::open(&pack_path)?;
+        let file = open_file(&pack_path)?;
         let file_size = file.metadata()?.len();
 
         // This manufactured pack header works for the current implementation. We might

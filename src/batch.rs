@@ -12,6 +12,7 @@ use std::{
     io::{self, Read, Write},
     path::Path,
 };
+// use super::utils::open_file;
 use zstd::stream::raw::CParameter;
 use zstd::Encoder;
 
@@ -72,7 +73,7 @@ where
     for (i, obj) in object_readers.enumerate() {
         // TODO(peterwaller-arm): Verify object checksums here, abort on mismatch.
         let mut obj = obj?;
-        // let mut file = File::open(&obj)?;
+        // let mut file = open_file(&obj)?;
         let bytes = io::copy(&mut obj, &mut encoder)?;
         processed_bytes += bytes;
         reporter.checkpoint(i, Some(n_objects - i));

@@ -23,11 +23,11 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{create_temp_path, ensure_dir, get_last_modified, write_file_atomic};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
-use super::utils::open_file;
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
+    fs::open_file,
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
 };
 use crypto::digest::Digest;
@@ -147,7 +147,7 @@ impl Repository {
     pub fn read_head(&self) -> Result<(Option<SnapshotId>, Option<SystemTime>), Error> {
         let path = self.path.join(&*Self::data_dir()).join(HEAD_FILE);
 
-        let (head, mtime) = match File::open(path) {
+        let (head, mtime) = match open_file(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
             Err(e) => return Err(e.into()),
             Ok(mut file) => {

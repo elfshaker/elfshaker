@@ -4,6 +4,7 @@
 pub mod atomicfile;
 pub mod batch;
 pub mod entrypool;
+pub mod fs;
 pub mod log;
 pub mod packidx;
 pub mod progress;

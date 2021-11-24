@@ -24,9 +24,9 @@ use super::constants::{
 };
 use super::error::Error;
 use super::repository::Repository;
-use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION, utils::open_file};
+use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
-use crate::{log::measure_ok, packidx::ObjectMetadata};
+use crate::{fs::open_file, log::measure_ok, packidx::ObjectMetadata};
 
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
 const EXTRA_ID_CHARS: &[char] = &['-', '_', '/'];

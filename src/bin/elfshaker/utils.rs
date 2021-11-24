@@ -128,12 +128,3 @@ pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressRep
         }
     })
 }
-
-/// Opens a file and gives a useful error if it fails.
-/// If possible, use this instead of File::open if you don't handle errors yourself.
-pub fn open_file(path: &Path) -> File {
-    match File::open(&path) {
-        Err(why) => panic!("couldn't open {}: {}", path.display(), why),
-        Ok(file) => file
-    }
-}

@@ -4,6 +4,7 @@
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
 use crate::entrypool::{EntryPool, Handle};
+use crate::fs::open_file;
 use crate::repo::partition_by_u64;
 
 use serde::de::{SeqAccess, Visitor};
@@ -17,7 +18,6 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::iter::FromIterator;
 use std::ops::ControlFlow;
 use std::path::Path;
-use super::utils::open_file;
 
 /// Error type used in the packidx module.
 #[derive(Debug)]

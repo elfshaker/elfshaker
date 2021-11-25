@@ -80,7 +80,7 @@ fn to_os_str(buf: &[u8]) -> Result<&OsStr, std::str::Utf8Error> {
 #[cfg(not(unix))]
 fn to_os_str(buf: &[u8]) -> Result<&OsStr, std::str::Utf8Error> {
     // On Windows (and everything else) we will expect well-formed UTF-8 and pray
-    Ok(std::str::from_utf8(buf))
+    Ok(OsStr::new(std::str::from_utf8(buf)?))
 }
 
 fn read_files_list(mut reader: impl io::Read, separator: u8) -> io::Result<Vec<PathBuf>> {

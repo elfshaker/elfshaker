@@ -36,7 +36,11 @@ If you looked at the binary delta on the linked executable from such a change, i
 3. `elfshaker pack <pack name>` -- capture all 'loose' snapshots into a single pack file (this is what gets you the compression win).
 4. `elfshaker extract <snapshot>` -- restore the state of a previous snapshot into the current working directory.
 
-For more detail, take a look at our [workflow documentation](https://github.com/elfshaker/elfshaker/blob/main/docs/users/usage.md#workflow).
+For more detail, take a look at our [workflow documentation](https://github.com/elfshaker/elfshaker/blob/main/docs/users/usage.md#workflow) and watch the talk from the 2021 LLVM Developers' Meeting:
+
+<a href="https://www.youtube.com/watch?v=l2KWOqEGRwg">
+  <img src="https://img.youtube.com/vi/l2KWOqEGRwg/0.jpg" width="240" alt="2021 LLVM Dev Mtg “Manyclangs: Fast bisection with a small storage cost">
+</a>
 
 ## System Compatibility
 

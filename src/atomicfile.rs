@@ -11,6 +11,7 @@ use std::{
 /// if it exists before proceeding to do potentially expensive work to fill it.
 /// The primitives should be used like this:
 ///
+/// ```no_run
 ///     use std::path::Path;
 ///     let atomic_create_handle = elfshaker::atomicfile::AtomicCreateFile::new(Path::new("destination_path")).unwrap();
 ///     // ... on error, report that the file might already exist
@@ -20,6 +21,7 @@ use std::{
 ///     let mut reader = std::io::Cursor::new(b"foo");
 ///     atomic_create_handle.commit_content(&mut reader).unwrap();
 ///     // ... files are closed here ...
+/// ```
 ///
 /// 1. If the file already exists and has non-zero size, it is an error in
 ///    ::new.

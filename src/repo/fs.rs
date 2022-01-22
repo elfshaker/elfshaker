@@ -40,7 +40,7 @@ pub fn ensure_dir(path: &Path) -> io::Result<()> {
 /// NOTE: [`temp_dir`] and [`dest`] must be on the same filesystem!
 pub fn write_file_atomic(mut r: impl Read, temp_dir: &Path, dest: &Path) -> io::Result<()> {
     let temp_path = create_temp_path(temp_dir);
-    let mut temp_file = File::create(&temp_path)?;
+    let mut temp_file = create_file(&temp_path)?;
     // The presence of a lock on the file indicates that this tempfile is in
     // use, in case a garbage collection process wants to know which files it
     // can delete. The lock is dropped after the rename.
@@ -59,4 +59,33 @@ pub fn create_temp_path(temp_dir: &Path) -> PathBuf {
         hex::encode(&bytes)
     };
     temp_dir.join(temp_filename)
+}
+
+/// Opens the file in read-only mode, as if by [`File::open`]. Any [`Error`]
+/// returned will contain the provided [`path`] in the error message.
+pub fn open_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
+    match File::open(&path) {
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!("couldn't open {}", path.as_ref().display()),
+        )),
+        Ok(file) => Ok(file),
+    }
+}
+
+/// Opens the file in write-only mode, as if by [`File::create`]. Any [`Error`]
+/// returned will contain the provided [`path`] in the error message.
+///
+/// This function will create a file if it does not exist, and will truncate it if it does
+pub fn create_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
+    match File::create(&path) {
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!(
+                "couldn't create or open {} for writing",
+                path.as_ref().display()
+            ),
+        )),
+        Ok(file) => Ok(file),
+    }
 }

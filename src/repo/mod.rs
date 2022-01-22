@@ -5,7 +5,8 @@
 mod algo;
 mod constants;
 mod error;
-mod fs;
+#[doc(hidden)]
+pub mod fs;
 mod pack;
 mod repository;
 

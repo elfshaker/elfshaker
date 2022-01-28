@@ -44,7 +44,11 @@ impl From<walkdir::Error> for Error {
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::IOError(ioerr) => ioerr.fmt(f),
+            Self::IOError(ioerr) => {
+                // Since the error message can be vague, we also print
+                // the internal error kind.
+                write!(f, "{} ({:?})", ioerr, ioerr.kind())
+            }
             Self::PackError(packerr) => packerr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
             Self::WalkDirError(wderr) => wderr.fmt(f),

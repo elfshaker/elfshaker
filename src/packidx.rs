@@ -4,14 +4,16 @@
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
 use crate::entrypool::{EntryPool, Handle};
-use crate::repo::partition_by_u64;
+use crate::repo::{
+    fs::{create_file, open_file},
+    partition_by_u64,
+};
 
 use serde::de::{SeqAccess, Visitor};
 use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
-use std::fs::File;
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::iter::FromIterator;
@@ -441,7 +443,7 @@ impl PackIndex {
 
 impl PackIndex {
     pub fn load<P: AsRef<Path>>(p: P) -> Result<PackIndex, PackError> {
-        let rd = File::open(p.as_ref())?;
+        let rd = open_file(p.as_ref())?;
         let mut rd = BufReader::new(rd);
         Self::read_magic(&mut rd)?;
 
@@ -450,7 +452,7 @@ impl PackIndex {
 
     pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
         // TODO: Use AtomicCreateFile.
-        let wr = File::create(p.as_ref())?;
+        let wr = create_file(p.as_ref())?;
         let mut wr = BufWriter::new(wr);
         Self::write_magic(&mut wr)?;
 

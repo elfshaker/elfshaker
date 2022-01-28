@@ -6,22 +6,24 @@ use super::{constants::*, pack::IdError};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    fs,
-    fs::File,
-    io,
+    fs, io,
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     time::SystemTime,
 };
 
+use crypto::digest::Digest;
+use crypto::sha1::Sha1;
 use log::{error, info, warn};
 use walkdir::WalkDir;
 
 use super::algo::run_in_parallel;
 use super::constants::REPO_DIR;
 use super::error::Error;
-use super::fs::{create_temp_path, ensure_dir, get_last_modified, write_file_atomic};
+use super::fs::{
+    create_file, create_temp_path, ensure_dir, get_last_modified, open_file, write_file_atomic,
+};
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
@@ -29,8 +31,6 @@ use crate::{
     batch,
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
 };
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
 
 /// A struct specifying the the extract options.
 #[derive(Clone, Debug)]
@@ -146,7 +146,7 @@ impl Repository {
     pub fn read_head(&self) -> Result<(Option<SnapshotId>, Option<SystemTime>), Error> {
         let path = self.path.join(&*Self::data_dir()).join(HEAD_FILE);
 
-        let (head, mtime) = match File::open(path) {
+        let (head, mtime) = match open_file(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
             Err(e) => return Err(e.into()),
             Ok(mut file) => {
@@ -549,7 +549,7 @@ impl Repository {
                 let object_readers = objects.iter().map(|&handle| {
                     // TODO: Method of obtaining readers from packs? Or we can
                     // just assume packs first get unpacked.
-                    Ok(Box::new(File::open(
+                    Ok(Box::new(open_file(
                         self.loose_object_path(index.handle_to_checksum(handle)),
                     )?))
                 });
@@ -590,7 +590,7 @@ impl Repository {
         let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
 
         // And a writer to that temporary file.
-        let mut pack_writer = io::BufWriter::new(File::create(&temp_path)?);
+        let mut pack_writer = io::BufWriter::new(create_file(&temp_path)?);
         // Write header and frames.
         write_skippable_frame(&mut pack_writer, &header_bytes)?;
         for frame_buf in frame_bufs {
@@ -648,7 +648,17 @@ impl Repository {
             dest_path.push(&entry.path);
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;
-            fs::copy(self.loose_object_path(&entry.checksum), &dest_path)?;
+            let object_path = self.loose_object_path(&entry.checksum);
+            fs::copy(&object_path, &dest_path).map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!(
+                        "couldn't copy {} to {}",
+                        object_path.display(),
+                        dest_path.display()
+                    ),
+                )
+            })?;
         }
 
         if verify {

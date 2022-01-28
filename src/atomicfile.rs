@@ -74,7 +74,12 @@ impl<'l> AtomicCreateFile<'l> {
                 // NotFound during creation indicates parent directories do not
                 // exist. Make them and try again.
                 fs::create_dir_all(parent)?;
-                atomic_create_for_write.open(dest)
+                atomic_create_for_write.open(dest).map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!("couldn't open {} for writing", dest.display()),
+                    )
+                })
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 if Self::prune_stale_file(dest) {
@@ -84,7 +89,10 @@ impl<'l> AtomicCreateFile<'l> {
                 }
                 Err(e)
             }
-            r @ Err(_) => r,
+            Err(e) => Err(io::Error::new(
+                e.kind(),
+                format!("couldn't open {} for writing", dest.display()),
+            )),
         }?;
 
         // At this point on success the target file is a zero-byte file on disk
@@ -135,7 +143,10 @@ impl<'l> AtomicCreateFile<'l> {
             .open(&temp_path)
         {
             Ok(f) => Ok(f),
-            r @ Err(_) => r,
+            Err(e) => Err(io::Error::new(
+                e.kind(),
+                format!("couldn't create temporary file {}", temp_path.display()),
+            )),
         }?;
         // Take a lock for as long as the file is held open by this process.
         // Temp files without locks are stale and can be deleted with no

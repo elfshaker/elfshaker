@@ -23,6 +23,7 @@ use super::constants::{
     DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC, PACK_INDEX_EXTENSION,
 };
 use super::error::Error;
+use super::fs::{create_file, open_file};
 use super::repository::Repository;
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
@@ -325,7 +326,7 @@ impl Pack {
 
     /// Opens the pack file for reading.
     fn open_pack(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
-        let file = File::open(&pack_path)?;
+        let file = open_file(&pack_path)?;
         let file_size = file.metadata()?.len();
         let mut reader = io::BufReader::new(file);
 
@@ -344,7 +345,7 @@ impl Pack {
         let frame_readers = frame_offsets
             .iter()
             .map(|offset| -> Result<_, Error> {
-                let mut reader = File::open(&pack_path)?;
+                let mut reader = open_file(&pack_path)?;
                 io::Seek::seek(&mut reader, io::SeekFrom::Start(header_size + offset))?;
                 let mut reader = Decoder::new(reader)?;
                 reader.set_parameter(DParameter::WindowLogMax(DEFAULT_WINDOW_LOG_MAX))?;
@@ -359,7 +360,7 @@ impl Pack {
 
     /// Backwards-compatible open_pack for the legacy pack format (no skippable frame/no header).
     fn open_pack_legacy(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
-        let file = File::open(&pack_path)?;
+        let file = open_file(&pack_path)?;
         let file_size = file.metadata()?.len();
 
         // This manufactured pack header works for the current implementation. We might
@@ -505,7 +506,7 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
 /// of adjusting file permissions.
 fn write_object(buf: &[u8], path: &Path) -> Result<(), Error> {
     fs::create_dir_all(path.parent().unwrap())?;
-    let mut f = File::create(path)?;
+    let mut f = create_file(path)?;
     f.write_all(buf)?;
     Ok(())
 }

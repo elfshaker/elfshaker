@@ -3,6 +3,7 @@
 
 use fs2::FileExt;
 use rand::RngCore;
+
 use std::{
     fs,
     fs::File,
@@ -87,5 +88,220 @@ pub fn create_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
             ),
         )),
         Ok(file) => Ok(file),
+    }
+}
+
+#[cfg(unix)]
+const OS_ERROR_DIR_NOT_EMPTY: i32 = 39 /* ENOTEMPTY */;
+#[cfg(windows)]
+const OS_ERROR_DIR_NOT_EMPTY: i32 = 145 /* ERROR_DIR_NOT_EMPTY */;
+
+/// Removes empty directories by starting at [`leaf_dir`] and bubbling up
+/// until `boundary_dir` is reached.
+///
+/// NOTE: The part of `leaf_dir` after the `boundary_dir` cannot contain '..'
+/// and should go through reference symlinks (for correctness).
+///
+/// # Arguments
+/// * `leaf_dir` - the leaf directory from which to start the removal
+/// * `boundary_dir` - stops when this directory is reached
+pub fn remove_empty_dirs<P1: AsRef<Path>, P2: AsRef<Path>>(
+    leaf_dir: P1,
+    boundary_dir: P2,
+) -> io::Result<()> {
+    if let Ok(relative_path) = leaf_dir.as_ref().strip_prefix(&boundary_dir) {
+        assert!(
+            !contains_parent_dir_component(relative_path),
+            "leaf_dir must not contain '/../'"
+        );
+    } else {
+        panic!("leaf_dir must be a sub-directory of boundary_dir");
+    }
+    assert!(
+        leaf_dir.as_ref() != boundary_dir.as_ref(),
+        "leaf_dir cannot be the same directory as boundary_dir"
+    );
+
+    let current_dir = leaf_dir.as_ref().to_path_buf();
+    match fs::remove_dir(current_dir) {
+        Err(e) if matches!(e.raw_os_error(), Some(OS_ERROR_DIR_NOT_EMPTY)) => Ok(()),
+        Ok(()) => {
+            let parent_dir = leaf_dir.as_ref().parent().unwrap();
+            if parent_dir != boundary_dir.as_ref() {
+                remove_empty_dirs(parent_dir, boundary_dir)?
+            }
+            Ok(())
+        }
+        r => r,
+    }
+}
+
+/// Checks for the existence of a '/../' component in the path.
+fn contains_parent_dir_component(p: &Path) -> bool {
+    p.components().any(|c| c.as_os_str() == "..")
+}
+
+/// A queue of directories which are removed if empty. When an empty directory is
+/// removed, its parent is also considered for removal.
+///
+/// The current implementation uses a heuristic to avoid storing the full set of
+/// paths and is able to avoid spurious system calls when the list of
+/// directories is enqueued in a ascending lexicographic order.
+pub struct EmptyDirectoryCleanupQueue {
+    last: Option<(PathBuf, PathBuf)>,
+}
+
+impl EmptyDirectoryCleanupQueue {
+    pub fn new() -> EmptyDirectoryCleanupQueue {
+        EmptyDirectoryCleanupQueue { last: None }
+    }
+
+    /// Adds a directory to the queue. This operations might process some
+    /// entries in certain situations, so the caller must be prepared to handle
+    /// any IO errors that occur.
+    pub fn enqueue<P1: Into<PathBuf> + AsRef<Path>, P2: Into<PathBuf> + AsRef<Path>>(
+        &mut self,
+        leaf_dir: P1,
+        boundary_dir: P2,
+    ) -> io::Result<()> {
+        let (last_leaf, last_boundary) = match self.last.as_mut() {
+            None => {
+                self.last = Some((leaf_dir.into(), boundary_dir.into()));
+                return Ok(());
+            }
+            Some(x) => x,
+        };
+
+        if *last_boundary == boundary_dir.as_ref() && last_leaf.starts_with(&leaf_dir) {
+            // When scheduling a directory that is a subdirectory of the
+            // last seen directory, we can simply overwrite the
+            // value. remove_empty_dirs will consider the previous
+            // directory for deletion when it recurses up the hierarchy.
+            *last_leaf = leaf_dir.into();
+            Ok(())
+        } else {
+            // When we schedule a directory that is not a sub-directory
+            // of the last seen directory or we change the
+            // boundary, we must call remove_empty_dirs, since we will
+            // overwrite these values.
+            remove_empty_dirs(last_leaf, last_boundary)?;
+            self.last = Some((leaf_dir.into(), boundary_dir.into()));
+            Ok(())
+        }
+    }
+
+    /// Processes the enqueued directories.
+    pub fn process(&mut self) -> io::Result<()> {
+        if let Some((last_leaf, last_boundary)) = self.last.take() {
+            remove_empty_dirs(last_leaf, last_boundary)?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for EmptyDirectoryCleanupQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for EmptyDirectoryCleanupQueue {
+    fn drop(&mut self) {
+        self.process()
+            .expect("Failed to remove some directories! Use process() to handle the error.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use std::iter::FromIterator;
+    use std::path::PathBuf;
+
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new<P: AsRef<Path>>(name: P) -> io::Result<TempDir> {
+            let path = env::temp_dir().join(name.as_ref());
+            fs::create_dir(&path)?;
+            Ok(TempDir(path))
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            println!(
+                "Cleaning up temporary testing directory {}",
+                &self.0.display()
+            );
+            fs::remove_dir_all(&self.0).expect("Could not cleanup!");
+        }
+    }
+
+    fn is_empty_dir<P: AsRef<Path>>(path: P) -> io::Result<bool> {
+        Ok(path.as_ref().read_dir()?.next().is_none())
+    }
+
+    #[test]
+    fn test_remove_empty_dirs_works() -> io::Result<()> {
+        let temp_dir = TempDir::new("test_remove_empty_dirs_works")?;
+        let boundary_dir = temp_dir.0.join("test_root");
+        let leaf_dir = boundary_dir.join(PathBuf::from_iter(&["a", "b", "c", "d"]));
+
+        fs::create_dir_all(&leaf_dir)?;
+
+        remove_empty_dirs(&leaf_dir, &boundary_dir)?;
+
+        assert!(
+            is_empty_dir(boundary_dir)?,
+            "The directory should have been emptied!"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_empty_dirs_is_safe() -> Result<(), io::Error> {
+        let temp_dir = TempDir::new("test_remove_empty_dirs_is_safe")?;
+        let boundary_dir = temp_dir.0.join("test_root");
+        let leaf_dir = boundary_dir.join(PathBuf::from_iter(&["a", "b", "c", "d"]));
+        let file = leaf_dir.join("file");
+
+        fs::create_dir_all(&leaf_dir)?;
+        fs::write(&file, &[])?;
+
+        remove_empty_dirs(&leaf_dir, &boundary_dir)?;
+
+        assert!(
+            file.exists(),
+            "The file was deleted when it shouldn't have been!"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cleanup_queue_works() -> io::Result<()> {
+        let temp_dir = TempDir::new("test_cleanup_queue_works")?;
+        let boundary_dir = temp_dir.0.join("test_root");
+        let leaf_dir = boundary_dir.join(PathBuf::from_iter(&["a", "b", "c", "d"]));
+
+        fs::create_dir_all(&leaf_dir)?;
+
+        let mut q = EmptyDirectoryCleanupQueue::new();
+        q.enqueue(leaf_dir, boundary_dir.clone())?;
+
+        assert!(
+            !is_empty_dir(&boundary_dir)?,
+            "The directory should not have been emptied yet!"
+        );
+        q.process()?;
+        assert!(
+            is_empty_dir(&boundary_dir)?,
+            "The directory should have been emptied!"
+        );
+
+        Ok(())
     }
 }

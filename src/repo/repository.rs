@@ -23,6 +23,7 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
     create_file, create_temp_path, ensure_dir, get_last_modified, open_file, write_file_atomic,
+    EmptyDirectoryCleanupQueue,
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
@@ -374,7 +375,11 @@ impl Repository {
             let old_paths: HashSet<_> = old_entries.iter().map(|e| &e.path).collect();
             // Paths which will be deleted
             let updated: Vec<_> = new_paths.intersection(&old_paths).copied().collect();
-            let removed: Vec<_> = old_paths.difference(&new_paths).copied().collect();
+            let mut removed: Vec<_> = old_paths.difference(&new_paths).copied().collect();
+            // The reason we sort this list is that EmptyDirectoryCleanupQueue
+            // uses some heuristics which make the removal of empty directories
+            // more efficient in this case.
+            removed.sort();
             (updated, removed)
         };
 
@@ -387,6 +392,9 @@ impl Repository {
                 self.check_changed_since(head_time.unwrap(), &path_buf)?;
             }
         }
+
+        let mut dir_queue = EmptyDirectoryCleanupQueue::new();
+
         for path in &removed_paths {
             path_buf.clear();
             path_buf.push(&self.path);
@@ -396,7 +404,12 @@ impl Repository {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 r => r,
             }?;
+
+            dir_queue.enqueue(path_buf.parent().unwrap(), self.path.clone())?;
         }
+
+        // Process the enqueued directories.
+        dir_queue.process()?;
 
         self.extract_entries(snapshot_id.pack(), &new_entries, self.path.clone(), opts)?;
         self.update_head(&snapshot_id)?;

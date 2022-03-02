@@ -8,6 +8,7 @@ mod error;
 #[doc(hidden)]
 pub mod fs;
 mod pack;
+mod remote;
 mod repository;
 
 #[doc(hidden)]

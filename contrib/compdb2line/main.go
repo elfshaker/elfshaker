@@ -303,7 +303,6 @@ checkfail() {
 		exeBases = append(exeBases, exeBase)
 		tgt := funcSafeName(exeBase)
 		src := funcSafeName(symlink.Src)
-		log.Println("Src: ", src, " Dest", tgt)
 		bw.WriteString("LINKSCRIPT_EXE_")
 		bw.WriteString(tgt)
 		bw.WriteString("() { ")
@@ -537,7 +536,6 @@ func parseCDB(pwd string) (cdb CompDB) {
 						if src == dst {
 							continue
 						}
-						log.Println("link: ", src, dst)
 						src = strings.TrimPrefix(src, "lib/")
 						cdb.Symlinks = append(cdb.Symlinks, Symlink{
 							src, dst,

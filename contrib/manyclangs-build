@@ -5,6 +5,10 @@
 [[ "$TRACE" ]] && set -x
 set -euo pipefail
 
+# Workaround for the fact that different programs can have different ideas about
+# what consitutes 'sorted' (particularly, affects 'comm' / 'jq' combination.)
+export LC_COLLATE=C
+
 BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
 
 awk_inplace() {

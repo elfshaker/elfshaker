@@ -222,9 +222,9 @@ checkfail() {
 		arrayName := "LINKSCRIPT_A_" + arBaseName
 		arToBashObjArray[ar] = arrayName
 		bw.WriteString(arrayName)
-		bw.WriteString("=( ")
+		bw.WriteString("=( -Wl,--start-lib ")
 		bw.WriteString(braceContract(cdb.ArToObjs[ar]))
-		bw.WriteString(" )\n")
+		bw.WriteString(" -Wl,--end-lib )\n")
 	}
 
 	var exeBases []string
@@ -259,7 +259,7 @@ checkfail() {
 			}
 		}
 
-		bw.WriteString("maybe_dryrun filter_dupe_objs ")
+		bw.WriteString("maybe_dryrun ")
 
 		// Invocation.
 		switch first {
@@ -335,26 +335,6 @@ checkfail() {
 	bw.WriteRune('\n')
 
 	bw.WriteString(`
-# Run the given arguments, filtering .o files which are seen repeatedly (first one wins).
-filter_dupe_objs() {
-	args=()
-	declare -A seen_objs
-	for arg in "$@"
-	do
-		if [[ "${arg}" != "${arg%.o}" ]]
-		then
-			if ${seen_objs[$arg]-false}
-			then
-				# Avoid duplicating objects as input
-				continue
-			fi
-			seen_objs[$arg]=true
-		fi
-		args+=("$arg")
-	done
-
-	"${args[@]}"
-}
 
 maybe_dryrun() {
 	if ${LINKSCRIPT_DRY_RUN-false}

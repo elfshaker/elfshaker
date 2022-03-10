@@ -195,7 +195,7 @@ checkfail() {
 # This script generates binaries.
 # Without arguments, it generates all of them.
 # Parallelism defaults to one linker per $(nproc) but can be
-# overridden by setting LINK_NPROC= to the desired number of
+# overridden by setting LINKSCRIPT_NPROC= to the desired number of
 # jobs to run in parallel.
 
 # link.sh --and-run <binary> <args...>
@@ -398,19 +398,19 @@ main() {
 		exit 128 # (unreachable)
 	fi
 
-	NPROC=${NPROC-$(nproc)}
+	LINKSCRIPT_NPROC=${LINKSCRIPT_NPROC-$(nproc)}
 
 	mkdir -p bin
 	if [ $# -eq 0 ]; then
 		# Link everything.
-		printf "%q\0" "${LINKSCRIPT_EXES[@]}" | xargs -0 -n1 -P${NPROC} bash "$THIS_SCRIPT"
+		printf "%q\0" "${LINKSCRIPT_EXES[@]}" | xargs -0 -n1 -P${LINKSCRIPT_NPROC} bash "$THIS_SCRIPT"
 	elif [ $# -eq 1 ]; then
 		# Link the one specified.
 		FUNCSAFENAME=$(echo "$1" | sed 's/[^A-Za-z0-9_+-]/_/g')
 		linkscript_check_exists "$FUNCSAFENAME"
 		"LINKSCRIPT_EXE_$FUNCSAFENAME"
 	else
-		printf "%q\0" "$@" | xargs -0 -n1 -P${NPROC} bash "$THIS_SCRIPT"
+		printf "%q\0" "$@" | xargs -0 -n1 -P${LINKSCRIPT_NPROC} bash "$THIS_SCRIPT"
 	fi
 }
 

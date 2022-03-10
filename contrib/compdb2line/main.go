@@ -169,6 +169,29 @@ func linkScript(toPrune, replacements stringList, linkCmdSuffix string, cdb Comp
 	bw.WriteString(`#!/bin/bash
 set -euo pipefail
 
+handle_exit() {
+	STATUS=$?
+	if [ $STATUS -ne 0 ]; then
+		echo "$BASH_ARGV0 had non-zero exit. Setting TRACE=1 in environment may help determine what is wrong."
+	fi
+}
+[[ -z "${LINKSCRIPT_REENTRANCE-}" ]] && trap handle_exit EXIT
+export LINKSCRIPT_REENTRANCE=1
+
+[[ -n "${TRACE-}" ]] && { set -x; export LINKSCRIPT_NPROC=1; }
+
+FAILED=false
+fail() {
+	echo "$BASH_ARGV0" "$*" >&2
+	FAILED=true
+}
+# checkfail exists so that multiple errors can be shown to the user at once before bailing out.
+checkfail() {
+	if $FAILED; then
+		exit 1
+	fi
+}
+
 # This script generates binaries.
 # Without arguments, it generates all of them.
 # Parallelism defaults to one linker per $(nproc) but can be
@@ -304,9 +327,12 @@ set -euo pipefail
 	}
 	bw.WriteString(" )\n\n")
 
-	bw.WriteString(fmt.Sprintf("LINKSCRIPT_LLD=${LINKSCRIPT_LLD-$(command -v ld.lld%s)}\n", linkCmdSuffix))
-	bw.WriteString(fmt.Sprintf("LINKSCRIPT_CXX=${LINKSCRIPT_CXX-$(command -v clang++%s)}\n", linkCmdSuffix))
-	bw.WriteString(fmt.Sprintf("LINKSCRIPT_CC=${LINKSCRIPT_CC-$(command -v clang%s)}\n", linkCmdSuffix))
+	bw.WriteString(fmt.Sprintf(`if ! LINKSCRIPT_LLD=${LINKSCRIPT_LLD-$(command -v ld.lld%s )}; then fail "required binary ld.lld%[1]s  not found in \$PATH"; fi`, linkCmdSuffix))
+	bw.WriteRune('\n')
+	bw.WriteString(fmt.Sprintf(`if ! LINKSCRIPT_CXX=${LINKSCRIPT_CXX-$(command -v clang++%s)}; then fail "required binary clang++%[1]s not found in \$PATH"; fi`, linkCmdSuffix))
+	bw.WriteRune('\n')
+	bw.WriteString(fmt.Sprintf(`if ! LINKSCRIPT_CC=${LINKSCRIPT_CC-$(command   -v clang%s  )}; then fail "required binary clang%[1]s   not found in \$PATH"; fi`, linkCmdSuffix))
+	bw.WriteRune('\n')
 
 	bw.WriteString(`
 # Run the given arguments, filtering .o files which are seen repeatedly (first one wins).
@@ -341,12 +367,14 @@ maybe_dryrun() {
 
 linkscript_check_exists() {
 	[[ $(type -t "LINKSCRIPT_EXE_$1") == function ]] || {
-		echo "Unknown exe requested: $1"
-		exit 1
+		fail "unknown exe requested: $1"
+		checkfail
 	}
 }
 
 main() {
+	checkfail
+
 	THIS_SCRIPT=$(realpath -- "${BASH_SOURCE[0]}")
 	SCRIPT_DIR="$( cd -- "$( dirname -- "$THIS_SCRIPT" )" &> /dev/null && pwd )"
 	cd "$SCRIPT_DIR"

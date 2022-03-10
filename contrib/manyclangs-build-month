@@ -168,6 +168,8 @@ apply_subset() {
 }
 
 main() {
+    BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
+
     sanity_check
 
     echo
@@ -175,8 +177,6 @@ main() {
     YEAR="$1"
     MONTH="$2"
     date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
-
-    BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
 
     commits_for_month "$YEAR" "$MONTH"  > manyclangs-commit-list.txt
     apply_limit < manyclangs-commit-list.txt | apply_subset > manyclangs-commit-list.txt.subset

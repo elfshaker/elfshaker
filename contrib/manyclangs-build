@@ -171,8 +171,8 @@ main() {
     # know no-one else will be modifying header files which may be newly checked
     # out.
     if time CCACHE_FILECLONE=1 \
-        CCACHE_NOCOMPRESS=1\
-        CCACHE_SLOPPINESS=time_macros,include_file_ctime,include_file_mtime
+        CCACHE_NOCOMPRESS=1 \
+        CCACHE_SLOPPINESS=time_macros,include_file_ctime,include_file_mtime \
         CCACHE_COMPILERCHECK=string:manyclangs-clang${BUILDER_CLANG_VERSION_SUFFIX} \
         "${NINJA}" -f build.patched.ninja |& tee -a build.log
     then

@@ -113,7 +113,7 @@ main() {
         # * https://github.com/elfshaker/elfshaker/issues/11
         # * https://bugs.llvm.org/show_bug.cgi?id=52360
         # ("__PRETTY_FUNCTION__ leaks absolute paths even with -fmacro-prefix-map").
-        cp build.ninja build.ninja.orig # backup, in case of failure.
+
         # shellcheck disable=SC2016
         awk_inplace -c -v "search=$ABS_BASE_PATH" -v "replace=$REL_BASE_PATH" '
             /^  INCLUDES = / { gsub(" -I"search, " -I"replace, $0); print; next }
@@ -127,7 +127,7 @@ main() {
         chmod +x link.sh
 
         # Avoid writing binaries out to disk, saves disk space when we're writing to tmpfs.
-        sed -Ei '/TARGET_FILE = bin\/(clang-ast-dump|(clang|llvm)-tblgen)/!s|TARGET_FILE = bin/.*|TARGET_FILE = /dev/null|' build.ninja
+        sed -E '/TARGET_FILE = bin\/(clang-ast-dump|(clang|llvm)-tblgen)/!s|TARGET_FILE = bin/.*|TARGET_FILE = /dev/null|' build.ninja > build.patched.ninja
     fi
 
     patch_clang_version "$COMMIT_SHA"
@@ -174,7 +174,7 @@ main() {
         CCACHE_NOCOMPRESS=1\
         CCACHE_SLOPPINESS=time_macros,include_file_ctime,include_file_mtime
         CCACHE_COMPILERCHECK=string:manyclangs-clang${BUILDER_CLANG_VERSION_SUFFIX} \
-        "${NINJA}" |& tee -a build.log
+        "${NINJA}" -f build.patched.ninja |& tee -a build.log
     then
         # On build success, the log is not very interesting, so delete it.
         rm build.log

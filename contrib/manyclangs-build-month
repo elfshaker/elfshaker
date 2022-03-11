@@ -69,7 +69,7 @@ _manyclangs_build_part() {
     HASHES_DIR=$PWD/hashes
     mkdir -p "$HASHES_DIR"
     mkdir -p "${GIT_WORK_TREE}/build"
-    cd "${GIT_WORK_TREE}/build"
+    pushd "${GIT_WORK_TREE}/build"
     ln -frs "${ELFSHAKER_DATA}" elfshaker_data
 
     # CCACHE_BASEDIR causes ccache to rewrite arguments to the compiler to be
@@ -110,6 +110,8 @@ _manyclangs_build_part() {
 
         echo Built "$SNAPSHOT_NAME" 1>&30 # for pv progress output.
     done < "${COMMIT_LIST}"
+
+    popd
 
     if [[ -z "${MANYCLANGS_NODELETE-}" ]]
     then

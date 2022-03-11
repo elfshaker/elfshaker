@@ -7,6 +7,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use std::os::unix::fs::MetadataExt;
+
 /// AtomicCreateFile provides an API for atomically creating a file, determining
 /// if it exists before proceeding to do potentially expensive work to fill it.
 /// The primitives should be used like this:
@@ -55,6 +57,21 @@ pub struct AtomicCreateFile<'l> {
     target: File,
 }
 
+/// lock_name acquires a lock on the given `fd`, and ensures that the
+/// `fd` relates to the given Path. This protects against the case where
+/// a file can be locked, but unlinked.
+fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
+    fd.try_lock_exclusive()?;
+    // Lock acquired. Ensure that the name on the filesystem corresponds
+    // to the lock now held.
+    let i0 = fd.metadata()?.ino();
+    let i1 = fs::metadata(name)?.ino();
+    if i0 != i1 {
+        return Err(io::Error::new(io::ErrorKind::WouldBlock, "would block"));
+    }
+    Ok(())
+}
+
 impl<'l> AtomicCreateFile<'l> {
     pub fn new(dest: &'l Path) -> io::Result<Self> {
         let mut atomic_create_for_write = OpenOptions::new();
@@ -67,7 +84,7 @@ impl<'l> AtomicCreateFile<'l> {
                 // stale. Failure to grab the lock here should be a rare race
                 // condition, but some other process will have the lock and
                 // proceed.
-                file.try_lock_exclusive()?;
+                lock_name(dest, &file)?;
                 Ok(file)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -110,24 +127,23 @@ impl<'l> AtomicCreateFile<'l> {
     /// with no lock on it which can be safely deleted.
     pub fn prune_stale_file<P: AsRef<Path>>(p: P) -> bool {
         let p = p.as_ref();
-        let md = match fs::metadata(p) {
-            Ok(md) => md,
-            Err(_) => return false,
-        };
-        if !md.is_file() || md.len() > 0 {
-            // 1. Only applies to files.
-            // 2. Files with non-zero length are not stale.
-            return false;
-        }
-        // Attempt to open, lock, and delete the file. Return true on success, false otehrwise.
+        // Attempt to open, lock, and delete the file. Return true on
+        // success, false otherwise.
         OpenOptions::new()
             .read(true)
             .open(p)
-            .map(|file| {
-                if file.try_lock_exclusive().is_ok() {
-                    fs::remove_file(p).is_ok()
+            .and_then(|file| {
+                let md = file.metadata()?;
+                if !md.is_file() || md.len() > 0 {
+                    // Files with non-zero length are not stale.
+                    return Ok(false);
+                }
+
+                if lock_name(p, &file).is_ok() {
+                    fs::remove_file(p)?;
+                    Ok(true)
                 } else {
-                    false
+                    Ok(false) // Another process has the lock.
                 }
             })
             .unwrap_or(false)
@@ -198,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_atomic_update_api() -> Result<(), Box<dyn Error>> {
-        let p = create_temp_path("/dev/shm/elfshaker-test/test_atomic_update_api");
+        let p = create_temp_path("/tmp/test_atomic_update_api");
 
         // Create an empty file with no lock on it.
         // Should succeed later.

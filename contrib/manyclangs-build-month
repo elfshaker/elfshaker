@@ -34,6 +34,8 @@ _manyclangs_list_files0_to_pack() {
     find . -maxdepth 1 -type f \( \
             -name link.sh \
             -or -name README \
+            -or -name build.ninja \
+            -or -name rules.ninja \
             -or -name 'LICENSE*' \
             -or -name '*.log' \
             -or -name 'COMMIT_SHA' \

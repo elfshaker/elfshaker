@@ -24,7 +24,7 @@ commits_for_month() {
     fi
 
     git-list-between origin/main \
-        "$YEAR/$MONTH/01" "$NEXT_YEAR/$NEXT_MONTH/01" -- llvm clang
+        "$YEAR/$MONTH/01" "$NEXT_YEAR/$NEXT_MONTH/01" -- llvm clang cmake
 }
 
 _manyclangs_list_files0_to_pack() {
@@ -81,13 +81,22 @@ _manyclangs_build_part() {
     while read -r COMMIT_SHA SNAPSHOT_NAME
     do
         echo "Building commit $SNAPSHOT_NAME"
+
+        EXTRA=()
+        # Detect the cmake top-level directory introduced Jan 2022.
+        if git ls-tree "$COMMIT_SHA":cmake &> /dev/null;
+        then
+            EXTRA+=(cmake)
+        fi
+
         # Handy comand which sets the sources in ./llvm ./clang to the right
         # contents efficiently (including removing files which have gone). It
         # makes use of the $GIT_INDEX_FILE to keep track of the old state so is
         # efficient.
-        GIT_WORK_TREE=.. \
-        git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
-            ../{llvm,clang} :^../{llvm,clang}/test
+        (cd .. &&
+         git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
+             {llvm,clang} :^{llvm,clang}/test "${EXTRA[@]}"
+        )
 
         echo "$COMMIT_SHA" > COMMIT_SHA
         date

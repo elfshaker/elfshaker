@@ -450,6 +450,14 @@ impl PackIndex {
         Ok(rmp_serde::decode::from_read(rd)?)
     }
 
+    pub fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
+        let rd = open_file(p.as_ref())?;
+        let mut rd = BufReader::new(rd);
+        Self::read_magic(&mut rd)?;
+        let mut d = rmp_serde::Deserializer::new(rd);
+        Ok(PackIndex::deserialize_only_snapshots(&mut d)?.snapshot_tags)
+    }
+
     pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
         // TODO: Use AtomicCreateFile.
         let wr = create_file(p.as_ref())?;

@@ -28,14 +28,14 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
                     .into_iter()
                     .filter_map(|s| {
                         s.contains(term)
-                            .then(|| std::array::IntoIter::new([s.to_string(), p.to_string()]))
+                            .then(|| IntoIterator::into_iter([s.to_string(), p.to_string()]))
                     })
                     .collect::<Vec<_>>()
             })
         })
         .flatten();
 
-    let i = std::array::IntoIter::new(["SNAPSHOT".to_owned(), "PACK".to_owned()]);
+    let i = IntoIterator::into_iter(["SNAPSHOT".to_owned(), "PACK".to_owned()]);
     print_table(Some(i), table);
     Ok(())
 }

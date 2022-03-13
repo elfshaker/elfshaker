@@ -819,7 +819,7 @@ where
     P: AsRef<Path>,
 {
     let files = files
-        .map(|p| {
+        .flat_map(|p| {
             if p.as_ref().is_relative() {
                 Ok(p)
             } else {
@@ -829,7 +829,6 @@ where
                 ))
             }
         })
-        .flatten()
         .map(|p| {
             Ok(p.as_ref()
                 .canonicalize()?

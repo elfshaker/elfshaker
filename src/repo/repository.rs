@@ -258,8 +258,8 @@ impl Repository {
             .packs()?
             .into_iter()
             .filter_map(|pack_id| {
-                self.load_index(&pack_id)
-                    .map(|idx| idx.has_snapshot(snapshot).then(|| pack_id))
+                self.load_index_snapshots(&pack_id)
+                    .map(|idx| idx.iter().any(|x| x == snapshot).then(|| pack_id))
                     .transpose()
             })
             .collect::<Result<Vec<PackId>, Error>>()?;
@@ -306,6 +306,17 @@ impl Repository {
         };
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Ok(PackIndex::load(pack_index_path)?)
+    }
+
+    pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
+        let data_dir = self.path.join(&*Repository::data_dir());
+        let pack_index_path = match pack_id {
+            PackId::Pack(name) => data_dir
+                .join(PACKS_DIR)
+                .join(name)
+                .with_extension(PACK_INDEX_EXTENSION),
+        };
+        Ok(PackIndex::load_only_snapshots(pack_index_path)?)
     }
 
     /// Checks-out the specified snapshot.

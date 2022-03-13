@@ -52,7 +52,7 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
     let mut table = vec![];
 
     for pack_id in repo.packs()? {
-        let pack_index = repo.load_index(&pack_id)?;
+        let pack_index = repo.load_index_snapshots(&pack_id)?;
 
         let size_str = match repo.open_pack(&pack_id) {
             Ok(pack) => if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) },
@@ -63,7 +63,7 @@ fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Erro
             match pack_id {
                 PackId::Pack(s) => s,
             },
-            pack_index.snapshot_tags().len().to_string(),
+            pack_index.len().to_string(),
             size_str,
         ]);
     }

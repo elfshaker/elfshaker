@@ -26,7 +26,7 @@ use super::error::Error;
 use super::fs::{create_file, open_file};
 use super::repository::Repository;
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
-use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
+use crate::packidx::{FileEntry, ObjectChecksum, PackError};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
 
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
@@ -277,8 +277,6 @@ impl Default for PackHeader {
 pub struct Pack {
     /// The base filename ([`Path::file_stem`]) of the pack.
     name: String,
-    /// The index for the pack.
-    index: PackIndex,
     /// The header of the pack.
     header: PackHeader,
     /// PackReader instances for each frame in the .pack file.
@@ -288,7 +286,7 @@ pub struct Pack {
 }
 
 impl Pack {
-    /// Opens a pack file and its corresponding index.
+    /// Open a pack file.
     ///
     /// # Arguments
     ///
@@ -307,17 +305,12 @@ impl Pack {
         let mut pack_path = packs_data.join(pack_name);
         pack_path.set_extension(PACK_EXTENSION);
 
-        info!("Reading pack index {:?}...", pack_index_path);
-        let pack_index = PackIndex::load(&pack_index_path)?;
-
         info!("Opening pack file {:?}...", pack_path);
-
         let (file_size, header, frame_readers) =
             Self::open_pack(&pack_path).or_else(|_| Self::open_pack_legacy(&pack_path))?;
 
         Ok(Pack {
             name: pack_name.to_owned(),
-            index: pack_index,
             header,
             frame_readers,
             file_size,
@@ -380,11 +373,6 @@ impl Pack {
     /// The base filename ([`Path::file_stem`]) of the pack.
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    /// A reference to the pack index.
-    pub fn index(&self) -> &PackIndex {
-        &self.index
     }
 
     /// The size of the pack in bytes.

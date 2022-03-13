@@ -19,10 +19,6 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let snapshot = repo.find_snapshot(snapshot)?;
     let pack_index = repo.load_index(snapshot.pack())?;
 
-    // pack_index.resolve_snapshot(needle)
-    // let entries: HashMap<_, _> = pack_index
-    //     .entries_from_snapshot(snapshot.tag())?
-
     let entries: HashMap<_, _> = pack_index
         .entries_from_handles(
             pack_index

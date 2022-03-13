@@ -162,7 +162,7 @@ impl<'l> AtomicCreateFile<'l> {
     pub fn commit_content(mut self, mut r: impl Read) -> io::Result<()> {
         let written = io::copy(&mut r, &mut self.temp.1)?;
         assert!(
-            !(written == 0),
+            written != 0,
             "written == 0 in commit_content; \
              AtomicCreateFile assumes non-empty files",
         );

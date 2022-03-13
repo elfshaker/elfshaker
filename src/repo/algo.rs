@@ -16,7 +16,7 @@ where
     Item: Send,
     Output: Send,
 {
-    assert!(!(nthread == 0), "nthread == 0");
+    assert!(nthread != 0, "nthread == 0");
     crossbeam_utils::thread::scope(|s| {
         let mut workers = Vec::new();
         let mut items = items.peekable();

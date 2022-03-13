@@ -27,7 +27,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         .values_of("indexes")
         .map(|opts| {
             opts.into_iter()
-                .map(|s| PackId::from_str(s))
+                .map(PackId::from_str)
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;

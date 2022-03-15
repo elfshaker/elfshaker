@@ -18,6 +18,7 @@ walkdir = "2.3.2"
 clap = "2.33.0"
 rust-crypto = "0.2.36"
 hex = "0.4.3"
+chrono = "0.4.19"
 url = "2.2.2"
 ureq = "2.4.0"
 serde = { version = "1.0.126", features = ["derive", "rc"] }

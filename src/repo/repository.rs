@@ -26,6 +26,7 @@ use super::fs::{
     EmptyDirectoryCleanupQueue,
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
+use super::remote;
 use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
@@ -806,6 +807,27 @@ impl Repository {
         // $REPO_DIR/$LOOSE/FA/F0/FAF0F0F0FAFAF0F0F0FAFAF0F0
         obj_path.push(&checksum_str[4..]);
         obj_path
+    }
+
+    /// Updates all remotes and their associated .pack.idx files.
+    pub fn update_remotes(&self) -> Result<(), Error> {
+        let mut remotes_dir = self.path().join(&*Repository::data_dir());
+        remotes_dir.push(REMOTES_DIR);
+        let remotes = remote::load_remotes(&remotes_dir)?;
+
+        println!("Loaded {:?}", remotes);
+        for remote in remotes {
+            // .path() is Some, because load_remotes guarantees it
+            let remote_name = remote.path().unwrap().file_stem().unwrap();
+            let mut remote_packs_dir = self.path().join(&*Repository::data_dir());
+            remote_packs_dir.push(PACKS_DIR);
+            remote_packs_dir.push(remote_name);
+
+            let remote = remote::update_remote(&remote)?;
+            fs::create_dir_all(&remote_packs_dir)?;
+            remote::update_remote_packs(&remote, &remote_packs_dir)?;
+        }
+        Ok(())
     }
 }
 

@@ -33,6 +33,10 @@ pub enum Error {
     PackNotFound(String),
     /// The directory is not a repository
     RepositoryNotFound,
+    /// The .esi file is corrupted.
+    BadRemoteIndexFormat(String),
+    /// A type-erased error resulting from an HTTP operation.
+    HttpError(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl From<walkdir::Error> for Error {
@@ -77,6 +81,8 @@ impl Display for Error {
                 p,
             ),
             Self::RepositoryNotFound => write!(f, "The directory is not an elfshaker repository!"),
+            Self::HttpError(e) => e.fmt(f),
+            Self::BadRemoteIndexFormat(e) => e.fmt(f),
         }
     }
 }

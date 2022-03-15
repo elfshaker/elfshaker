@@ -7,6 +7,7 @@ mod list;
 mod pack;
 mod show;
 mod store;
+mod update;
 mod utils;
 
 use clap::{App, Arg, ArgMatches};
@@ -45,6 +46,7 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
         (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
         (show::SUBCOMMAND, Some(matches)) => show::run(matches),
         (find::SUBCOMMAND, Some(matches)) => find::run(matches),
+        (update::SUBCOMMAND, Some(matches)) => update::run(matches),
         _ => {
             app.print_long_help()?;
             println!();
@@ -61,6 +63,7 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(pack::get_app())
         .subcommand(show::get_app())
         .subcommand(find::get_app())
+        .subcommand(update::get_app())
         .arg(
             Arg::with_name("verbose")
                 .long("verbose")

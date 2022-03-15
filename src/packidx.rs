@@ -444,6 +444,10 @@ impl PackIndex {
 impl PackIndex {
     pub fn load<P: AsRef<Path>>(p: P) -> Result<PackIndex, PackError> {
         let rd = open_file(p.as_ref())?;
+        Self::parse(rd)
+    }
+
+    pub fn parse<R: Read>(rd: R) -> Result<PackIndex, PackError> {
         let mut rd = BufReader::new(rd);
         Self::read_magic(&mut rd)?;
 

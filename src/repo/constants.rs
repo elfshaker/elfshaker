@@ -11,11 +11,17 @@ pub const INDEX_FILE: &str = "index";
 pub const HEAD_FILE: &str = "HEAD";
 /// A directory containing a list of .pack and .pack.idx files
 pub const PACKS_DIR: &str = "packs";
+/// A directory containing the .esi files
+pub const REMOTES_DIR: &str = "remotes";
 /// The file extension of a pack file.
 pub const PACK_EXTENSION: &str = "pack";
 /// The file extension of a pack index file.
 pub const PACK_INDEX_EXTENSION: &str = "pack.idx";
 pub const DOT_PACK_INDEX_EXTENSION: &str = ".pack.idx";
+/// The file extension of remote elfshaker indexes.
+pub const REMOTE_INDEX_EXTENSION: &str = "esi";
+// Limit for .esi files received over the network.
+pub const REMOTE_INDEX_SIZE_LIMIT: u64 = 0x80_0000; /* 8 MiB */
 /// A directory containing the object files from all loose snapshots
 pub const LOOSE_DIR: &str = "loose";
 /// A directory used during store/extract operations. Can be deleted safely

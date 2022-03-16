@@ -117,6 +117,11 @@ pub struct ExtractResult {
 pub struct Repository {
     /// The path containing the [`Repository::data_dir`] directory.
     path: PathBuf,
+    /// Since there might be multiple long running sub-tasks invoked in each
+    /// macro tasks (e.g. extract snapshot includes fetching the .esi,
+    /// fetching individual pack, etc.), it is useful to use a "factory",
+    /// instead of argument passing for the [`ProgressReporter`].
+    progress_reporter_factory: Box<dyn Fn(&str) -> ProgressReporter<'static> + Send + Sync>,
 }
 
 impl Repository {
@@ -140,6 +145,7 @@ impl Repository {
 
         Ok(Repository {
             path: path.as_ref().to_owned(),
+            progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
         })
     }
 
@@ -291,10 +297,12 @@ impl Repository {
         let pack_index_path = match pack_id {
             PackId::Pack(name) => data_dir
                 .join(PACKS_DIR)
+                .join(LOOSE_DIR)
                 .join(name)
-                .with_extension(PACK_EXTENSION),
+                .with_extension(PACK_INDEX_EXTENSION),
         };
-        !pack_index_path.exists()
+        // The pack is loose if the .pack.idx is in the loose packs directory
+        pack_index_path.exists()
     }
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
@@ -451,11 +459,47 @@ impl Repository {
     where
         P: AsRef<Path>,
     {
-        if let Ok(pack) = self.open_pack(pack_id) {
+        if self.is_pack_loose(pack_id) {
+            self.copy_loose_entries(entries, path.as_ref(), opts.verify())
+        } else if let Ok(pack) = self.open_pack(pack_id) {
             pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
         } else {
-            self.copy_loose_entries(entries, path.as_ref(), opts.verify())
+            info!("Pack not available locally! Fetching from remote...");
+            self.update_remote_pack(pack_id)?;
+            self.open_pack(pack_id).and_then(|pack| {
+                pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
+            })
         }
+    }
+
+    fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
+        let mut remotes_dir = self.path().join(&*Repository::data_dir());
+        remotes_dir.push(REMOTES_DIR);
+        let remotes = remote::load_remotes(&remotes_dir)?;
+
+        let pack = match pack {
+            PackId::Pack(p) => p.rsplit_once('/').map(|x| x.1).unwrap_or(p),
+        };
+        let pack_file_name = pack.to_string() + "." + PACK_EXTENSION;
+
+        let agent = ureq::AgentBuilder::new().build();
+        let reporter = (self.progress_reporter_factory)("Fetching pack file");
+
+        for remote in remotes {
+            if let Some(remote_pack) = remote.find_pack(pack) {
+                info!("Found {} in {}. Updating...", pack, remote);
+                let pack_path = self
+                    .path()
+                    .join(&*Repository::data_dir())
+                    .join(PACKS_DIR)
+                    .join(remote.name().unwrap())
+                    .join(pack_file_name);
+                remote::update_remote_pack(&agent, remote_pack, &pack_path, &reporter)?;
+                return Ok(());
+            }
+        }
+
+        Err(Error::PackNotFound(pack.into()))
     }
 
     /// The name of the directory containing the elfshaker repository data.
@@ -659,6 +703,13 @@ impl Repository {
         Ok(())
     }
 
+    pub fn set_progress_reporter<F>(&mut self, factory: F)
+    where
+        F: 'static + Fn(&str) -> ProgressReporter<'static> + Send + Sync,
+    {
+        self.progress_reporter_factory = Box::new(factory);
+    }
+
     fn copy_loose_entries(
         &mut self,
         entries: &[FileEntry],
@@ -815,7 +866,8 @@ impl Repository {
         remotes_dir.push(REMOTES_DIR);
         let remotes = remote::load_remotes(&remotes_dir)?;
 
-        println!("Loaded {:?}", remotes);
+        let agent = ureq::AgentBuilder::new().build();
+
         for remote in remotes {
             // .path() is Some, because load_remotes guarantees it
             let remote_name = remote.path().unwrap().file_stem().unwrap();
@@ -823,9 +875,10 @@ impl Repository {
             remote_packs_dir.push(PACKS_DIR);
             remote_packs_dir.push(remote_name);
 
-            let remote = remote::update_remote(&remote)?;
+            info!("Updating {}...", remote);
+            let remote = remote::update_remote(&agent, &remote)?;
             fs::create_dir_all(&remote_packs_dir)?;
-            remote::update_remote_packs(&remote, &remote_packs_dir)?;
+            remote::update_remote_packs(&agent, &remote, &remote_packs_dir)?;
         }
         Ok(())
     }

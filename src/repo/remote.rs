@@ -8,13 +8,16 @@ use std::{
 };
 
 use chrono::{offset::Utc, DateTime};
-use ureq::AgentBuilder;
+use crypto::digest::Digest;
+use crypto::sha1::Sha1;
+use ureq::Agent;
 use url::Url;
 
-use super::constants::{PACK_INDEX_EXTENSION, REMOTE_INDEX_EXTENSION, REMOTE_INDEX_SIZE_LIMIT};
+use super::constants::{PACK_EXTENSION, REMOTE_INDEX_EXTENSION};
 use super::error::Error;
 use super::fs::{create_file, open_file};
 use crate::packidx::{ObjectChecksum, PackIndex};
+use crate::progress::{ProgressReporter, ProgressWriter};
 
 const HTTP_STATUS_OK: u16 = 200;
 const HTTP_STATUS_NOT_MODIFIED: u16 = 304;
@@ -25,10 +28,17 @@ pub struct RemotePack {
     pub url: String,
 }
 
+impl RemotePack {
+    pub fn file_name(&self) -> &str {
+        self.url.rsplit_once('/').unwrap().1
+    }
+}
+
 #[derive(Debug)]
 pub struct RemoteIndex {
     // Set when open by load().
     path: Option<PathBuf>,
+    #[allow(dead_code)]
     meta: String,
     url: String,
     packs: Vec<RemotePack>,
@@ -44,16 +54,32 @@ impl RemoteIndex {
         }
     }
 
+    pub fn packs(&self) -> &[RemotePack] {
+        &self.packs
+    }
+
     pub fn path(&self) -> Option<&Path> {
-        self.path.as_ref().map(|p| p.as_path())
+        self.path.as_deref()
+    }
+
+    pub fn name(&self) -> Option<String> {
+        self.path()
+            .map(|p| p.file_stem())
+            .flatten()
+            .map(|s| (*s.to_string_lossy()).into())
     }
 
     pub fn load<P: AsRef<Path>>(path: P) -> Result<RemoteIndex, Error> {
         let file = open_file(path.as_ref()).map_err(Error::IOError)?;
         let reader = BufReader::new(file);
-        let mut ridx = Self::read(reader)?;
-        ridx.path = Some(path.as_ref().into());
-        Ok(ridx)
+        let mut remote = Self::read(reader)?;
+        remote.path = Some(path.as_ref().into());
+        Ok(remote)
+    }
+
+    pub fn find_pack(&self, pack_name: &str) -> Option<&RemotePack> {
+        let file_name = pack_name.to_owned() + "." + PACK_EXTENSION;
+        self.packs.iter().find(|p| p.file_name() == file_name)
     }
 
     pub fn read<R: BufRead>(reader: R) -> Result<RemoteIndex, Error> {
@@ -62,6 +88,12 @@ impl RemoteIndex {
         let meta = Self::read_keyed_line(&mut lines, "meta")?;
         line_no += 1;
         let url = Self::read_keyed_line(&mut lines, "url")?;
+        let base_url = url.parse::<Url>().map_err(|_| {
+            Error::BadRemoteIndexFormat(format!(
+                "Expected a valid elfshaker index URL, found {} on line {}",
+                url, line_no
+            ))
+        })?;
         line_no += 1;
 
         let mut packs = vec![];
@@ -82,7 +114,9 @@ impl RemoteIndex {
                 ))
             })?;
 
-            if url.parse::<Url>().is_err() {
+            // Always provide the index URL as base URL. If the pack URL is
+            // absolute, the `join` will use it as-is.
+            if base_url.join(url).is_err() {
                 return Err(Error::BadRemoteIndexFormat(format!(
                     "Expected a valid pack URL, found {} on line {}",
                     url, line_no
@@ -148,6 +182,18 @@ impl RemoteIndex {
     }
 }
 
+impl std::fmt::Display for RemoteIndex {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if let Some(stem) = self.path().map(|p| p.file_stem()).flatten() {
+            write!(fmt, "{} ({})", stem.to_string_lossy(), self.url)?;
+        } else {
+            let stem = self.url.rsplit_once('/').unwrap().0;
+            write!(fmt, "{} ({})", stem, self.url)?;
+        }
+        Ok(())
+    }
+}
+
 /// Loads all remote index (.esi) files from the target directory.
 pub fn load_remotes(base_path: &Path) -> Result<Vec<RemoteIndex>, Error> {
     let paths = fs::read_dir(base_path).unwrap();
@@ -163,19 +209,21 @@ pub fn load_remotes(base_path: &Path) -> Result<Vec<RemoteIndex>, Error> {
 /// # Arguments
 /// * `url` - the URL to fetch
 /// * `timeout` - the timeout for the whole of the request
-/// * `size_limit` - the maximum size of the response body, before the
-///   connection is terminated
 /// * `if_modified_since` - Sets the value of the `If-Modified-Since` HTTP
 ///   header
-fn read_remote_resource(
+fn open_remote_resource(
+    agent: &Agent,
     url: &Url,
-    timeout: Duration,
-    size_limit: u64,
+    timeout: Option<Duration>,
     if_modified_since: Option<SystemTime>,
-) -> Result<Option<Vec<u8>>, Error> {
-    let agent = AgentBuilder::new().timeout(timeout).build();
-
+) -> Result<Option<(usize, impl Read)>, Error> {
     let mut request = agent.get(url.as_ref());
+    // Alternatively, we could have used Duration::MAX to indicate no timeout.
+    // Unfortunately, the ureq crashes at some unwrap() somewhere then MAX is
+    // provided.
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
     if let Some(if_modified_since) = if_modified_since {
         request = request.set("If-Modified-Since", &format_http_date(if_modified_since));
     }
@@ -184,21 +232,23 @@ fn read_remote_resource(
 
     let status = response.status();
 
-    log::info!("HTTP GET {} -> {}", url, status);
+    let content_length = response
+        .header("Content-Length")
+        .ok_or(Error::HttpError(
+            "Response did not include a Content-Length header!".into(),
+        ))?
+        .parse::<usize>()
+        .unwrap_or(0);
+
+    log::info!(
+        "HTTP GET {} -> {} (Content-Length: {})",
+        url,
+        status,
+        content_length
+    );
 
     match status {
-        HTTP_STATUS_OK => {
-            let mut body = vec![];
-            response
-                .into_reader()
-                // A malicious third-party could overwhelm might send a very
-                // large response.
-                .take(size_limit)
-                .read_to_end(&mut body)
-                .map_err(|e| Error::HttpError(e.into()))?;
-
-            Ok(Some(body))
-        }
+        HTTP_STATUS_OK => Ok(Some((content_length, response.into_reader()))),
         HTTP_STATUS_NOT_MODIFIED => Ok(None),
         _ => Err(Error::HttpError(
             format!(
@@ -210,8 +260,59 @@ fn read_remote_resource(
     }
 }
 
-pub fn update_remote_packs(ridx: &RemoteIndex, base_dir: &Path) -> Result<(), Error> {
-    for pack in &ridx.packs {
+fn read_remote_resource(
+    agent: &Agent,
+    url: &Url,
+    timeout: Duration,
+    if_modified_since: Option<SystemTime>,
+) -> Result<Option<Vec<u8>>, Error> {
+    open_remote_resource(agent, url, Some(timeout), if_modified_since).and_then(|opt_reader| {
+        opt_reader.map(|mut reader| {
+            let mut body: Vec<u8> = vec![];
+            reader
+                .1
+                .read_to_end(&mut body)
+                .map_err(|e| Error::HttpError(e.into()))
+                .map(|_| body)
+        }).map_or(Ok(None), |v| v.map(Some))
+    })
+}
+
+pub fn update_remote_pack(
+    agent: &Agent,
+    remote_pack: &RemotePack,
+    pack_path: &Path,
+    reporter: &ProgressReporter,
+) -> Result<(), Error> {
+    let date_modified = fs::metadata(&pack_path)
+        .ok()
+        .map(|x| x.modified().ok())
+        .flatten();
+
+    let url = remote_pack.url.parse::<Url>().unwrap();
+    if let Some((content_length, mut reader)) = open_remote_resource(agent, &url, None, date_modified)? {
+        let mut data = vec![];
+
+        let mut writer = ProgressWriter::with_known_size(&mut data, reporter, content_length);
+        io::copy(&mut reader, &mut writer)?;
+
+        let mut checksum = [0u8; 20];
+        let mut hasher = Sha1::new();
+        hasher.input(&data);
+        hasher.result(&mut checksum);
+
+        if checksum == remote_pack.checksum {
+            create_file(pack_path)?.write_all(&data)?;
+        } else {
+            log::error!("The checksum did not match the one in the .esi! The download failed.");
+            return Err(Error::CorruptPack);
+        }
+    }
+    Ok(())
+}
+
+pub fn update_remote_packs(agent: &Agent, remote: &RemoteIndex, base_dir: &Path) -> Result<(), Error> {
+    for pack in &remote.packs {
         let url = (pack.url.to_string() + ".idx").parse::<Url>().unwrap();
         let pack_index_file_name = url.path_segments().unwrap().last().unwrap();
         let pack_index_path = base_dir.join(pack_index_file_name);
@@ -222,9 +323,9 @@ pub fn update_remote_packs(ridx: &RemoteIndex, base_dir: &Path) -> Result<(), Er
             .flatten();
 
         let pack_index_bytes = read_remote_resource(
+            agent,
             &url,
             Duration::from_secs(15),
-            REMOTE_INDEX_SIZE_LIMIT,
             date_modified,
         )?;
 
@@ -241,8 +342,7 @@ pub fn update_remote_packs(ridx: &RemoteIndex, base_dir: &Path) -> Result<(), Er
                     pack_index_path.display(),
                     pack_index_bytes.len()
                 );
-                fs::write(&pack_index_path, pack_index_bytes.as_slice())
-                    .map_err(|e| Error::IOError(e))?;
+                fs::write(&pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
             }
         }
     }
@@ -251,19 +351,19 @@ pub fn update_remote_packs(ridx: &RemoteIndex, base_dir: &Path) -> Result<(), Er
 
 /// Fetches the new newest version of the [`RemoteIndex`] from the server and
 /// overwrites its backing file.
-pub fn update_remote(ridx: &RemoteIndex) -> Result<RemoteIndex, Error> {
-    let path = ridx
+pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex, Error> {
+    let path = remote
         .path
         .as_ref()
         .expect("The RemoteIndex must have a valid .path set! Use RemoteIndex::load().");
 
     // Read the modification date of the .esi.
     let date_modified = fs::metadata(path).ok().map(|x| x.modified().ok()).flatten();
-    let url = ridx.url.parse::<Url>().unwrap();
+    let url = remote.url.parse::<Url>().unwrap();
     let response = read_remote_resource(
+        agent,
         &url,
         Duration::from_secs(15),
-        REMOTE_INDEX_SIZE_LIMIT,
         date_modified,
     )?;
 
@@ -271,15 +371,15 @@ pub fn update_remote(ridx: &RemoteIndex) -> Result<RemoteIndex, Error> {
         // The local version is up-to-date.
         None => RemoteIndex::load(path),
         Some(data) => {
-            let mut ridx = RemoteIndex::read(BufReader::new(data.as_slice()))?;
+            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice()))?;
             // Update the .esi
             create_file(path)
                 .map_err(Error::IOError)?
                 .write_all(data.as_slice())
                 .map_err(Error::IOError)?;
             // And return the parsed index
-            ridx.path = Some(path.clone());
-            Ok(ridx)
+            remote.path = Some(path.clone());
+            Ok(remote)
         }
     }
 }
@@ -312,7 +412,7 @@ mod tests {
             "\
 meta\tv1
 url\thttps://github.com/elfshaker/releases/download/index.esi
-90765d432f15eda9b42e0ed747ceaa9b5f8237de\thttps://github.com/elfshaker/releases/download/A.pack
+90765d432f15eda9b42e0ed747ceaa9b5f8237de\thttps://gitlab.com/elfshaker/releases/download/A.pack
 f3a50129b7ac872b63585f884f1a73e013d51f85\tB.pack"
                 .as_bytes(),
         ))?;
@@ -325,7 +425,7 @@ f3a50129b7ac872b63585f884f1a73e013d51f85\tB.pack"
         assert_eq!(r.packs.len(), 2);
         assert_eq!(
             r.packs[0].url,
-            "https://github.com/elfshaker/releases/download/A.pack"
+            "https://gitlab.com/elfshaker/releases/download/A.pack"
         );
         assert_eq!(
             r.packs[0].checksum.to_vec(),

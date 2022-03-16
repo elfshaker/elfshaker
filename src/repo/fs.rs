@@ -117,10 +117,9 @@ pub fn remove_empty_dirs<P1: AsRef<Path>, P2: AsRef<Path>>(
     } else {
         panic!("leaf_dir must be a sub-directory of boundary_dir");
     }
-    assert!(
-        leaf_dir.as_ref() != boundary_dir.as_ref(),
-        "leaf_dir cannot be the same directory as boundary_dir"
-    );
+    if leaf_dir.as_ref() == boundary_dir.as_ref() {
+        return Ok(());
+    }
 
     let current_dir = leaf_dir.as_ref().to_path_buf();
     match fs::remove_dir(current_dir) {

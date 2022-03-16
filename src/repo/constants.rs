@@ -20,8 +20,6 @@ pub const PACK_INDEX_EXTENSION: &str = "pack.idx";
 pub const DOT_PACK_INDEX_EXTENSION: &str = ".pack.idx";
 /// The file extension of remote elfshaker indexes.
 pub const REMOTE_INDEX_EXTENSION: &str = "esi";
-// Limit for .esi files received over the network.
-pub const REMOTE_INDEX_SIZE_LIMIT: u64 = 0x80_0000; /* 8 MiB */
 /// A directory containing the object files from all loose snapshots
 pub const LOOSE_DIR: &str = "loose";
 /// A directory used during store/extract operations. Can be deleted safely

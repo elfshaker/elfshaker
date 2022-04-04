@@ -4,13 +4,16 @@
 use clap::{App, ArgMatches};
 use std::error::Error;
 
-use super::utils::open_repo_from_cwd;
+use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 
 pub(crate) const SUBCOMMAND: &str = "update";
 
 pub(crate) fn run(_matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let repo = open_repo_from_cwd()?;
+    let mut repo = open_repo_from_cwd()?;
+
+    repo.set_progress_reporter(|msg| create_percentage_print_reporter(msg, 5));
     repo.update_remotes()?;
+
     Ok(())
 }
 

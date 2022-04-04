@@ -66,9 +66,9 @@ impl<'a, T: Write> Write for ProgressWriter<'a, T> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let bytes_written = self.writer.write(buf)?;
         self.written += bytes_written;
-        self.remaining
-            .as_mut()
-            .map(|remaining| *remaining -= bytes_written);
+        if let Some(remaining) = self.remaining.as_mut() {
+            *remaining -= bytes_written
+        }
         self.reporter.checkpoint(self.written, self.remaining);
         Ok(bytes_written)
     }

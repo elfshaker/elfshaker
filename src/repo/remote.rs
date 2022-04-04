@@ -24,7 +24,8 @@ const HTTP_STATUS_NOT_MODIFIED: u16 = 304;
 
 #[derive(Debug)]
 pub struct RemotePack {
-    pub checksum: ObjectChecksum,
+    pub index_checksum: ObjectChecksum,
+    pub pack_checksum: ObjectChecksum,
     pub url: String,
 }
 
@@ -101,13 +102,22 @@ impl RemoteIndex {
             line_no += 1;
             let line = line.map_err(Error::IOError)?;
             let mut parts = line.split('\t');
-            let checksum = parts.next().ok_or_else(|| {
+            let index_checksum = parts.next().ok_or_else(|| {
+                Error::BadRemoteIndexFormat(format!(
+                    "Expected pack index checksum, reached end of line {}",
+                    line_no
+                ))
+            })?;
+
+            let pack_checksum = parts.next().ok_or_else(|| {
                 Error::BadRemoteIndexFormat(format!(
                     "Expected pack checksum, reached end of line {}",
                     line_no
                 ))
             })?;
-            let url = parts.next().ok_or_else(|| {
+
+            // Pack URL (possibly relative)
+            let relative_url = parts.next().ok_or_else(|| {
                 Error::BadRemoteIndexFormat(format!(
                     "Expected pack URL, reached end of line {}",
                     line_no
@@ -116,32 +126,54 @@ impl RemoteIndex {
 
             // Always provide the index URL as base URL. If the pack URL is
             // absolute, the `join` will use it as-is.
-            if base_url.join(url).is_err() {
-                return Err(Error::BadRemoteIndexFormat(format!(
-                    "Expected a valid pack URL, found {} on line {}",
-                    url, line_no
-                )));
-            }
+            let absolute_url = match base_url.join(relative_url) {
+                Ok(url) => url,
+                Err(_) => {
+                    return Err(Error::BadRemoteIndexFormat(format!(
+                        "Expected a valid pack URL, found {} on line {}",
+                        url, line_no
+                    )));
+                }
+            };
 
             if parts.next().is_some() {
                 panic!("Too many values");
             }
 
-            let checksum = hex::decode(checksum)
+            let index_checksum = hex::decode(index_checksum)
                 .map_err(|_| {
-                    Error::BadRemoteIndexFormat(format!("Bad checksum format on line {}", line_no))
+                    Error::BadRemoteIndexFormat(format!(
+                        "Bad pack index checksum format on line {}",
+                        line_no
+                    ))
                 })?
                 .try_into()
                 .map_err(|_| {
                     Error::BadRemoteIndexFormat(format!(
-                        "The value for checksum on line {} is not the right length",
+                        "The value for pack index checksum on line {} is not the right length",
+                        line_no
+                    ))
+                })?;
+
+            let pack_checksum = hex::decode(pack_checksum)
+                .map_err(|_| {
+                    Error::BadRemoteIndexFormat(format!(
+                        "Bad pack checksum format on line {}",
+                        line_no
+                    ))
+                })?
+                .try_into()
+                .map_err(|_| {
+                    Error::BadRemoteIndexFormat(format!(
+                        "The value for pack checksum on line {} is not the right length",
                         line_no
                     ))
                 })?;
 
             packs.push(RemotePack {
-                url: url.to_owned(),
-                checksum,
+                url: absolute_url.as_str().to_owned(),
+                index_checksum,
+                pack_checksum,
             });
         }
 
@@ -196,7 +228,7 @@ impl std::fmt::Display for RemoteIndex {
 
 /// Loads all remote index (.esi) files from the target directory.
 pub fn load_remotes(base_path: &Path) -> Result<Vec<RemoteIndex>, Error> {
-    let paths = fs::read_dir(base_path).unwrap();
+    let paths = fs::read_dir(base_path).map_err(Error::IOError)?;
     paths
         .filter_map(|e| e.ok())
         .filter(|p| p.path().extension() == Some(OsStr::new(REMOTE_INDEX_EXTENSION)))
@@ -234,9 +266,7 @@ fn open_remote_resource(
 
     let content_length = response
         .header("Content-Length")
-        .ok_or(Error::HttpError(
-            "Response did not include a Content-Length header!".into(),
-        ))?
+        .unwrap_or("0")
         .parse::<usize>()
         .unwrap_or(0);
 
@@ -278,6 +308,8 @@ fn read_remote_resource(
     })
 }
 
+/// Updates the specified pack file by fetching the URL in the [`RemotePack`]
+/// only when necessary.
 pub fn update_remote_pack(
     agent: &Agent,
     remote_pack: &RemotePack,
@@ -301,56 +333,84 @@ pub fn update_remote_pack(
         hasher.input(&data);
         hasher.result(&mut checksum);
 
-        if checksum == remote_pack.checksum {
+        if checksum == remote_pack.pack_checksum {
             create_file(pack_path)?.write_all(&data)?;
         } else {
-            log::error!("The checksum did not match the one in the .esi! The download failed.");
+            log::error!(
+                "The pack checksum did not match the one in the .esi! The download failed."
+            );
             return Err(Error::CorruptPack);
         }
     }
     Ok(())
 }
 
-pub fn update_remote_packs(agent: &Agent, remote: &RemoteIndex, base_dir: &Path) -> Result<(), Error> {
+/// Updates all pack index files by fetching the URLs in the [`RemoteIndex`]
+/// only when necessary.
+pub fn update_remote_pack_indexes(
+    agent: &Agent,
+    remote: &RemoteIndex,
+    base_dir: &Path,
+    reporter: &ProgressReporter,
+) -> Result<(), Error> {
+    let mut done = 0usize;
+    let mut remaining = remote.packs.len();
+
     for pack in &remote.packs {
         let url = (pack.url.to_string() + ".idx").parse::<Url>().unwrap();
         let pack_index_file_name = url.path_segments().unwrap().last().unwrap();
         let pack_index_path = base_dir.join(pack_index_file_name);
 
-        let date_modified = fs::metadata(&pack_index_path)
-            .ok()
-            .map(|x| x.modified().ok())
-            .flatten();
+        if verify_checksum(&pack_index_path, &pack.index_checksum)? {
+            // The file exists and the checksums match -> skip
+            log::info!("{} is up to date", pack_index_path.display());
+        } else {
+            update_pack_index(&agent, &url, &pack_index_path)?;
+        }
 
-        let pack_index_bytes = read_remote_resource(
-            agent,
-            &url,
-            Duration::from_secs(15),
-            date_modified,
-        )?;
+        done += 1;
+        remaining -= 1;
+        reporter.checkpoint(done, Some(remaining));
+    }
+    Ok(())
+}
 
-        if let Some(pack_index_bytes) = pack_index_bytes {
-            if let Err(e) = PackIndex::parse(pack_index_bytes.as_slice()) {
-                log::error!(
-                    "Failed to fetch {}.idx from remote: The remote returned a broken .pack.idx! {}",
-                    url,
-                    e
-                );
-            } else {
-                log::info!(
-                    "Writing {} ({} B)...",
-                    pack_index_path.display(),
-                    pack_index_bytes.len()
-                );
-                fs::write(&pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
-            }
+/// Updates the pack index file by fetching its contents from the URL only
+/// when the content at the URL is newer than what is available on-disk.
+fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result<(), Error> {
+    let date_modified = fs::metadata(&pack_index_path)
+        .ok()
+        .map(|x| x.modified().ok())
+        .flatten();
+
+    let pack_index_bytes = read_remote_resource(
+        agent,
+        url,
+        Duration::from_secs(15),
+        date_modified,
+    )?;
+
+    if let Some(pack_index_bytes) = pack_index_bytes {
+        if let Err(e) = PackIndex::parse(pack_index_bytes.as_slice()) {
+            log::error!(
+                "Failed to fetch {} from remote: The remote returned a broken .pack.idx! {}",
+                url,
+                e
+            );
+        } else {
+            log::info!(
+                "Writing {} ({} B)...",
+                pack_index_path.display(),
+                pack_index_bytes.len()
+            );
+            fs::write(&pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
         }
     }
     Ok(())
 }
 
 /// Fetches the new newest version of the [`RemoteIndex`] from the server and
-/// overwrites its backing file.
+/// overwrites its backing file only when the remote file is newer.
 pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex, Error> {
     let path = remote
         .path
@@ -384,6 +444,35 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
     }
 }
 
+/// A convenience function which verifies the checksum of the file
+/// and coerces ENOENT to false.
+fn verify_checksum(path: &Path, checksum: &ObjectChecksum) -> io::Result<bool> {
+    match compute_checksum(path) {
+        Ok(actual_checksum) => Ok(actual_checksum == *checksum),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+fn compute_checksum(path: &Path) -> io::Result<ObjectChecksum> {
+    let mut reader = io::BufReader::new(fs::File::open(path)?);
+    let mut sha1 = Sha1::new();
+    loop {
+        let buf = reader.fill_buf()?;
+        let len = buf.len();
+        if len == 0 {
+            break;
+        }
+        sha1.input(buf);
+        reader.consume(len);
+    }
+
+    let mut checksum = [0u8; 20];
+    sha1.result(&mut checksum);
+
+    Ok(checksum)
+}
+
 /// Formats a [`SystemTime`] as an HTTP date string. HTTP dates are always in
 /// GMT, never in local time. The format is specified in RFC 5322.
 ///
@@ -412,8 +501,8 @@ mod tests {
             "\
 meta\tv1
 url\thttps://github.com/elfshaker/releases/download/index.esi
-90765d432f15eda9b42e0ed747ceaa9b5f8237de\thttps://gitlab.com/elfshaker/releases/download/A.pack
-f3a50129b7ac872b63585f884f1a73e013d51f85\tB.pack"
+90765d432f15eda9b42e0ed747ceaa9b5f8237de\t3fc6c1b427b19217cdd9c4eecf0c74943fa4adb2\thttps://gitlab.com/elfshaker/releases/download/A.pack
+f3a50129b7ac872b63585f884f1a73e013d51f85\td8a41c1859d6276f0dd74fdd7e4513d89f68600f\tB.pack"
                 .as_bytes(),
         ))?;
 
@@ -428,13 +517,24 @@ f3a50129b7ac872b63585f884f1a73e013d51f85\tB.pack"
             "https://gitlab.com/elfshaker/releases/download/A.pack"
         );
         assert_eq!(
-            r.packs[0].checksum.to_vec(),
+            r.packs[0].index_checksum.to_vec(),
             hex::decode(b"90765d432f15eda9b42e0ed747ceaa9b5f8237de").unwrap()
         );
-        assert_eq!(r.packs[1].url, "B.pack");
         assert_eq!(
-            r.packs[1].checksum.to_vec(),
+            r.packs[0].pack_checksum.to_vec(),
+            hex::decode(b"3fc6c1b427b19217cdd9c4eecf0c74943fa4adb2").unwrap()
+        );
+        assert_eq!(
+            r.packs[1].url,
+            "https://github.com/elfshaker/releases/download/B.pack"
+        );
+        assert_eq!(
+            r.packs[1].index_checksum.to_vec(),
             hex::decode(b"f3a50129b7ac872b63585f884f1a73e013d51f85").unwrap()
+        );
+        assert_eq!(
+            r.packs[1].pack_checksum.to_vec(),
+            hex::decode(b"d8a41c1859d6276f0dd74fdd7e4513d89f68600f").unwrap()
         );
 
         Ok(())

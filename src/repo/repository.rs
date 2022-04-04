@@ -871,6 +871,7 @@ impl Repository {
         let remotes = remote::load_remotes(&remotes_dir)?;
 
         let agent = ureq::AgentBuilder::new().build();
+        let reporter = (self.progress_reporter_factory)("Fetching remote pack indexes");
 
         for remote in remotes {
             // .path() is Some, because load_remotes guarantees it
@@ -882,7 +883,7 @@ impl Repository {
             info!("Updating {}...", remote);
             let remote = remote::update_remote(&agent, &remote)?;
             fs::create_dir_all(&remote_packs_dir)?;
-            remote::update_remote_packs(&agent, &remote, &remote_packs_dir)?;
+            remote::update_remote_pack_indexes(&agent, &remote, &remote_packs_dir, &reporter)?;
         }
         Ok(())
     }
@@ -948,6 +949,7 @@ mod tests {
         ];
         let repo = Repository {
             path: "/repo".into(),
+            progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
         };
         let path = repo.loose_object_path(&checksum);
         assert_eq!(

@@ -293,15 +293,19 @@ impl Repository {
     }
 
     pub fn is_pack_loose(&self, pack_id: &PackId) -> bool {
-        let data_dir = self.path.join(&*Repository::data_dir());
-        let pack_index_path = match pack_id {
-            PackId::Pack(name) => data_dir
-                .join(PACKS_DIR)
-                .join(LOOSE_DIR)
-                .join(name)
-                .with_extension(PACK_INDEX_EXTENSION),
-        };
+        let PackId::Pack(pack_name) = pack_id;
+
         // The pack is loose if the .pack.idx is in the loose packs directory
+        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + "/")) {
+            return false;
+        }
+
+        let data_dir = self.path.join(&*Repository::data_dir());
+        let pack_index_path = data_dir
+            .join(PACKS_DIR)
+            .join(pack_name)
+            .with_extension(PACK_INDEX_EXTENSION);
+
         pack_index_path.exists()
     }
 

@@ -22,6 +22,61 @@ use crate::progress::{ProgressReporter, ProgressWriter};
 const HTTP_STATUS_OK: u16 = 200;
 const HTTP_STATUS_NOT_MODIFIED: u16 = 304;
 
+/// The .esi file is corrupted.
+#[derive(Debug)]
+pub struct RemoteIndexFormatError {
+    message: String,
+    source: Option<String>,
+}
+
+impl RemoteIndexFormatError {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            source: None,
+        }
+    }
+
+    fn reify<D: std::fmt::Display>(self, display_name: D) -> Self {
+        if self.source.is_none() {
+            self
+        } else {
+            RemoteIndexFormatError {
+                message: self.message,
+                source: Some(format!("{}", display_name)),
+            }
+        }
+    }
+}
+
+impl std::error::Error for RemoteIndexFormatError {}
+
+impl std::fmt::Display for RemoteIndexFormatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{} (source={})",
+            self.message,
+            self.source.as_deref().unwrap_or("(unspecified)")
+        )
+    }
+}
+
+trait ReifyRemoteResult {
+    fn reify<D: std::fmt::Display>(self, display_name: D) -> Self;
+}
+
+impl<T> ReifyRemoteResult for Result<T, Error> {
+    fn reify<D: std::fmt::Display>(self, display_name: D) -> Result<T, Error> {
+        match self {
+            Err(Error::BadRemoteIndexFormat(e)) => {
+                Err(Error::BadRemoteIndexFormat(e.reify(display_name)))
+            }
+            _ => self,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RemotePack {
     pub index_checksum: ObjectChecksum,
@@ -73,7 +128,7 @@ impl RemoteIndex {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<RemoteIndex, Error> {
         let file = open_file(path.as_ref()).map_err(Error::IOError)?;
         let reader = BufReader::new(file);
-        let mut remote = Self::read(reader)?;
+        let mut remote = Self::read(reader).reify(path.as_ref().display())?;
         remote.path = Some(path.as_ref().into());
         Ok(remote)
     }
@@ -90,7 +145,7 @@ impl RemoteIndex {
         line_no += 1;
         let url = Self::read_keyed_line(&mut lines, "url")?;
         let base_url = url.parse::<Url>().map_err(|_| {
-            Error::BadRemoteIndexFormat(format!(
+            RemoteIndexFormatError::new(format!(
                 "Expected a valid elfshaker index URL, found {} on line {}",
                 url, line_no
             ))
@@ -101,16 +156,18 @@ impl RemoteIndex {
         for line in lines {
             line_no += 1;
             let line = line.map_err(Error::IOError)?;
-            let mut parts = line.split('\t');
+            let mut parts = line
+                .split(Self::is_field_separator)
+                .filter(|&p| !p.is_empty());
             let index_checksum = parts.next().ok_or_else(|| {
-                Error::BadRemoteIndexFormat(format!(
+                RemoteIndexFormatError::new(format!(
                     "Expected pack index checksum, reached end of line {}",
                     line_no
                 ))
             })?;
 
             let pack_checksum = parts.next().ok_or_else(|| {
-                Error::BadRemoteIndexFormat(format!(
+                RemoteIndexFormatError::new(format!(
                     "Expected pack checksum, reached end of line {}",
                     line_no
                 ))
@@ -118,7 +175,7 @@ impl RemoteIndex {
 
             // Pack URL (possibly relative)
             let relative_url = parts.next().ok_or_else(|| {
-                Error::BadRemoteIndexFormat(format!(
+                RemoteIndexFormatError::new(format!(
                     "Expected pack URL, reached end of line {}",
                     line_no
                 ))
@@ -129,27 +186,32 @@ impl RemoteIndex {
             let absolute_url = match base_url.join(relative_url) {
                 Ok(url) => url,
                 Err(_) => {
-                    return Err(Error::BadRemoteIndexFormat(format!(
+                    return Err(RemoteIndexFormatError::new(format!(
                         "Expected a valid pack URL, found {} on line {}",
                         url, line_no
-                    )));
+                    ))
+                    .into());
                 }
             };
 
             if parts.next().is_some() {
-                panic!("Too many values");
+                return Err(RemoteIndexFormatError::new(format!(
+                    "Too many values on line {}",
+                    line_no
+                ))
+                .into());
             }
 
             let index_checksum = hex::decode(index_checksum)
                 .map_err(|_| {
-                    Error::BadRemoteIndexFormat(format!(
+                    RemoteIndexFormatError::new(format!(
                         "Bad pack index checksum format on line {}",
                         line_no
                     ))
                 })?
                 .try_into()
                 .map_err(|_| {
-                    Error::BadRemoteIndexFormat(format!(
+                    RemoteIndexFormatError::new(format!(
                         "The value for pack index checksum on line {} is not the right length",
                         line_no
                     ))
@@ -157,14 +219,14 @@ impl RemoteIndex {
 
             let pack_checksum = hex::decode(pack_checksum)
                 .map_err(|_| {
-                    Error::BadRemoteIndexFormat(format!(
+                    RemoteIndexFormatError::new(format!(
                         "Bad pack checksum format on line {}",
                         line_no
                     ))
                 })?
                 .try_into()
                 .map_err(|_| {
-                    Error::BadRemoteIndexFormat(format!(
+                    RemoteIndexFormatError::new(format!(
                         "The value for pack checksum on line {} is not the right length",
                         line_no
                     ))
@@ -187,30 +249,38 @@ impl RemoteIndex {
 
     fn read_keyed_line<R: BufRead>(lines: &mut io::Lines<R>, key: &str) -> Result<String, Error> {
         let line = match lines.next() {
-            None => Err(Error::BadRemoteIndexFormat(format!(
+            None => Err(RemoteIndexFormatError::new(format!(
                 "Expected '{} ...', but end of file was reached!",
                 key
-            ))),
+            ))
+            .into()),
             Some(Err(e)) => Err(Error::IOError(e)),
             Some(Ok(line)) => Ok(line),
         }?;
 
-        if !line.starts_with(key) {
-            return Err(Error::BadRemoteIndexFormat(format!(
-                "Expected '{} ...', but found '{}'",
-                key, line
-            )));
+        let mut parts = line
+            .split(Self::is_field_separator)
+            .filter(|&p| !p.is_empty());
+
+        if parts.next() != Some(key) {
+            return Err(
+                RemoteIndexFormatError::new(format!("Expected '{} ...': '{}'", key, line)).into(),
+            );
         }
 
-        if line.as_bytes().get(key.as_bytes().len()) != Some(&b'\t') {
-            return Err(Error::BadRemoteIndexFormat(format!(
-                "Expected a tab-delimiter '\\t' after '{}', but found '{}'",
-                key,
-                &line[key.as_bytes().len()..]
-            )));
+        let value = parts.next().ok_or_else(|| {
+            RemoteIndexFormatError::new(format!("Expected a value after '{}': '{}'", key, line))
+        })?;
+
+        if parts.next().is_some() {
+            return Err(RemoteIndexFormatError::new(format!("Too many values: '{}'", line)).into());
         }
 
-        Ok(line[key.as_bytes().len() + 1..].to_string())
+        Ok(value.to_string())
+    }
+
+    fn is_field_separator(ch: char) -> bool {
+        ch == ' ' || ch == '\t'
     }
 }
 
@@ -370,7 +440,7 @@ pub fn update_remote_pack_indexes(
 
         done += 1;
         remaining -= 1;
-        reporter.checkpoint(done, Some(remaining));
+        reporter.checkpoint_with_detail(done, Some(remaining), pack.file_name().to_owned());
     }
     Ok(())
 }
@@ -429,9 +499,9 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
 
     match response {
         // The local version is up-to-date.
-        None => RemoteIndex::load(path),
+        None => RemoteIndex::load(&path).reify(path.display()),
         Some(data) => {
-            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice()))?;
+            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
             // Update the .esi
             create_file(path)
                 .map_err(Error::IOError)?
@@ -500,9 +570,9 @@ mod tests {
         let r = RemoteIndex::read(BufReader::new(
             "\
 meta\tv1
-url\thttps://github.com/elfshaker/releases/download/index.esi
-90765d432f15eda9b42e0ed747ceaa9b5f8237de\t3fc6c1b427b19217cdd9c4eecf0c74943fa4adb2\thttps://gitlab.com/elfshaker/releases/download/A.pack
-f3a50129b7ac872b63585f884f1a73e013d51f85\td8a41c1859d6276f0dd74fdd7e4513d89f68600f\tB.pack"
+url   https://github.com/elfshaker/releases/download/index.esi
+90765d432f15eda9b42e0ed747ceaa9b5f8237de 3fc6c1b427b19217cdd9c4eecf0c74943fa4adb2\thttps://gitlab.com/elfshaker/releases/download/A.pack
+f3a50129b7ac872b63585f884f1a73e013d51f85\td8a41c1859d6276f0dd74fdd7e4513d89f68600f  B.pack"
                 .as_bytes(),
         ))?;
 
@@ -564,15 +634,15 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
         let _no_meta = RemoteIndex::read(BufReader::new(
             "url\thttps://github.com/elfshaker/releases/download/index.esi".as_bytes(),
         ))
-        .unwrap_err();
+        .expect_err("no meta");
         let _no_meta_value = RemoteIndex::read(BufReader::new(
             "meta\nurl\thttps://github.com/elfshaker/releases/download/index.esi".as_bytes(),
         ))
-        .unwrap_err();
+        .expect_err("no meta value");
         let _bad_meta_delimiter = RemoteIndex::read(BufReader::new(
-            "meta v1\nurl\thttps://github.com/elfshaker/releases/download/index.esi".as_bytes(),
+            "meta_v1\nurl\thttps://github.com/elfshaker/releases/download/index.esi".as_bytes(),
         ))
-        .unwrap_err();
+        .expect_err("no meta delimiter");
     }
 
     #[test]

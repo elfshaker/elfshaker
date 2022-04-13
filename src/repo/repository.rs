@@ -487,7 +487,7 @@ impl Repository {
         let pack_file_name = pack.to_string() + "." + PACK_EXTENSION;
 
         let agent = ureq::AgentBuilder::new().build();
-        let reporter = (self.progress_reporter_factory)("Fetching pack file");
+        let reporter = (self.progress_reporter_factory)(&format!("Fetching {}", pack_file_name));
 
         for remote in remotes {
             if let Some(remote_pack) = remote.find_pack(pack) {
@@ -498,6 +498,10 @@ impl Repository {
                     .join(PACKS_DIR)
                     .join(remote.name().unwrap())
                     .join(pack_file_name);
+
+                // Immediately shows some progress, without waiting for the
+                // HTTP response for the pack.
+                reporter.checkpoint(0, Some(1));
                 remote::update_remote_pack(&agent, remote_pack, &pack_path, &reporter)?;
                 return Ok(());
             }
@@ -871,7 +875,7 @@ impl Repository {
         let remotes = remote::load_remotes(&remotes_dir)?;
 
         let agent = ureq::AgentBuilder::new().build();
-        let reporter = (self.progress_reporter_factory)("Fetching remote pack indexes");
+        let reporter = (self.progress_reporter_factory)("Fetching pack indexes from origin");
 
         for remote in remotes {
             // .path() is Some, because load_remotes guarantees it

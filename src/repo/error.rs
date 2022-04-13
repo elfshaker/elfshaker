@@ -6,6 +6,7 @@ use std::{fmt::Display, io};
 
 use crate::packidx::PackError;
 use crate::repo::pack::IdError;
+use crate::repo::remote::RemoteIndexFormatError;
 
 use super::PackId;
 
@@ -34,7 +35,7 @@ pub enum Error {
     /// The directory is not a repository
     RepositoryNotFound,
     /// The .esi file is corrupted.
-    BadRemoteIndexFormat(String),
+    BadRemoteIndexFormat(RemoteIndexFormatError),
     /// A type-erased error resulting from an HTTP operation.
     HttpError(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -104,5 +105,11 @@ impl std::convert::From<PackError> for Error {
 impl std::convert::From<IdError> for Error {
     fn from(err: IdError) -> Self {
         Self::IdError(err)
+    }
+}
+
+impl std::convert::From<RemoteIndexFormatError> for Error {
+    fn from(err: RemoteIndexFormatError) -> Self {
+        Self::BadRemoteIndexFormat(err)
     }
 }

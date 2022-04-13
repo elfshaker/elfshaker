@@ -6,6 +6,7 @@ use std::{io, io::Write};
 pub struct Checkpoint {
     pub done: usize,
     pub remaining: Option<usize>,
+    pub detail: Option<String>,
 }
 
 pub struct ProgressReporter<'a> {
@@ -30,7 +31,21 @@ impl<'a> ProgressReporter<'a> {
 
     pub fn checkpoint(&self, done: usize, remaining: Option<usize>) {
         if let Some(callback) = &self.callback {
-            callback(&Checkpoint { done, remaining });
+            callback(&Checkpoint {
+                done,
+                remaining,
+                detail: None,
+            });
+        }
+    }
+
+    pub fn checkpoint_with_detail(&self, done: usize, remaining: Option<usize>, detail: String) {
+        if let Some(callback) = &self.callback {
+            callback(&Checkpoint {
+                done,
+                remaining,
+                detail: Some(detail),
+            });
         }
     }
 }

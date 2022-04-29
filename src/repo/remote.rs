@@ -101,6 +101,7 @@ pub struct RemoteIndex {
 }
 
 impl RemoteIndex {
+    #[allow(dead_code)]
     pub fn new(url: String) -> RemoteIndex {
         Self {
             path: None,
@@ -110,6 +111,7 @@ impl RemoteIndex {
         }
     }
 
+    #[allow(dead_code)]
     pub fn packs(&self) -> &[RemotePack] {
         &self.packs
     }
@@ -120,8 +122,7 @@ impl RemoteIndex {
 
     pub fn name(&self) -> Option<String> {
         self.path()
-            .map(|p| p.file_stem())
-            .flatten()
+            .and_then(|p| p.file_stem())
             .map(|s| (*s.to_string_lossy()).into())
     }
 
@@ -286,7 +287,7 @@ impl RemoteIndex {
 
 impl std::fmt::Display for RemoteIndex {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        if let Some(stem) = self.path().map(|p| p.file_stem()).flatten() {
+        if let Some(stem) = self.path().and_then(|p| p.file_stem()) {
             write!(fmt, "{} ({})", stem.to_string_lossy(), self.url)?;
         } else {
             let stem = self.url.rsplit_once('/').unwrap().0;
@@ -388,8 +389,7 @@ pub fn update_remote_pack(
 ) -> Result<(), Error> {
     let date_modified = fs::metadata(&pack_path)
         .ok()
-        .map(|x| x.modified().ok())
-        .flatten();
+        .and_then(|x| x.modified().ok());
 
     let url = remote_pack.url.parse::<Url>().unwrap();
     if let Some((content_length, mut reader)) = open_remote_resource(agent, &url, None, date_modified)? {
@@ -450,8 +450,7 @@ pub fn update_remote_pack_indexes(
 fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result<(), Error> {
     let date_modified = fs::metadata(&pack_index_path)
         .ok()
-        .map(|x| x.modified().ok())
-        .flatten();
+        .and_then(|x| x.modified().ok());
 
     let pack_index_bytes = read_remote_resource(
         agent,
@@ -510,7 +509,7 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
         .expect("The RemoteIndex must have a valid .path set! Use RemoteIndex::load().");
 
     // Read the modification date of the .esi.
-    let date_modified = fs::metadata(path).ok().map(|x| x.modified().ok()).flatten();
+    let date_modified = fs::metadata(path).ok().and_then(|x| x.modified().ok());
     let url = remote.url.parse::<Url>().unwrap();
     let response = read_remote_resource(
         agent,

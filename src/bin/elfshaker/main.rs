@@ -1,6 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
+mod clone;
 mod extract;
 mod find;
 mod list;
@@ -47,6 +48,7 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
         (show::SUBCOMMAND, Some(matches)) => show::run(matches),
         (find::SUBCOMMAND, Some(matches)) => find::run(matches),
         (update::SUBCOMMAND, Some(matches)) => update::run(matches),
+        (clone::SUBCOMMAND, Some(matches)) => clone::run(matches),
         _ => {
             app.print_long_help()?;
             println!();
@@ -64,6 +66,7 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(show::get_app())
         .subcommand(find::get_app())
         .subcommand(update::get_app())
+        .subcommand(clone::get_app())
         .arg(
             Arg::with_name("verbose")
                 .long("verbose")

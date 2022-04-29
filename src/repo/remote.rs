@@ -479,6 +479,28 @@ fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result
     Ok(())
 }
 
+/// Fetches the remote index from the server.
+pub fn fetch_remote(agent: &Agent, url: &str, path: &Path) -> Result<RemoteIndex, Error> {
+    let url = url.parse::<Url>().unwrap();
+    let response =
+        read_remote_resource(agent, &url, Duration::from_secs(15), None)?;
+
+    match response {
+        None => unreachable!("Unexpected Not-Modified response from server given previously unseen resource"),
+        Some(data) => {
+            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
+            // Update the .esi
+            create_file(path)
+                .map_err(Error::IOError)?
+                .write_all(data.as_slice())
+                .map_err(Error::IOError)?;
+            // And return the parsed index
+            remote.path = Some(path.to_owned());
+            Ok(remote)
+        }
+    }
+}
+
 /// Fetches the new newest version of the [`RemoteIndex`] from the server and
 /// overwrites its backing file only when the remote file is newer.
 pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex, Error> {

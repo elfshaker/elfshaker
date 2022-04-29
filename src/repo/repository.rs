@@ -711,6 +711,25 @@ impl Repository {
         Ok(())
     }
 
+    pub fn add_remote(&mut self, name: &str, url: &str) -> Result<(), Error> {
+        let mut path = self.path.join(REPO_DIR).join(REMOTES_DIR);
+        fs::create_dir_all(&path)?;
+        path.push(name);
+        path.set_extension("esi");
+
+        let agent = ureq::AgentBuilder::new().build();
+        let reporter = (self.progress_reporter_factory)(&format!(
+            "Fetching remote repository index from {}",
+            name
+        ));
+
+        reporter.checkpoint_with_detail(0, Some(1), url.to_owned());
+        remote::fetch_remote(&agent, url, &path)?;
+        reporter.checkpoint_with_detail(1, Some(0), url.to_owned());
+
+        Ok(())
+    }
+
     pub fn set_progress_reporter<F>(&mut self, factory: F)
     where
         F: 'static + Fn(&str) -> ProgressReporter<'static> + Send + Sync,
@@ -876,6 +895,8 @@ impl Repository {
 
         let agent = ureq::AgentBuilder::new().build();
         let reporter = (self.progress_reporter_factory)("Fetching pack indexes from origin");
+        // Display the progress bar immediately.
+        reporter.checkpoint(0, Some(1));
 
         for remote in remotes {
             // .path() is Some, because load_remotes guarantees it

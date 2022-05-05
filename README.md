@@ -69,7 +69,7 @@ Refer to our [Contributing guide](docs/contributors/contributing.md).
 ## Contact
 
 The best way to reach us to join the [elfshaker/community](https://gitter.im/elfshaker/community) on Gitter.
-The original authors of elfshaker are Peter Waller ([@peterwaller-arm](https://github.com/peterwaller-arm)) \<peter.waller@arm.com\> and Veselin Karaganev ([@veselink1](https://github.com/veselink1)) \<veselin.karaganev@arm.com\> and you may also contact us via email.
+The original authors of elfshaker are Peter Waller ([@peterwaller-arm](https://github.com/peterwaller-arm)) \<peter.waller@arm.com\> and Vesko Karaganev ([@veselink1](https://github.com/veselink1)) \<vesko.karaganev@gmail.com\> and you may also contact us via email.
 
 ## Security
 

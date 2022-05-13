@@ -198,7 +198,7 @@ main() {
 
     NPARALLEL=${MANYCLANGS_NPARALLEL-5} # Number of parts to run in parallel.
 
-    if [[ "$NPARALLEL" != 1 ]] || command -v ninja-jobclient &> /dev/null
+    if [[ "$NPARALLEL" != 1 ]] && command -v ninja-jobclient &> /dev/null
     then
         NPARTS=${MANYCLANGS_NPARTS-20} # Divide work into small equal-ish-sized parts.
         split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
@@ -253,4 +253,3 @@ case "${1:--h}" in
         main "$@"
         ;;
 esac
-

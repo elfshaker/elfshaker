@@ -278,7 +278,12 @@ Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
     time elfshaker pack "$MANYCLANGS_PACK_NAME" "${SNAPSHOTS_SORTED[@]}"
     echo
     echo
-    echo "manyclangs-build-month $YEAR $MONTH all done, save the pack in elfshaker_data/packs/${MANYCLANGS_PACK_NAME}.pack{,.idx}"
+    echo "manyclangs-build-month $YEAR $MONTH all done, here are the resulting files:"
+    echo
+    du -sch elfshaker_data/packs/"${MANYCLANGS_PACK_NAME}".pack{,.idx}
+    echo
+    echo "(A typical 1 month upstream pack takes 100MiB storage)"
+    echo
 }
 
 case "${1:--h}" in

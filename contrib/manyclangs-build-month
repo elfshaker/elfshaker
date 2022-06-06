@@ -133,7 +133,7 @@ _manyclangs_build_part() {
         fi
 
 
-        echo Built "$SNAPSHOT_NAME" 1>&30 # for pv progress output.
+        echo Built "$SNAPSHOT_NAME @ $(date "+%Y/%m/%d %H:%M:%S")" 1>&30 # for progress output.
     done < "${COMMIT_LIST}"
 
     popd
@@ -220,6 +220,18 @@ main() {
     JOBSLOP=5
     NJOBS=${MANYCLANGS_NJOB-$(($(nproc) + JOBSLOP))}
 
+    INTERACTIVE=1
+    if [ -t 0 ]; then
+        echo
+        echo "manyclangs-build-month: stdin attached to terminal, running in interactive mode with progress bar."
+        echo
+    else
+        echo
+        echo "manyclangs-build-month: stdin not attached to terminal, running in batch mode."
+        echo
+        INTERACTIVE=
+    fi
+
     if [[ "$NPARALLEL" != 1 ]] && command -v ninja-jobclient &> /dev/null
     then
         NPARTS=${MANYCLANGS_NPARTS-20} # Divide work into small equal-ish-sized parts.
@@ -246,8 +258,8 @@ main() {
             jobserver -j"$NJOBS" \
             xargs --max-procs="$NPARALLEL" -n1 \
             bash -c '_manyclangs_build_parts "$@"' -- "$YEAR" "$MONTH" \
-                <<<$(seq -f '%02.0f' 00 $(( NPARTS - 1 ))) \
-                | progress_bar "$COMMIT_COUNT" \
+                <<<$(seq -f '%02.0f' 00 $(( NPARTS - 1 )) ) \
+                | { if [ "${INTERACTIVE}" ]; then progress_bar "$COMMIT_COUNT"; else cat; fi; } \
                 ;
     else
         if ! command -v ninja-jobclient &> /dev/null; then
@@ -267,7 +279,9 @@ Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
         fi
         # Build everything in one part.
         mv manyclangs-commit-list.txt{,.00}
-        time _manyclangs_build_parts "$YEAR" "$MONTH" 00
+        # (not time -v to avoid extra processes)
+        time _manyclangs_build_parts "$YEAR" "$MONTH" 00 \
+            | { if [ "${INTERACTIVE}" ]; then progress_bar "$COMMIT_COUNT"; else cat; fi; }
     fi
 
     # Globs are already sorted.

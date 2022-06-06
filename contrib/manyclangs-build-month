@@ -200,6 +200,8 @@ main() {
 
     YEAR="$1"
     MONTH="$2"
+    MANYCLANGS_PACK_NAME="$(uname -m)-${MANYCLANGS_PACK_TYPE-ubuntu2004}-manyclangs-$YEAR$MONTH"
+
     date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
 
     commits_for_month "$YEAR" "$MONTH"  > manyclangs-commit-list.txt
@@ -268,7 +270,7 @@ Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
     SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]%.pack.idx}")
     SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]#elfshaker_data/packs/}")
 
-    time elfshaker pack --verbose "$MANYCLANGS_PACK_NAME" "${SNAPSHOTS_SORTED[@]}"
+    time elfshaker pack "$MANYCLANGS_PACK_NAME" "${SNAPSHOTS_SORTED[@]}"
     echo
     echo
     echo "manyclangs-build-month $YEAR $MONTH all done, save the pack in elfshaker_data/packs/${MANYCLANGS_PACK_NAME}.pack{,.idx}"

@@ -170,17 +170,17 @@ install_ninja_jobclient() {
 }
 
 install_ccache_from_source() {
-    if ! command -v ccache &> /dev/null
+    if [ ! -d ccache ]
     then
-        if [ ! -d ccache ]
-        then
-            git clone --depth 1 --single-branch --branch v4.6.1 https://github.com/ccache/ccache
-        fi
-        (cd ccache &&
-         cmake -GNinja -Bbld -DCMAKE_BUILD_TYPE=Release -DZSTD_FROM_INTERNET=ON -DREDIS_STORAGE_BACKEND=OFF &&
-         ninja -C bld &&
-         cp bld/ccache "${ELFSHAKER_BIN_DIR}"/ccache)
+        curl -Lo ccache.tar.gz https://github.com/ccache/ccache/archive/refs/tags/v4.6.1.tar.gz
+        echo '5bad04666e16026460d6ca11b2562a573dbc62dade5c86a541ac3c3baa3bd1e0  ccache.tar.gz' | sha256sum --check -
+        mkdir -p ccache
+        tar xf ccache.tar.gz --directory ccache --strip-components=1
     fi
+    (cd ccache &&
+        cmake -GNinja -Bbld -DCMAKE_BUILD_TYPE=Release -DZSTD_FROM_INTERNET=ON -DREDIS_STORAGE_BACKEND=OFF &&
+        ninja -C bld &&
+        cp bld/ccache "${ELFSHAKER_BIN_DIR}"/ccache)
 }
 
 install_compdb2line() {

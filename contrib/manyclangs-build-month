@@ -271,7 +271,7 @@ Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
     fi
 
     # Globs are already sorted.
-    SNAPSHOTS_SORTED=(elfshaker_data/packs/loose/*)
+    SNAPSHOTS_SORTED=(elfshaker_data/packs/loose/${YEAR}${MONTH}*)
     SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]%.pack.idx}")
     SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]#elfshaker_data/packs/}")
 

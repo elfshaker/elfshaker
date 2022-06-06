@@ -23,8 +23,16 @@ commits_for_month() {
         ((NEXT_MONTH=1))
     fi
 
-    git-list-between origin/main \
-        "$YEAR/$MONTH/01" "$NEXT_YEAR/$NEXT_MONTH/01" -- llvm clang cmake
+    FROM_INCL="$YEAR/$MONTH/01"
+    TO_EXCL="$NEXT_YEAR/$NEXT_MONTH/01"
+
+    # Consider only commits touching these directories of interest.
+    INTERESTING_PATHS=(
+        llvm
+        clang
+        cmake
+    )
+    git-list-between origin/main "${FROM_INCL}" "${TO_EXCL}" -- "${INTERESTING_PATHS[@]}"
 }
 
 _manyclangs_list_files0_to_pack() {
@@ -110,7 +118,7 @@ _manyclangs_build_part() {
         if manyclangs-build "$COMMIT_SHA"
         then
             # Build success, capture object hashes and store to elfshaker.
-            _manyclangs_list_files0_to_pack | xargs -0 -P$(nproc) sha1sum | awk '{print $1" "$2}' | sort -k2,2 > "${HASHES_DIR}"/"${SNAPSHOT_NAME}".txt
+            _manyclangs_list_files0_to_pack | xargs -0 -P"$(nproc)" sha1sum | awk '{print $1" "$2}' | sort -k2,2 > "${HASHES_DIR}"/"${SNAPSHOT_NAME}".txt
             _manyclangs_list_files0_to_pack | elfshaker store --verbose --files0-from=- "$SNAPSHOT_NAME"
         else
             # On failure, capture the build log.
@@ -200,25 +208,43 @@ main() {
     COMMIT_COUNT=$(wc -l manyclangs-commit-list.txt | awk '{print $1}')
 
     NPARALLEL=${MANYCLANGS_NPARALLEL-5} # Number of parts to run in parallel.
+    # A few extra slots, since we loose at least one to the build system and we
+    # don't expect every job to take 100% CPU.
+    JOBSLOP=5
+    NJOBS=${MANYCLANGS_NJOB-$(($(nproc) + JOBSLOP))}
 
     if [[ "$NPARALLEL" != 1 ]] && command -v ninja-jobclient &> /dev/null
     then
         NPARTS=${MANYCLANGS_NPARTS-20} # Divide work into small equal-ish-sized parts.
         split --number "l/$NPARTS" --numeric-suffixes manyclangs-commit-list.txt{,.}
 
+        echo "manyclangs-build-month $YEAR $MONTH"
+        echo "  Building $YEAR $MONTH, $COMMIT_COUNT commits in $NPARTS parts"
+        echo "  ... with $NPARALLEL parallel builds and $NJOBS parallel processes job slots."
+        echo
+        echo "  Time now is $(date "+%Y/%m/%d %H:%M:%S"), for a full month's "
+        echo "  worth of commits (~2000) this should be done within 6 hours "
+        echo "  on a 64 core machine, so ETA is by around $(date -d 'now +6 hours' "+%Y/%m/%d %H:%M")"
+        echo
+        echo "  Pack name: ${MANYCLANGS_PACK_NAME}"
+        echo
+        echo "  To inspect live build logs see, tail the files called $PWD/mc-build-$YEAR$MONTH-"'*'".log"
+        echo
+        echo "Some configurable variables, and their defaults:"
+        grep -E -o '\$\{MANYCLANGS_[^-]+-[^\}]+\}' "$0"
+        echo
+
         export -f _manyclangs_build_parts _manyclangs_build_part _manyclangs_list_files0_to_pack
-        # A few extra slots, since we loose at least one to the build system and we
-        # don't expect every job to take 100% CPU.
-        JOBSLOP=5
         command time -v \
-            jobserver -j$(($(nproc) + JOBSLOP)) \
-            xargs --max-procs=$NPARALLEL -n1 \
+            jobserver -j"$NJOBS" \
+            xargs --max-procs="$NPARALLEL" -n1 \
             bash -c '_manyclangs_build_parts "$@"' -- "$YEAR" "$MONTH" \
                 <<<$(seq -f '%02.0f' 00 $(( NPARTS - 1 ))) \
                 | progress_bar "$COMMIT_COUNT" \
                 ;
     else
-        echo '
+        if ! command -v ninja-jobclient &> /dev/null; then
+            echo '
 NOTE: ninja-jobclient is unavailable; falling back to serial builds, which will
 make less good use of compute resource owing to builds being serialized by high
 compilation time of few compilation units.
@@ -230,12 +256,11 @@ https://github.com/ninja-build/ninja/pull/1140
 
 Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
 '
-        sleep 5
+            sleep 5
+        fi
         # Build everything in one part.
         mv manyclangs-commit-list.txt{,.00}
-        time _manyclangs_build_parts "$YEAR" "$MONTH" 00 \
-            | progress_bar "$COMMIT_COUNT" \
-            ;
+        time _manyclangs_build_parts "$YEAR" "$MONTH" 00
     fi
 
     # Globs are already sorted.
@@ -243,7 +268,10 @@ Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
     SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]%.pack.idx}")
     SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]#elfshaker_data/packs/}")
 
-    time elfshaker pack --verbose "aarch64-ubuntu2004-manyclangs-$YEAR$MONTH" "${SNAPSHOTS_SORTED[@]}"
+    time elfshaker pack --verbose "$MANYCLANGS_PACK_NAME" "${SNAPSHOTS_SORTED[@]}"
+    echo
+    echo
+    echo "manyclangs-build-month $YEAR $MONTH all done, save the pack in elfshaker_data/packs/${MANYCLANGS_PACK_NAME}.pack{,.idx}"
 }
 
 case "${1:--h}" in

@@ -91,6 +91,13 @@ main() {
     COMMIT_SHA="${1-$(git rev-parse HEAD)}"
     echo "Building $COMMIT_SHA" > build.log
 
+    if [ "${MANYCLANGS_BUILD_DRYRUN-}" ];
+    then
+        echo "Dry run, pretending that the build failed."
+        echo "\$MANYCLANGS_BUILD_DRYRUN is set, build skipped" > build.log
+        exit 1
+    fi
+
     if [[ -e CMakeCache.txt ]] && ! build_system_is_clean; then
         # Build system is out of date. Rebuild from empty to avoid any
         # possibility of cache contamination.

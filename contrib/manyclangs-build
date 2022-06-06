@@ -70,9 +70,10 @@ create_link_script() {
         '-prune=-ffile-prefix-map='
         # Version scripts have absolute paths.
         '-prune=-Wl,--version-script,'
-        '-replacement=-fuse-ld=:-fuse-ld=$LINKSCRIPT_LLD'
+        "-replacement=-fuse-ld=:-fuse-ld=\$LINKSCRIPT_LLD"
         'link-script'
     )
+    # shellcheck disable=SC2046
     ninja -t compdb $(default_target_rules) $(library_rules) $(symlink_rules) \
         | compdb2line "${COMPDB2LINE_ARGS[@]}"
 }

@@ -141,7 +141,10 @@ install_jobserver() {
     then
         if [ ! -d jobclient ]
         then
-            git clone https://github.com/olsner/jobclient
+            curl -Lo jobclient.tar.gz https://github.com/olsner/jobclient/archive/dfee24346304711f015d321e4e4d6df806549b0e.tar.gz
+            echo 'a26363717a40b51f9432dc755d11fe32f6ecc402b80921b0b0ad8adf00f783e5  jobclient.tar.gz' | sha256sum --check -
+            mkdir -p jobclient
+            tar xf jobclient.tar.gz --directory jobclient --strip-components=1
         fi
         (cd jobclient && make && cp jobserver "${ELFSHAKER_BIN_DIR}"/jobserver)
     fi

@@ -94,6 +94,7 @@ _manyclangs_build_part() {
         if [ -e "elfshaker_data/packs/loose/${SNAPSHOT_NAME}.pack.idx" ]
         then
             echo "manyclangs-build-month: Skip already built commit $SNAPSHOT_NAME"
+            echo "Skipped $SNAPSHOT_NAME @ $(date "+%Y/%m/%d %H:%M:%S")" 1>&30 # for progress output.
             continue
         fi
         echo "manyclangs-build-month: Building commit $SNAPSHOT_NAME"
@@ -132,8 +133,7 @@ _manyclangs_build_part() {
             rm BUILD_FAILED
         fi
 
-
-        echo Built "$SNAPSHOT_NAME @ $(date "+%Y/%m/%d %H:%M:%S")" 1>&30 # for progress output.
+        echo "Built $SNAPSHOT_NAME @ $(date "+%Y/%m/%d %H:%M:%S")" 1>&30 # for progress output.
     done < "${COMMIT_LIST}"
 
     popd

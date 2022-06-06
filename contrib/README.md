@@ -1,6 +1,7 @@
 # Contrib scripts
 
-This directory anything which isn't exactly elfshaker but is nonetheless useful.
+This directory contains scripts which make use of elfshaker, for example
+scripts to build a [manyclangs](https://github.com/elfshaker/manyclangs) pack.
 
 # Building manyclangs packs
 
@@ -52,17 +53,21 @@ CPU time.
 
 * To mitigate this, multiple builds run in parallel, but that conflicts with
   making efficient use of incremental builds.
-* Therefore, builds need to be incremental, and it's necessary to multiple of
-  them run in parallel.
-  * Incremental builds start at a point in time and moves forward
+* Therefore, builds need to be incremental, and it's necessary to have multiple
+  of them run in parallel.
+  * Incremental builds start at a point in time and move forward
     commit-by-commit.
-    * This means a few tens-of-seconds build for a typical 'touch a few
-      translation units' build, but only a few CPUs worth of effort.
-  * We achieve parallel builds by choosing multiple start points in time.
-  * This introduces a problem of build contention, running more parallel
-    compiler procesess in parallel than necessary is wasteful. To mitigate
-    this, a jobserver-aware ninja is used, which ensure that only as many
-    compilers run as there are available CPU cores.
+  * This results in a few tens-of-seconds build for a typical 'touch a few
+    translation units' commit. However, such a build will only consume a few
+    CPUs because they are bottlenecked on a small number (much fewer than
+    `$NCPU`) of large translation units for that time.
+  * Saturating the machine to use all of the available resource is achieved by
+    building from multiple points in time simultaneously.
+  * This introduces a problem of build contention, running more compiler
+    procesess in parallel than necessary is wasteful and risks deadlocking the
+    machine for example via an out-of-memory condition. To mitigate this, a
+    jobserver-aware ninja is used, which ensure that only as many compilers run
+    concurrently as there are available CPU cores.
 * Ccache mitigates some incremental build misses.
 * Builds happen entirely in tmpfs because the machine has enough RAM.
   * Total storage for 1 month is ~40G ccache (also in tmpfs) + a few gigabytes

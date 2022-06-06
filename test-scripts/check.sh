@@ -112,6 +112,13 @@ run_test() {
   rm "$output_file"
 }
 
+serve_file_http() {
+  port=$1
+  file="$2"
+  content_length="$(wc -c <"$file")"
+  (printf "HTTP/1.1 200 OK\r\nContent-Length: $content_length\r\n\r\n"; cat "$file") | nc -l -p $port
+}
+
 # TESTS
 
 test_list_works() {
@@ -362,6 +369,84 @@ test_dirty_repo_can_be_forced() {
   fi
 }
 
+# Test if elfshaker update fetches pack indexes successfully
+test_update_fetches_indexes() {
+  pack_sha="$(sha1sum "$input" | awk '{print $1}')"
+  pack_idx_sha="$(sha1sum "$input.idx" | awk '{print $1}')"
+
+  index="./elfshaker_data/remotes/origin.esi"
+  mkdir ./elfshaker_data/remotes
+  {
+    printf 'meta\tv1\n'
+    printf 'url\thttp://127.0.0.1:43102/index.esi\n'
+    printf "$pack_idx_sha\t$pack_sha\thttp://127.0.0.1:43103/test.pack\n"
+  } > "$index"
+
+  # First request returns the .esi
+  serve_file_http 43102 "$index" &
+  server1_pid=$!
+  # Second request returns the .pack.idx
+  serve_file_http 43103 "$input.idx" &
+  server2_pid=$!
+
+  # Give the servers time to open the sockets and start listening
+  sleep 1
+
+  if ! "$elfshaker" update; then
+    echo 'elfshaker update failed!'
+    kill $server1_pid $server2_pid || true
+    exit 1
+  fi
+
+  if [ ! -f "./elfshaker_data/packs/origin/test.pack.idx" ]; then
+    echo 'elfshaker update did not fetch the test pack index!'
+    kill $server1_pid $server2_pid || true
+    exit 1
+  fi
+
+  kill $server1_pid $server2_pid || true
+}
+
+# Test if elfshaker clone fetches pack indexes successfully
+test_clone_fetches_indexes() {
+  pack_sha="$(sha1sum "$input" | awk '{print $1}')"
+  pack_idx_sha="$(sha1sum "$input.idx" | awk '{print $1}')"
+
+  index="$(mktemp)"
+  {
+    printf 'meta\tv1\n'
+    printf 'url\thttp://127.0.0.1:43103/index.esi\n'
+    printf "$pack_idx_sha\t$pack_sha\thttp://127.0.0.1:43104/test.pack\n"
+  } > "$index"
+
+  # First request returns the .esi
+  serve_file_http 43102 "$index" &
+  server1_pid=$!
+  # Second request returns the .esi for the update step
+  serve_file_http 43103 "$index" &
+  server2_pid=$!
+  # Second request returns the .pack.idx
+  serve_file_http 43104 "$input.idx" &
+  server3_pid=$!
+
+  # Give the servers time to open the sockets and start listening
+  sleep 1
+
+  if ! "$elfshaker" clone http://127.0.0.1:43102/index.esi clone_fetches_indexes; then
+    echo 'elfshaker clone failed!'
+    kill $server1_pid $server2_pid $server3_pid || true
+    exit 1
+  fi
+
+  if [ ! -f "./clone_fetches_indexes/elfshaker_data/packs/origin/test.pack.idx" ]; then
+    echo 'elfshaker clone did not fetch the test pack index!'
+    kill $server1_pid $server2_pid $server3_pid || true
+    exit 1
+  fi
+
+  kill $server1_pid $server2_pid $server3_pid || true
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -403,6 +488,8 @@ main() {
   run_test test_head_updated_after_packing
   run_test test_touched_file_dirties_repo
   run_test test_dirty_repo_can_be_forced
+  run_test test_update_fetches_indexes
+  run_test test_clone_fetches_indexes
 }
 
 main "$@"

@@ -91,7 +91,12 @@ _manyclangs_build_part() {
 
     while read -r COMMIT_SHA SNAPSHOT_NAME
     do
-        echo "Building commit $SNAPSHOT_NAME"
+        if [ -e "elfshaker_data/packs/loose/${SNAPSHOT_NAME}.pack.idx" ]
+        then
+            echo "manyclangs-build-month: Skip already built commit $SNAPSHOT_NAME"
+            continue
+        fi
+        echo "manyclangs-build-month: Building commit $SNAPSHOT_NAME"
 
         EXTRA=()
         # Detect the cmake top-level directory introduced Jan 2022.

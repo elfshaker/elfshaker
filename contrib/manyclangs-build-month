@@ -53,7 +53,10 @@ _manyclangs_build_part() {
 
     ELFSHAKER_DATA=${ELFSHAKER_DATA-$PWD/elfshaker_data}
     mkdir -p "$ELFSHAKER_DATA"
-    CCACHE_DIR=${CCACHE_DIR-$PWD/ccache}
+    export CCACHE_DIR=${CCACHE_DIR-$PWD/ccache}
+    # Assumes plenty of space available, bonus of having whole cache around to
+    # play with, typical month ~= 40GiB cache.
+    export CCACHE_MAXSIZE=${CCACHE_MAXSIZE-60G}
 
     # FD chosen to avoid collision with jobserver.
     exec 30>&1 # dup 30 to 1, writes to 30 now go to old stdout.
@@ -76,7 +79,7 @@ _manyclangs_build_part() {
     # relative to $CCACHE_BASEDIR. This is significant because binaries often
     # end up with paths as specified on the commandline through the macro
     # __PRETTY_FUNCTION__ (see elfshaker/elfshaker#11).
-    export CCACHE_DIR CCACHE_BASEDIR="$GIT_WORK_TREE"
+    export CCACHE_BASEDIR="$GIT_WORK_TREE"
 
     while read -r COMMIT_SHA SNAPSHOT_NAME
     do

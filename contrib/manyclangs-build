@@ -41,7 +41,7 @@ default_target_rules() {
     # The set of rules appearing in the position:
     #   build bin/<file>: <rule> ...
     # for each binary listed in the default target.
-    grep -E "$(echo 'build ('"$(default_target_binaries | tr '\n' '|')"'):')" build.ninja | awk '{print $3}'
+    grep -E 'build ('"$(default_target_binaries | tr '\n' '|')"'):' build.ninja | awk '{print $3}'
 }
 
 library_rules() {

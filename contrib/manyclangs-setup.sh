@@ -139,7 +139,7 @@ fetch_llvm() {
     then
         git clone --no-checkout https://github.com/llvm/llvm-project llvm-project
     fi
-    (cd llvm-project && git fetch origin)
+    (cd llvm-project && git fetch origin || :)
 }
 
 install_jobserver() {

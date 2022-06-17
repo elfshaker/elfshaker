@@ -10,7 +10,7 @@ LLVM_TGTDIR="${2-.}"
 
 if [[ ! -d "$LLVM_SRCDIR" ]]
 then
-    echo 'usage: manyclangs-cmake <build_dir> [../path/to/llvm]
+    echo 'usage: manyclangs-cmake <path/to/llvm-project/llvm> <build_dir>
 
 Configure
 

@@ -55,6 +55,7 @@ install_system_dependencies() {
         command -v c++ &&
         command -v cc &&
         command -v clang-${MANYCLANGS_CLANG_VERSION} &&
+        command -v curl &&
         command -v cmake &&
         command -v git &&
         command -v go &&
@@ -72,6 +73,7 @@ install_system_dependencies() {
     PKGS=(
         clang-${MANYCLANGS_CLANG_VERSION}
         cmake
+        curl
         g++
         gcc
         git
@@ -124,9 +126,8 @@ install_elfshaker() {
         build_elfshaker
     else
         ELFSHAKER_TGZ=elfshaker_${ELFSHAKER_BINARY_VERSION}_${ELFSHAKER_ARCH}-unknown-linux-musl.tar.gz
-        wget --continue \
-            https://github.com/elfshaker/elfshaker/releases/download/${ELFSHAKER_BINARY_VERSION}/${ELFSHAKER_TGZ} \
-            https://github.com/elfshaker/elfshaker/releases/download/${ELFSHAKER_BINARY_VERSION}/${ELFSHAKER_TGZ}.sha256sum
+        curl -OL https://github.com/elfshaker/elfshaker/releases/download/${ELFSHAKER_BINARY_VERSION}/${ELFSHAKER_TGZ} \
+             -OL https://github.com/elfshaker/elfshaker/releases/download/${ELFSHAKER_BINARY_VERSION}/${ELFSHAKER_TGZ}.sha256sum
         sha256sum --check ${ELFSHAKER_TGZ}.sha256sum
         
         tar --extract --directory $HOME/.local/bin --file ${ELFSHAKER_TGZ} --strip-components=1 elfshaker/elfshaker

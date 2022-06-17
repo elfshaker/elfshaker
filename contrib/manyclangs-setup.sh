@@ -29,6 +29,11 @@ onexit() {
 
 trap onexit EXIT
 
+if ! command -v sudo
+then
+    sudo() { "$@"; }
+fi
+
 # Set to nonempty to build elfshaker, otherwise install binary.
 ELFSHAKER_FROM_SOURCE=${ELFSHAKER_FROM_SOURCE-}
 ELFSHAKER_BINARY_VERSION=${ELFSHAKER_BINARY_VERSION-v0.9.0}

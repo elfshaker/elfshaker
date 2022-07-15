@@ -276,7 +276,7 @@ impl Repository {
                 snapshot.to_owned(),
             ))),
             1 => Ok(packs.into_iter().next().unwrap()),
-            _ => Err(Error::AmbiguousSnapshotMatch(snapshot.to_owned(), packs)),
+            _ => self.disambiguate_snapshot(&packs, snapshot),
         }
     }
 
@@ -911,6 +911,44 @@ impl Repository {
             remote::update_remote_pack_indexes(&agent, &remote, &remote_packs_dir, &reporter)?;
         }
         Ok(())
+    }
+
+    /// Checks whether the snapshots have the same content checksum.
+    fn are_snapshots_equal(&self, packs: &[PackId], snapshot: &str) -> Result<bool, Error> {
+        let mut snapshot_checksums = packs.iter().map(|pack| {
+            self.load_index(pack)
+                .map(|packidx| packidx.compute_snapshot_checksum(snapshot))
+                .expect("failed to resolve snapshot")
+        });
+
+        let first = snapshot_checksums.next().expect("At least 1 pack expected");
+        Ok(snapshot_checksums.all(|checksum| checksum == first))
+    }
+
+    /// Takes a set of packs which contain the given snapshot name. If the
+    /// snapshot in each pack is identical according to content checksum,
+    /// return an arbitrary pack, preferring a loose one if available.
+    fn disambiguate_snapshot(&self, packs: &[PackId], snapshot: &str) -> Result<PackId, Error> {
+        info!(
+            "Snapshot exists in multiple packs ({:?}), verifying that checksums match...",
+            packs
+        );
+        if self.are_snapshots_equal(packs, snapshot)? {
+            // The snapshots have the same checksums, so we could use either one
+            // but we prefer picking a loose one over a packed for performance.
+            let loose = packs.iter().find(|pack| self.is_pack_loose(pack));
+            let selected = loose.unwrap_or(&packs[0]).clone();
+            info!(
+                "Snapshot exists in multiple packs ({:?}), {:?} is selected",
+                packs, selected
+            );
+            Ok(selected)
+        } else {
+            Err(Error::AmbiguousSnapshotMatch(
+                snapshot.to_owned(),
+                packs.to_vec(),
+            ))
+        }
     }
 }
 

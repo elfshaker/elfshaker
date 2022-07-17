@@ -5,6 +5,8 @@ mod clone;
 mod extract;
 mod find;
 mod list;
+mod list_files;
+mod list_packs;
 mod pack;
 mod show;
 mod store;
@@ -44,6 +46,8 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
         (extract::SUBCOMMAND, Some(matches)) => extract::run(matches),
         (store::SUBCOMMAND, Some(matches)) => store::run(matches),
         (list::SUBCOMMAND, Some(matches)) => list::run(matches),
+        (list_packs::SUBCOMMAND, Some(matches)) => list_packs::run(matches),
+        (list_files::SUBCOMMAND, Some(matches)) => list_files::run(matches),
         (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
         (show::SUBCOMMAND, Some(matches)) => show::run(matches),
         (find::SUBCOMMAND, Some(matches)) => find::run(matches),
@@ -62,6 +66,8 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(extract::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())
+        .subcommand(list_packs::get_app())
+        .subcommand(list_files::get_app())
         .subcommand(pack::get_app())
         .subcommand(show::get_app())
         .subcommand(find::get_app())

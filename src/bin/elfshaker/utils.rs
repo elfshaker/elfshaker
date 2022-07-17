@@ -95,7 +95,14 @@ where
 
 /// Formats file sizes to human-readable format.
 pub fn format_size(bytes: u64) -> String {
-    format!("{:.3}MiB", bytes as f64 / 1024.0 / 1024.0)
+    let mut value = bytes as f64;
+    for unit in ["B", "K", "M", "G", "T"] {
+        if value < 1024.0 {
+            return format!("{}{}", (value * 1000.0).round() / 1000.0, unit);
+        }
+        value /= 1024.0;
+    }
+    unreachable!()
 }
 
 /// Opens the repo from the current work directory and logs some standard

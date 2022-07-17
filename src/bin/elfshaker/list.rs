@@ -2,117 +2,97 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
-use std::{error::Error, ops::ControlFlow, path::Path};
+use std::{error::Error, ops::ControlFlow};
 
-use super::utils::{format_size, open_repo_from_cwd, print_table};
-use elfshaker::repo::{PackId, Repository, SnapshotId};
+use super::utils::{format_size, open_repo_from_cwd};
+use elfshaker::repo::{PackId, Repository};
 
 pub(crate) const SUBCOMMAND: &str = "list";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let snapshot_or_pack = matches.value_of("snapshot_or_pack");
-    let bytes = matches.is_present("bytes");
+    let packs = matches.values_of_lossy("pack");
+    let format = matches
+        .value_of_lossy("format")
+        .expect("<format> not provided");
 
     let repo = open_repo_from_cwd()?;
 
-    if let Some(snapshot_or_pack) = snapshot_or_pack {
-        if let Some(pack_id) = repo.is_pack(snapshot_or_pack)? {
-            print_pack_summary(&repo, pack_id)?;
-        } else {
-            let snapshot = repo.find_snapshot(snapshot_or_pack)?;
-            print_snapshot_summary(&repo, &snapshot, bytes)?;
-        }
-    } else {
-        print_repo_summary(&repo, bytes)?;
-    }
+    let packs = packs
+        .map(|packs| packs.iter().cloned().map(PackId::Pack).collect())
+        .unwrap_or(repo.packs()?);
+
+    print_snapshots(&repo, &packs, &format)?;
 
     Ok(())
 }
 
 pub(crate) fn get_app() -> App<'static, 'static> {
     App::new(SUBCOMMAND)
-        .about(
-            "Prints the list of packs available in the repository, the list of snapshots \
-             available in a pack, or the list of files available in a snapshot.",
-        )
+        .about("Prints the list of snapshots available in the repository.")
         .arg(
-            Arg::with_name("snapshot_or_pack")
-                .required(false)
+            Arg::with_name("pack")
                 .index(1)
-                .help("Prints the contents of the specified snapshot or pack."),
+                .required(false)
+                .multiple(true)
+                .help("Prints the contents of the specified packs."),
         )
         .arg(
-            Arg::with_name("bytes")
-                .long("--bytes")
-                .help("Print the sizes in bytes."),
+            Arg::with_name("format")
+                .long("format")
+                .default_value("%s")
+                .help(
+                    "Pretty-print each result in the given format, where \
+                    <format> is a string containing one or more of the \
+                    following placeholders:\n\
+                    \t%s - fully-qualified snapshot\n\
+                    \t%t - snapshot tag\n\
+                    \t%h - human-readable size\n\
+                    \t%b - size in bytes\n\
+                    \t%n - number of files\n",
+                ),
         )
 }
 
-fn print_repo_summary(repo: &Repository, bytes: bool) -> Result<(), Box<dyn Error>> {
-    let mut table = vec![];
-
-    for pack_id in repo.packs()? {
-        let pack_index = repo.load_index_snapshots(&pack_id)?;
-
-        let size_str = match repo.open_pack(&pack_id) {
-            Ok(pack) => if bytes { pack.file_size().to_string() } else { format_size(pack.file_size()) },
-            _ => "-".to_string()
-        };
-
-        table.push([
-            match pack_id {
-                PackId::Pack(s) => s,
-            },
-            pack_index.len().to_string(),
-            size_str,
-        ]);
-    }
-
-    print_table(
-        Some(&["PACK".to_owned(), "SNAPSHOTS".to_owned(), "SIZE".to_owned()]),
-        table.iter(),
-    );
-    Ok(())
+fn format_snapshot_row(
+    fmt: &str,
+    pack_id: &PackId,
+    snapshot: &str,
+    size: u64,
+    file_count: usize,
+) -> String {
+    fmt.to_owned()
+        .replace("%s", &format!("{}:{}", pack_id, snapshot))
+        .replace("%t", snapshot)
+        .replace("%h", &format_size(size))
+        .replace("%b", &size.to_string())
+        .replace("%n", &file_count.to_string())
 }
 
-fn print_pack_summary(repo: &Repository, pack: PackId) -> Result<(), Box<dyn Error>> {
-    let mut table = vec![];
+fn print_snapshots(
+    repo: &Repository,
+    pack_ids: &[PackId],
+    fmt: &str,
+) -> Result<(), Box<dyn Error>> {
+    let mut lines = vec![];
 
-    repo.load_index(&pack)?
-        .for_each_snapshot(|snapshot, entries| {
-            let file_count = entries.len();
-            table.push([snapshot.to_owned(), file_count.to_string()]);
-            ControlFlow::<(), ()>::Continue(())
-        })?;
+    for pack_id in pack_ids {
+        repo.load_index(pack_id)?
+            .for_each_snapshot(|snapshot, entries| {
+                let file_count = entries.len();
+                let file_size = entries.iter().map(|entry| entry.metadata.size).sum();
 
-    print_table(
-        Some(&["SNAPSHOT".to_owned(), "FILES".to_owned()]),
-        table.iter(),
-    );
-    Ok(())
-}
-
-fn print_snapshot_summary(repo: &Repository, snapshot: &SnapshotId, bytes: bool) -> Result<(), Box<dyn Error>> {
-    let mut table = vec![];
-
-    let idx = repo.load_index(snapshot.pack())?;
-    let handles = idx
-        .resolve_snapshot(snapshot.tag())
-        .expect("failed to resolve snapshot"); // TODO: Temporary.
-
-    for entry in idx.entries_from_handles(handles.iter())? {
-        table.push([
-            hex::encode(entry.checksum).to_string(),
-            if bytes { entry.metadata.size.to_string() } else { format_size(entry.metadata.size) },
-            Path::display(entry.path.as_ref()).to_string(),
-        ]);
+                lines.push(format_snapshot_row(
+                    fmt, pack_id, snapshot, file_size, file_count,
+                ));
+                ControlFlow::<(), ()>::Continue(())
+            })?;
     }
 
-    table.sort_by(|row1, row2| row1[2].cmp(&row2[2]));
+    lines.sort();
 
-    print_table(
-        Some(&["CHECKSUM".to_owned(), "SIZE".to_owned(), "FILE".to_owned()]),
-        table.iter(),
-    );
+    for line in lines {
+        println!("{}", line);
+    }
+
     Ok(())
 }

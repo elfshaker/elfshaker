@@ -48,7 +48,7 @@ all_pwd_sha1sums() {
 }
 
 elfshaker_sha1sums() {
-  "$elfshaker" list "$@" 2> /dev/null | awk '{print $1" "$3}' | sort -k2,2
+  "$elfshaker" list-files "$@" 2> /dev/null | awk '{print $1" "$3}' | sort -k2,2
 }
 
 verify_snapshot() {
@@ -127,7 +127,7 @@ test_list_works() {
 }
 
 test_extract_reset_on_empty_works() {
-  "$elfshaker" list "$pack":"$snapshot_a"
+  "$elfshaker" list-files "$pack":"$snapshot_a"
   "$elfshaker" --verbose extract --reset --verify "$pack":"$snapshot_a"
   verify_snapshot "$pack":"$snapshot_a"
 }
@@ -161,7 +161,7 @@ test_store_twice_works() {
   "$elfshaker" --verbose extract --verify --reset "$pack":"$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b-again"
-  diff_output=$(diff <("$elfshaker" list loose/"$snapshot_b":"$snapshot_b" | sort) <("$elfshaker" list loose/"$snapshot_b-again":"$snapshot_b-again" | sort))
+  diff_output=$(diff <("$elfshaker" list-files loose/"$snapshot_b":"$snapshot_b" | sort) <("$elfshaker" list-files loose/"$snapshot_b-again":"$snapshot_b-again" | sort))
   if [[ -n "${diff_output// }" ]]; then
     echo "'$diff_output'"
     exit 1
@@ -173,7 +173,7 @@ test_store_finds_new_files() {
   "$elfshaker" --verbose store "$snapshot_b"
   test_file=$(mktemp -p .)
   "$elfshaker" --verbose store "$snapshot_b-mod"
-  "$elfshaker" list loose/"$snapshot_b-mod":"$snapshot_b-mod" | grep $(basename "$test_file") || {
+  "$elfshaker" list-files loose/"$snapshot_b-mod":"$snapshot_b-mod" | grep $(basename "$test_file") || {
     echo 'Failed to store newly created file!'
     exit 1
   }
@@ -314,13 +314,14 @@ test_pack_order_by_mtime() {
   touch -d "$(date --date="$EPOCH"' +3 min')" elfshaker_data/packs/loose/test3.pack.idx # 3. (Lex != store)
 
   "$elfshaker" pack testpack
-  SNAPSHOTS=$("$elfshaker" list testpack 2> /dev/null | awk '{print $1}' | xargs)
-  [[ "${SNAPSHOTS}" == "test1 test2 test4 test3" ]]
+  SNAPSHOTS=$("$elfshaker" list testpack --format "%t" 2> /dev/null | awk '{print $1}' | xargs)
+  # Expect the output to be sorted lexicographically
+  [[ "${SNAPSHOTS}" == "test1 test2 test3 test4" ]]
 }
 
 test_show_from_pack_works() {
   "$elfshaker" extract --reset --verify "$pack":"$snapshot_a"
-  file_path="$({ "$elfshaker" list "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
+  file_path="$({ "$elfshaker" list-files "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
   sha1_extract="$(sha1sum < "$file_path")"
   sha1_show="$("$elfshaker" --verbose show "$pack":"$snapshot_a" "$file_path" | sha1sum)"
   if [[ "$sha1_extract" != "$sha1_show" ]]; then
@@ -332,7 +333,7 @@ test_show_from_pack_works() {
 test_show_from_loose_works() {
   "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
   "$elfshaker" store "$snapshot_a"
-  file_path="$({ "$elfshaker" list "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
+  file_path="$({ "$elfshaker" list-files "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
   sha1_extract="$(sha1sum < "$file_path")"
   sha1_show="$("$elfshaker" --verbose show loose/"$snapshot_a":"$snapshot_a" "$file_path" | sha1sum)"
   if [[ "$sha1_extract" != "$sha1_show" ]]; then
@@ -459,7 +460,7 @@ main() {
 
   list_output=$(mktemp)
   # Grab 2 snapshots from the pack
-  "$elfshaker" list "$pack" 2>/dev/null | sed '1d' > "$list_output"
+  "$elfshaker" list "$pack" --format "%t" 2>/dev/null | sed '1d' > "$list_output"
   snapshot_a=$(head -n 1 "$list_output" | awk '{print $1}')
   snapshot_b=$(tail -n 1 "$list_output" | awk '{print $1}')
   rm "$list_output"

@@ -4,6 +4,8 @@
 use elfshaker::log::measure;
 use elfshaker::progress::ProgressReporter;
 use elfshaker::repo::{Error as RepoError, Repository};
+
+use lazy_static::lazy_static;
 use log::info;
 use std::io::Write;
 use std::sync::{
@@ -107,6 +109,62 @@ pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
     open_result
 }
 
+/// The default progress bar width is the same as cargo's.
+const DEFAULT_PROGRESS_BAR_WIDTH: i32 = 25;
+
+/// Builds a progress bar of the form `[===>  ]`.
+///
+/// # Arguments
+///
+/// * `percent_complete` - Integer percentage of completeness
+/// * `width` - Width of the progress bar excluding the open/close bracket.
+fn create_progress_bar(percent_complete: i32, width: i32) -> String {
+    assert!((0..=100).contains(&percent_complete));
+    let mut s = "[".to_owned();
+    let full_blocks = ((percent_complete as f32 / 100f32) * width as f32).round() as i32;
+    for _ in 0..full_blocks {
+        s += "=";
+    }
+    s += ">";
+    for _ in 0..(width - full_blocks) {
+        s += " ";
+    }
+    s += "]";
+    s
+}
+
+/// Checks if `stdout` outputs to a terminal with support for terminal escape
+/// codes.
+#[cfg(unix)]
+fn is_terminal_escape_supported<Fd>(fd: Fd) -> bool
+where
+    Fd: std::os::unix::io::AsRawFd,
+{
+    extern crate libc;
+    // We assume that as long as we are outputting to a terminal, that terminal
+    // supports escape codes.
+    unsafe { libc::isatty(fd.as_raw_fd()) != 0 }
+}
+
+#[cfg(not(unix))]
+fn is_terminal_escape_supported<Fd>(_: Fd) -> bool {
+    // Assume other platforms do not support ANSI escape codes
+    false
+}
+
+lazy_static! {
+    static ref STDOUT_TERMINAL_ESCAPE_SUPPORTED: bool =
+        is_terminal_escape_supported(std::io::stdout());
+}
+
+/// Clears the current line
+const ESC_CLEAR_LINE: &str = "\x1b[2K";
+const ESC_BOLD_ON: &str = "\x1b[1m";
+const ESC_GREEN: &str = "\x1b[32;1m";
+const ESC_CYAN: &str = "\x1b[36;1m";
+/// Resets all text formatting
+const ESC_RESET: &str = "\x1b[32;0m";
+
 pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressReporter<'static> {
     assert!(step <= 100);
 
@@ -114,16 +172,61 @@ pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressRep
     let message = message.to_owned();
     ProgressReporter::new(move |checkpoint| {
         if let Some(remaining) = checkpoint.remaining {
-            let percentage =
-                (100 * checkpoint.done / std::cmp::max(1, checkpoint.done + remaining)) as isize;
-            if percentage - current.load(Ordering::Acquire) >= step as isize {
+            let is_terminal_escape_supported = *STDOUT_TERMINAL_ESCAPE_SUPPORTED;
+            // Helper which returns the input if terminal codes are supported
+            let if_escape = |s| {
+                if is_terminal_escape_supported {
+                    s
+                } else {
+                    ""
+                }
+            };
+
+            let total = checkpoint.done + remaining;
+            let percentage = (100 * checkpoint.done / std::cmp::max(1, total)) as isize;
+
+            // Stepping helps to avoid too many lines being printed,
+            // but when using terminal escape codes, we refresh the same
+            // line over an over, so it is not needed.
+            let needs_update = percentage - current.load(Ordering::Acquire) >= step as isize;
+            if needs_update || is_terminal_escape_supported {
                 current.store(percentage, Ordering::Release);
-                eprintln!("{}... {}%", message, percentage);
+                // Clear line and reset cursor
+                print!("{}\r", if_escape(ESC_CLEAR_LINE));
+
+                if percentage == 100 {
+                    // Bold green success text
+                    println!(
+                        "{}{}{}{} [{}/{}]",
+                        if_escape(ESC_BOLD_ON),
+                        if_escape(ESC_GREEN),
+                        message,
+                        if_escape(ESC_RESET),
+                        total,
+                        total
+                    );
+                } else {
+                    // Bold blue status text with percentage
+                    print!(
+                        "{}{}{}{} {} {}% [{}/{}]",
+                        if_escape(ESC_BOLD_ON),
+                        if_escape(ESC_CYAN),
+                        message,
+                        if_escape(ESC_RESET),
+                        create_progress_bar(percentage as i32, DEFAULT_PROGRESS_BAR_WIDTH),
+                        percentage,
+                        checkpoint.done,
+                        total,
+                    );
+                    // Optional "detail" message
+                    if let Some(detail) = &checkpoint.detail {
+                        print!(": {}", detail);
+                    }
+                }
                 std::io::stdout().flush().unwrap();
             }
         } else {
-            eprint!("{}... {} of ?", message, checkpoint.done);
-            std::io::stdout().flush().unwrap();
+            println!("{}... [{}/?]", message, checkpoint.done);
         }
     })
 }

@@ -72,7 +72,7 @@ main() {
     done
 
     rm -r -- !("elfshaker_data")
-    "${ELFSHAKER_BIN}" pack verification --frames 2 --verbose
+    "${ELFSHAKER_BIN}" pack verification --frames 2 --verbose >/dev/null
 
     echo "$REPO_DIR"/elfshaker_data/packs/verification.pack
 }

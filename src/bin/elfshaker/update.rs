@@ -8,8 +8,9 @@ use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 
 pub(crate) const SUBCOMMAND: &str = "update";
 
-pub(crate) fn run(_matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let mut repo = open_repo_from_cwd()?;
+pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
+    let mut repo = open_repo_from_cwd(data_dir)?;
 
     repo.set_progress_reporter(|msg| create_percentage_print_reporter(msg, 5));
     repo.update_remotes()?;

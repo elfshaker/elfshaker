@@ -13,6 +13,7 @@ use elfshaker::repo::{Error as RepoError, ExtractOptions};
 pub(crate) const SUBCOMMAND: &str = "extract";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
     let snapshot = matches.value_of("snapshot").unwrap();
     let is_reset = matches.is_present("reset");
     let is_verify = matches.is_present("verify");
@@ -31,7 +32,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         n => n,
     };
 
-    let mut repo = open_repo_from_cwd()?;
+    let mut repo = open_repo_from_cwd(data_dir)?;
     let new_head = match repo.find_snapshot(snapshot) {
         Err(RepoError::PackError(PackError::SnapshotNotFound(_))) => {
             info!("Snapshot not available locally. Updating remotes...");

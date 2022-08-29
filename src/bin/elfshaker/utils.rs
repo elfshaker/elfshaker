@@ -8,6 +8,7 @@ use elfshaker::repo::{Error as RepoError, Repository};
 use lazy_static::lazy_static;
 use log::info;
 use std::io::Write;
+use std::path::Path;
 use std::sync::{
     atomic::{AtomicIsize, Ordering},
     Arc,
@@ -107,11 +108,11 @@ pub fn format_size(bytes: u64) -> String {
 
 /// Opens the repo from the current work directory and logs some standard
 /// stats about the process.
-pub fn open_repo_from_cwd() -> Result<Repository, RepoError> {
+pub fn open_repo_from_cwd(data_dir: &Path) -> Result<Repository, RepoError> {
     // Open repo from cwd.
     let repo_path = std::env::current_dir()?;
     info!("Opening repository...");
-    let (elapsed, open_result) = measure(|| Repository::open(&repo_path));
+    let (elapsed, open_result) = measure(|| Repository::open_with_data_dir(repo_path, data_dir));
     info!("Opening repository took {:?}", elapsed);
     open_result
 }

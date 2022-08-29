@@ -12,10 +12,11 @@ use elfshaker::repo::ExtractOptions;
 pub(crate) const SUBCOMMAND: &str = "show";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
     let snapshot = matches.value_of("snapshot").unwrap();
     let paths: Vec<_> = matches.values_of_os("path").unwrap().collect();
 
-    let mut repo = open_repo_from_cwd()?;
+    let mut repo = open_repo_from_cwd(data_dir)?;
     let snapshot = repo.find_snapshot(snapshot)?;
     let pack_index = repo.load_index(snapshot.pack())?;
 

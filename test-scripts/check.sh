@@ -188,6 +188,20 @@ test_store_empty_directory_works() {
   [ "$("$elfshaker" list | wc -l)" -eq 1 ]
 }
 
+test_store_data_dir_works() {
+  mkdir -p testdir
+  cd testdir
+
+  "$elfshaker" --verbose --data-dir=../data_dir store test
+
+  if [[ -d "elfshaker_data" ]]; then
+    echo "elfshaker_data should not have been created!";
+    exit 1
+  fi
+
+  [ "$("$elfshaker" --verbose --data-dir=../data_dir list | wc -l)" -eq 1 ]
+}
+
 rand_megs() {
   dd if=/dev/urandom bs="$1M" count=1 iflag=fullblock
 }
@@ -479,6 +493,7 @@ main() {
   run_test test_store_twice_works
   run_test test_store_finds_new_files
   run_test test_store_empty_directory_works
+  run_test test_store_data_dir_works
   run_test test_pack_simple_works
   run_test test_pack_two_snapshots_works
   run_test test_pack_two_snapshots_object_sort_works

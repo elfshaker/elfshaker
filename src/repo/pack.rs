@@ -24,7 +24,6 @@ use super::constants::{
 };
 use super::error::Error;
 use super::fs::{create_file, open_file};
-use super::repository::Repository;
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
@@ -291,13 +290,12 @@ impl Pack {
     /// # Arguments
     ///
     /// * `pack_name` - The base filename ([`Path::file_stem`]) of the pack.
-    pub fn open<P>(repo: P, pack_name: &PackId) -> Result<Self, Error>
+    pub fn open<P>(data_dir: P, pack_name: &PackId) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
         let PackId::Pack(pack_name) = pack_name;
-        let mut packs_data = repo.as_ref().join(&*Repository::data_dir());
-        packs_data.push(PACKS_DIR);
+        let packs_data = data_dir.as_ref().join(PACKS_DIR);
 
         let mut pack_index_path = packs_data.join(pack_name);
         pack_index_path.set_extension(PACK_INDEX_EXTENSION);

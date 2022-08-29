@@ -4,7 +4,6 @@
 use super::{constants::*, pack::IdError};
 
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
     fs, io,
     io::{Read, Write},
@@ -115,8 +114,10 @@ pub struct ExtractResult {
 /// Contains methods for interfacing with elfshaker repositories, including
 /// methods to create snapshots and pack files, and to extract files from them.
 pub struct Repository {
-    /// The path containing the [`Repository::data_dir`] directory.
+    /// The working directory for this [`Repository`].
     path: PathBuf,
+    /// The path for the elfshaker repository.
+    data_dir: PathBuf,
     /// Since there might be multiple long running sub-tasks invoked in each
     /// macro tasks (e.g. extract snapshot includes fetching the .esi,
     /// fetching individual pack, etc.), it is useful to use a "factory",
@@ -129,12 +130,31 @@ impl Repository {
     ///
     /// # Arguments
     ///
-    /// * `path` - The path containing the [`Repository::data_dir`] directory.
+    /// * `path` - The working directory for this [`Repository`].
     pub fn open<P>(path: P) -> Result<Self, Error>
     where
         P: AsRef<Path>,
     {
-        let data_dir = path.as_ref().join(&*Self::data_dir());
+        Self::open_with_data_dir(
+            std::fs::canonicalize(path)?,
+            std::fs::canonicalize(REPO_DIR)?,
+        )
+    }
+
+    /// Opens the specified repository.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The working directory for this [`Repository`].
+    /// * `data_dir` - The path to the elfshaker repository.
+    pub fn open_with_data_dir<P1, P2>(path: P1, data_dir: P2) -> Result<Self, Error>
+    where
+        P1: AsRef<Path>,
+        P2: AsRef<Path>,
+    {
+        let path = path.as_ref().to_path_buf();
+        let data_dir = data_dir.as_ref().canonicalize()?;
+
         if !Path::exists(&data_dir) {
             error!(
                 "The directory {:?} is not an elfshaker repository!",
@@ -144,7 +164,8 @@ impl Repository {
         }
 
         Ok(Repository {
-            path: path.as_ref().to_owned(),
+            path,
+            data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
         })
     }
@@ -152,7 +173,7 @@ impl Repository {
     // Reads the state of HEAD. If the file does not exist, returns None values.
     // If ctime/mtime cannot be determined, returns None.
     pub fn read_head(&self) -> Result<(Option<SnapshotId>, Option<SystemTime>), Error> {
-        let path = self.path.join(&*Self::data_dir()).join(HEAD_FILE);
+        let path = self.data_dir().join(HEAD_FILE);
 
         let (head, mtime) = match open_file(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
@@ -187,11 +208,11 @@ impl Repository {
 
     /// Open the pack.
     pub fn open_pack(&self, pack: &PackId) -> Result<Pack, Error> {
-        Pack::open(&self.path, pack)
+        Pack::open(self.data_dir(), pack)
     }
 
     pub fn packs(&self) -> Result<Vec<PackId>, Error> {
-        let root = self.path.join(REPO_DIR).join(PACKS_DIR);
+        let root = self.data_dir().join(PACKS_DIR);
         fs::create_dir_all(&root)?;
         let mut result = WalkDir::new(&root)
             .into_iter()
@@ -234,8 +255,7 @@ impl Repository {
     fn pack_index_mtime(&self, pack_id: &PackId) -> Result<SystemTime, Error> {
         let pack_index_path = match pack_id {
             PackId::Pack(name) => self
-                .path
-                .join(&*Repository::data_dir())
+                .data_dir()
                 .join(PACKS_DIR)
                 .join(name)
                 .with_extension(PACK_INDEX_EXTENSION),
@@ -281,8 +301,8 @@ impl Repository {
     }
 
     pub fn is_pack(&self, pack_id: &str) -> Result<Option<PackId>, IdError> {
-        let data_dir = self.path.join(&*Repository::data_dir());
-        let pack_index_path = data_dir
+        let pack_index_path = self
+            .data_dir()
             .join(PACKS_DIR)
             .join(pack_id)
             .with_extension(PACK_INDEX_EXTENSION);
@@ -300,8 +320,8 @@ impl Repository {
             return false;
         }
 
-        let data_dir = self.path.join(&*Repository::data_dir());
-        let pack_index_path = data_dir
+        let pack_index_path = self
+            .data_dir()
             .join(PACKS_DIR)
             .join(pack_name)
             .with_extension(PACK_INDEX_EXTENSION);
@@ -310,9 +330,9 @@ impl Repository {
     }
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
-        let data_dir = self.path.join(&*Repository::data_dir());
         let pack_index_path = match pack_id {
-            PackId::Pack(name) => data_dir
+            PackId::Pack(name) => self
+                .data_dir()
                 .join(PACKS_DIR)
                 .join(name)
                 .with_extension(PACK_INDEX_EXTENSION),
@@ -322,9 +342,9 @@ impl Repository {
     }
 
     pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
-        let data_dir = self.path.join(&*Repository::data_dir());
         let pack_index_path = match pack_id {
-            PackId::Pack(name) => data_dir
+            PackId::Pack(name) => self
+                .data_dir()
                 .join(PACKS_DIR)
                 .join(name)
                 .with_extension(PACK_INDEX_EXTENSION),
@@ -477,8 +497,7 @@ impl Repository {
     }
 
     fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
-        let mut remotes_dir = self.path().join(&*Repository::data_dir());
-        remotes_dir.push(REMOTES_DIR);
+        let remotes_dir = self.data_dir().join(REMOTES_DIR);
         let remotes = remote::load_remotes(&remotes_dir)?;
 
         let pack = match pack {
@@ -493,8 +512,7 @@ impl Repository {
             if let Some(remote_pack) = remote.find_pack(pack) {
                 info!("Found {} in {}. Updating...", pack, remote);
                 let pack_path = self
-                    .path()
-                    .join(&*Repository::data_dir())
+                    .data_dir()
                     .join(PACKS_DIR)
                     .join(remote.name().unwrap())
                     .join(pack_file_name);
@@ -511,8 +529,8 @@ impl Repository {
     }
 
     /// The name of the directory containing the elfshaker repository data.
-    pub fn data_dir() -> Cow<'static, str> {
-        Cow::Borrowed(REPO_DIR)
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
     pub fn create_snapshot<I, P>(&mut self, snapshot: &SnapshotId, files: I) -> Result<(), Error>
@@ -520,7 +538,8 @@ impl Repository {
         I: Iterator<Item = P>,
         P: AsRef<Path>,
     {
-        let files = clean_file_list(self.path.as_ref(), files)?.collect::<Vec<_>>();
+        let files =
+            clean_file_list(self.path.as_ref(), self.data_dir(), files)?.collect::<Vec<_>>();
         info!("Computing checksums for {} files...", files.len());
 
         let temp_dir = self.temp_dir();
@@ -551,7 +570,7 @@ impl Repository {
         let mut index = PackIndex::new();
         index.push_snapshot(snapshot.tag().to_owned(), pack_entries)?;
 
-        let loose_path = self.path().join(REPO_DIR).join(PACKS_DIR).join(LOOSE_DIR);
+        let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
         ensure_dir(&loose_path)?;
 
         index.save(
@@ -583,9 +602,7 @@ impl Repository {
 
         // Construct output file path.
         let pack_path = {
-            let mut pack_path = self.path.to_owned();
-            pack_path.push(&*Repository::data_dir());
-            pack_path.push(PACKS_DIR);
+            let mut pack_path = self.data_dir().join(PACKS_DIR);
             ensure_dir(&pack_path)?;
             pack_path.push(format!("{}.{}", pack_name, PACK_EXTENSION));
             pack_path
@@ -688,8 +705,7 @@ impl Repository {
 
     /// Deletes ALL loose snapshots and objects.
     pub fn remove_loose_all(&mut self) -> Result<(), Error> {
-        let mut loose_dir = self.path().join(&*Repository::data_dir());
-        loose_dir.push(LOOSE_DIR);
+        let loose_dir = self.data_dir().join(LOOSE_DIR);
 
         match fs::remove_dir_all(&loose_dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -700,19 +716,18 @@ impl Repository {
 
     /// Updates the HEAD snapshot id.
     pub fn update_head(&mut self, snapshot_id: &SnapshotId) -> Result<(), Error> {
-        let data_dir = self.path.join(&*Self::data_dir());
         let snapshot_string = format!("{}\n", snapshot_id);
         ensure_dir(&self.temp_dir())?;
         write_file_atomic(
             snapshot_string.as_bytes(),
             &self.temp_dir(),
-            &data_dir.join(HEAD_FILE),
+            &self.data_dir().join(HEAD_FILE),
         )?;
         Ok(())
     }
 
     pub fn add_remote(&mut self, name: &str, url: &str) -> Result<(), Error> {
-        let mut path = self.path.join(REPO_DIR).join(REMOTES_DIR);
+        let mut path = self.data_dir().join(REMOTES_DIR);
         fs::create_dir_all(&path)?;
         path.push(name);
         path.set_extension("esi");
@@ -843,9 +858,7 @@ impl Repository {
     }
 
     fn temp_dir(&self) -> PathBuf {
-        let mut temp_dir = self.path.join(&*Repository::data_dir());
-        temp_dir.push(TEMP_DIR);
-        temp_dir
+        self.data_dir().join(TEMP_DIR)
     }
 
     /// Atomically writes an object to the loose object store.
@@ -874,10 +887,8 @@ impl Repository {
 
     pub fn loose_object_path(&self, checksum: &ObjectChecksum) -> PathBuf {
         let checksum_str = hex::encode(&checksum[..]);
-        let mut obj_path = self.path.join(&*Repository::data_dir());
         // $REPO_DIR/$LOOSE
-        obj_path.push(LOOSE_DIR);
-
+        let mut obj_path = self.data_dir().join(LOOSE_DIR);
         // $REPO_DIR/$LOOSE/FA/
         obj_path.push(&checksum_str[..2]);
         // $REPO_DIR/$LOOSE/FA/F0/
@@ -889,8 +900,7 @@ impl Repository {
 
     /// Updates all remotes and their associated .pack.idx files.
     pub fn update_remotes(&self) -> Result<(), Error> {
-        let mut remotes_dir = self.path().join(&*Repository::data_dir());
-        remotes_dir.push(REMOTES_DIR);
+        let remotes_dir = self.data_dir().join(REMOTES_DIR);
         let remotes = remote::load_remotes(&remotes_dir)?;
 
         let agent = ureq::AgentBuilder::new().build();
@@ -901,8 +911,7 @@ impl Repository {
         for remote in remotes {
             // .path() is Some, because load_remotes guarantees it
             let remote_name = remote.path().unwrap().file_stem().unwrap();
-            let mut remote_packs_dir = self.path().join(&*Repository::data_dir());
-            remote_packs_dir.push(PACKS_DIR);
+            let mut remote_packs_dir = self.data_dir().join(PACKS_DIR);
             remote_packs_dir.push(remote_name);
 
             info!("Updating {}...", remote);
@@ -956,11 +965,18 @@ impl Repository {
 /// and skips any paths pointing into the repository data directory.
 fn clean_file_list<P>(
     repo_dir: &Path,
+    data_dir: &Path,
     files: impl Iterator<Item = P>,
 ) -> io::Result<impl Iterator<Item = PathBuf>>
 where
     P: AsRef<Path>,
 {
+    let data_dir_is_subdir = data_dir.starts_with(repo_dir);
+    let stripped_data_dir = data_dir
+        .components()
+        .skip(repo_dir.components().count())
+        .collect::<PathBuf>();
+
     let files = files
         .flat_map(|p| {
             if p.as_ref().is_relative() {
@@ -979,20 +995,17 @@ where
                 .skip(repo_dir.components().count())
                 .collect::<PathBuf>())
         })
+        .filter(|p| {
+            !data_dir_is_subdir
+                || match p {
+                    Ok(p) => !p.starts_with(&stripped_data_dir),
+                    _ => false,
+                }
+        })
         .collect::<io::Result<Vec<PathBuf>>>()?
-        .into_iter()
-        .filter(|p| !is_elfshaker_data_path(p));
+        .into_iter();
 
     Ok(files)
-}
-
-/// Checks if the relative path is rooted at the data directory.
-fn is_elfshaker_data_path(p: &Path) -> bool {
-    assert!(p.is_relative());
-    match p.components().next() {
-        Some(c) => c.as_os_str() == &*Repository::data_dir(),
-        _ => false,
-    }
 }
 
 #[cfg(test)]
@@ -1012,33 +1025,18 @@ mod tests {
         ];
         let repo = Repository {
             path: "/repo".into(),
+            data_dir: "/repo/elfshaker_data".into(),
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
         };
         let path = repo.loose_object_path(&checksum);
         assert_eq!(
             format!(
-                "/repo/{}/{}/fa/f0/deadbeefbadc0de0faf0deadbeefbadc0de0",
-                Repository::data_dir(),
+                "{}/{}/fa/f0/deadbeefbadc0de0faf0deadbeefbadc0de0",
+                repo.data_dir().to_string_lossy(),
                 LOOSE_DIR
             ),
             path.to_str().unwrap(),
         );
-    }
-
-    #[test]
-    fn data_dir_detected() {
-        let path = format!("{}", Repository::data_dir());
-        assert!(is_elfshaker_data_path(path.as_ref()));
-    }
-    #[test]
-    fn data_dir_detected_as_parent() {
-        let path = format!("{}/something", Repository::data_dir());
-        assert!(is_elfshaker_data_path(path.as_ref()));
-    }
-    #[test]
-    fn data_dir_not_detected_incorrectly() {
-        let path = "some/path/something";
-        assert!(!is_elfshaker_data_path(path.as_ref()));
     }
 
     #[test]

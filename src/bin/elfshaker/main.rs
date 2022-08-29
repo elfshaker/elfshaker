@@ -79,4 +79,13 @@ fn get_app() -> App<'static, 'static> {
                 .help("Enables verbose description of the execution process.")
                 .global(true),
         )
+        .arg(
+            Arg::with_name("data_dir")
+                .long("data-dir")
+                .env("ELFSHAKER_DATA")
+                .hide_env_values(true)
+                .help("Set the path to the elfshaker repository.")
+                .default_value(elfshaker::repo::REPO_DIR)
+                .global(true),
+        )
 }

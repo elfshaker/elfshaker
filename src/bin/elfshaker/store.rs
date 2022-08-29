@@ -7,11 +7,12 @@ use std::{error::Error, ffi::OsStr, fs, io, path::PathBuf};
 use walkdir::WalkDir;
 
 use super::utils::open_repo_from_cwd;
-use elfshaker::repo::{PackId, Repository, SnapshotId};
+use elfshaker::repo::{PackId, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "store";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
     let files_from = matches.value_of("files-from");
     let files0_from = matches.value_of("files0-from");
     let snapshot = matches.value_of("snapshot").unwrap();
@@ -35,9 +36,9 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         _ => find_files(),
     };
 
-    fs::create_dir_all(PathBuf::from(".").join(&*Repository::data_dir()))?;
+    fs::create_dir_all(data_dir)?;
 
-    let mut repo = open_repo_from_cwd()?;
+    let mut repo = open_repo_from_cwd(data_dir)?;
     repo.create_snapshot(&snapshot, files.into_iter())?;
 
     Ok(())

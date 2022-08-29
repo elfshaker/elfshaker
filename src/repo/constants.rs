@@ -1,9 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-/// Use [`super::Repository::data_dir`] instead of REPO_DIR
-/// This will make is easier to make this value user-configurable
-/// in the future.
+/// The default repository directory.
 pub const REPO_DIR: &str = "elfshaker_data";
 /// The top-level index file path.
 pub const INDEX_FILE: &str = "index";

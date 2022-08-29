@@ -10,12 +10,13 @@ use elfshaker::repo::{PackId, Repository};
 pub(crate) const SUBCOMMAND: &str = "list";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
     let packs = matches.values_of_lossy("pack");
     let format = matches
         .value_of_lossy("format")
         .expect("<format> not provided");
 
-    let repo = open_repo_from_cwd()?;
+    let repo = open_repo_from_cwd(data_dir)?;
 
     let packs = packs
         .map(|packs| packs.iter().cloned().map(PackId::Pack).collect())

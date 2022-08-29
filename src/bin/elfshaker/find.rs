@@ -9,8 +9,9 @@ use super::utils::{open_repo_from_cwd, print_table};
 pub(crate) const SUBCOMMAND: &str = "find";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
     let term = matches.value_of("term").unwrap();
-    let repo = open_repo_from_cwd()?;
+    let repo = open_repo_from_cwd(data_dir)?;
 
     let mut table = vec![];
     for pack_id in repo.packs()? {

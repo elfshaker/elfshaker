@@ -120,9 +120,9 @@ Creates the pack `my-pack` (file is `elfshaker_data/packs/my-pack.idx`) by packi
 
 ## List packs, snapshots, files
 ```bash
-(1) elfshaker list
-(2) elfshaker list <pack>
-(3) elfshaker list [<pack>:]<snapshot>
+(1) elfshaker list-packs
+(2) elfshaker list <pack>...
+(3) elfshaker list-files <snapshot>
 ```
 
 ### Description

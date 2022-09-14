@@ -9,7 +9,33 @@ print_help() {
     echo 'Usage: git-list-between BRANCH YYYY/MM/DD YYYY/MM/DD [[--] <path>...]'
 }
 
+# Workaround for https://github.com/elfshaker/elfshaker/issues/89, that
+# there are occasional issues with the clock, and '--since'
+# unfortunately stops once it sees the first date which is older than
+# the specified time. Strategy: Go back a large number of commits, and
+# find the earliest with the given date.
+find-first-commit() {
+    ARGS=(
+        # Tradeoff of runtime vs max expected commits in the month.
+        # It's >10x higher than I have observed in a month.
+        --max-count 40000
+        --first-parent
+        --topo-order
+        --until="$DATETIME_UPPER"
+        --no-commit-header
+        --format='%cd %H'
+        --date=format-local:"%Y/%m/%d"
+        "$BRANCH"
+    )
+
+    TZ=UTC git rev-list "${ARGS[@]}" | \
+        egrep "^$DATE_LOWER" | \
+        tail -n1 | \
+        awk '{print $2}'
+}
+
 list() {
+    FIRST_COMMIT=$(find-first-commit)
     ARGS=(
         # Don't follow the other side of merges.
         --first-parent
@@ -17,24 +43,24 @@ list() {
         --topo-order
         --reverse
         '--abbrev=15'
-        "--since=$DATE_LOWER"
-        "--until=$DATE_UPPER"
-        "$BRANCH"
+        "--until=$DATETIME_UPPER"
+        "${FIRST_COMMIT}".."$BRANCH"
     )
     TZ=UTC git log "${ARGS[@]}" "$@"
 }
 
 main() {
     BRANCH="$1"
-    DATE_LOWER="$2"' 00:00:00 UTC'
-    DATE_UPPER="$3"' 00:00:00 UTC'
+    DATE_LOWER="$2"
+    DATETIME_LOWER="$2"' 00:00:00 UTC'
+    DATETIME_UPPER="$3"' 00:00:00 UTC'
     EXTRA_ARGS=("${@:4}")
 
     # Validate args
     # shellcheck disable=SC2015
     git rev-parse "$BRANCH" 1>/dev/null \
-        && date -d "$DATE_LOWER" 1>/dev/null \
-        && date -d "$DATE_UPPER" 1>/dev/null \
+        && date -d "$DATETIME_LOWER" 1>/dev/null \
+        && date -d "$DATETIME_UPPER" 1>/dev/null \
         || {
             print_help
             exit 1

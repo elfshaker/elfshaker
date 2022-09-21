@@ -2,6 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
+use elfshaker::repo::run_in_parallel;
 use std::{error::Error, ops::ControlFlow};
 
 use super::utils::{format_size, open_repo_from_cwd};
@@ -78,34 +79,46 @@ fn print_snapshots(
     pack_ids: &[PackId],
     fmt: &str,
 ) -> Result<(), Box<dyn Error>> {
+    // Process the packs in parallel
+    let pack_results = run_in_parallel(
+        num_cpus::get(),
+        pack_ids.iter(),
+        |pack_id| -> Result<_, elfshaker::repo::Error> {
+            let index = repo.load_index(pack_id)?;
+            let mut pack_lines = vec![];
+            let mut iter = |snapshot, file_size, file_count| {
+                pack_lines.push(format_snapshot_row(
+                    fmt,
+                    pack_id,
+                    snapshot,
+                    file_size,
+                    file_count as usize,
+                ));
+                ControlFlow::<(), ()>::Continue(())
+            };
+
+            if is_file_size_required(fmt) {
+                index.for_each_snapshot(|snapshot, entries| {
+                    let file_count = entries.len();
+                    let file_size = entries.iter().map(|entry| entry.metadata.size).sum();
+                    iter(snapshot, file_size, file_count)
+                })?;
+            } else {
+                index.for_each_snapshot_file_count(|snapshot, file_count| {
+                    iter(snapshot, 0, file_count as usize)
+                })?;
+            }
+
+            Ok(pack_lines)
+        },
+    );
+
+    // Aggregate the outputs and sort
     let mut lines = vec![];
-
-    for pack_id in pack_ids {
-        let index = repo.load_index(pack_id)?;
-        let mut iter = |snapshot, file_size, file_count| {
-            lines.push(format_snapshot_row(
-                fmt,
-                pack_id,
-                snapshot,
-                file_size,
-                file_count as usize,
-            ));
-            ControlFlow::<(), ()>::Continue(())
-        };
-
-        if is_file_size_required(fmt) {
-            index.for_each_snapshot(|snapshot, entries| {
-                let file_count = entries.len();
-                let file_size = entries.iter().map(|entry| entry.metadata.size).sum();
-                iter(snapshot, file_size, file_count)
-            })?;
-        } else {
-            index.for_each_snapshot_file_count(|snapshot, file_count| {
-                iter(snapshot, 0, file_count as usize)
-            })?;
-        }
+    for pack_result in pack_results {
+        let mut pack_lines = pack_result?;
+        lines.append(&mut pack_lines);
     }
-
     lines.sort();
 
     for line in lines {

@@ -69,6 +69,10 @@ fn format_snapshot_row(
         .replace("%n", &file_count.to_string())
 }
 
+fn is_file_size_required(fmt: &str) -> bool {
+    fmt.contains("%h") || fmt.contains("%b")
+}
+
 fn print_snapshots(
     repo: &Repository,
     pack_ids: &[PackId],
@@ -80,7 +84,11 @@ fn print_snapshots(
         repo.load_index(pack_id)?
             .for_each_snapshot(|snapshot, entries| {
                 let file_count = entries.len();
-                let file_size = entries.iter().map(|entry| entry.metadata.size).sum();
+                let file_size = if is_file_size_required(fmt) {
+                    entries.iter().map(|entry| entry.metadata.size).sum()
+                } else {
+                    0
+                };
 
                 lines.push(format_snapshot_row(
                     fmt, pack_id, snapshot, file_size, file_count,

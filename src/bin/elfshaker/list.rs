@@ -81,20 +81,29 @@ fn print_snapshots(
     let mut lines = vec![];
 
     for pack_id in pack_ids {
-        repo.load_index(pack_id)?
-            .for_each_snapshot(|snapshot, entries| {
-                let file_count = entries.len();
-                let file_size = if is_file_size_required(fmt) {
-                    entries.iter().map(|entry| entry.metadata.size).sum()
-                } else {
-                    0
-                };
+        let index = repo.load_index(pack_id)?;
+        let mut iter = |snapshot, file_size, file_count| {
+            lines.push(format_snapshot_row(
+                fmt,
+                pack_id,
+                snapshot,
+                file_size,
+                file_count as usize,
+            ));
+            ControlFlow::<(), ()>::Continue(())
+        };
 
-                lines.push(format_snapshot_row(
-                    fmt, pack_id, snapshot, file_size, file_count,
-                ));
-                ControlFlow::<(), ()>::Continue(())
+        if is_file_size_required(fmt) {
+            index.for_each_snapshot(|snapshot, entries| {
+                let file_count = entries.len();
+                let file_size = entries.iter().map(|entry| entry.metadata.size).sum();
+                iter(snapshot, file_size, file_count)
             })?;
+        } else {
+            index.for_each_snapshot_file_count(|snapshot, file_count| {
+                iter(snapshot, 0, file_count as usize)
+            })?;
+        }
     }
 
     lines.sort();

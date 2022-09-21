@@ -442,6 +442,25 @@ impl PackIndex {
         }
         Ok(None)
     }
+    // Call the closure F with the number of file entries for each snapshot.
+    pub fn for_each_snapshot_file_count<'l, F, S>(
+        &'l self,
+        mut f: F,
+    ) -> Result<Option<S>, PackError>
+    where
+        F: FnMut(&'l str, u64) -> ControlFlow<S>,
+    {
+        let mut file_count = 0i64;
+        let snapshot_deltas = self.snapshot_tags.iter().zip(self.snapshot_deltas.iter());
+        for (snapshot, deltas) in snapshot_deltas {
+            file_count += deltas.added.len() as i64;
+            file_count -= deltas.removed.len() as i64;
+            if let ControlFlow::Break(output) = f(snapshot, file_count as u64) {
+                return Ok(Some(output));
+            }
+        }
+        Ok(None)
+    }
     /// Computes the checksum of the contents of the snapshot.
     pub fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
         let handles = self.resolve_snapshot(snapshot)?;

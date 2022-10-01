@@ -4,6 +4,7 @@
 mod clone;
 mod extract;
 mod find;
+mod gc;
 mod list;
 mod list_files;
 mod list_packs;
@@ -51,6 +52,7 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
         (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
         (show::SUBCOMMAND, Some(matches)) => show::run(matches),
         (find::SUBCOMMAND, Some(matches)) => find::run(matches),
+        (gc::SUBCOMMAND, Some(matches)) => gc::run(matches),
         (update::SUBCOMMAND, Some(matches)) => update::run(matches),
         (clone::SUBCOMMAND, Some(matches)) => clone::run(matches),
         _ => {
@@ -71,6 +73,7 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(pack::get_app())
         .subcommand(show::get_app())
         .subcommand(find::get_app())
+        .subcommand(gc::get_app())
         .subcommand(update::get_app())
         .subcommand(clone::get_app())
         .arg(

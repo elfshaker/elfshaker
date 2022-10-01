@@ -9,6 +9,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 
@@ -95,6 +96,16 @@ impl Default for ExtractOptions {
             num_workers: 1,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct PackDiskStats {
+    pub len: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObjectDiskStats {
+    pub len: u64,
 }
 
 /// A struct specifying the the packing options.
@@ -268,13 +279,7 @@ impl Repository {
     }
 
     fn pack_index_mtime(&self, pack_id: &PackId) -> Result<SystemTime, Error> {
-        let pack_index_path = match pack_id {
-            PackId::Pack(name) => self
-                .data_dir()
-                .join(PACKS_DIR)
-                .join(name)
-                .with_extension(PACK_INDEX_EXTENSION),
-        };
+        let pack_index_path = self.get_pack_index_path(pack_id);
         Ok(pack_index_path.metadata()?.modified()?)
     }
 
@@ -345,13 +350,7 @@ impl Repository {
     }
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
-        let pack_index_path = match pack_id {
-            PackId::Pack(name) => self
-                .data_dir()
-                .join(PACKS_DIR)
-                .join(name)
-                .with_extension(PACK_INDEX_EXTENSION),
-        };
+        let pack_index_path = self.get_pack_index_path(pack_id);
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Ok(PackIndex::load(pack_index_path)?)
     }
@@ -760,6 +759,212 @@ impl Repository {
         Ok(())
     }
 
+    /// Identifies duplicate snapshots in the given packs.
+    /// (two snapshots are equal if their checksums computed by compute_snapshot_checksum are equal).
+    ///
+    /// Returns a mapping of snapshot checksum to `SnapshotId`s with that checksum (>= 1).
+    ///
+    /// # Algorithm
+    /// 1. Load up all packs indexes
+    /// 2. Compute snapshot checksums and store in Checksum -> SnapshotId map
+    fn find_duplicate_snapshots(
+        &self,
+        packs: &[PackId],
+    ) -> Result<HashMap<ObjectChecksum, Vec<SnapshotId>>, Error> {
+        // Deduplicate the snapshots in all packs (group by checksum)
+        let checksum_to_group =
+            Arc::new(Mutex::new(HashMap::<ObjectChecksum, Vec<SnapshotId>>::new()));
+
+        let checksum_to_group_clone = checksum_to_group.clone();
+        // Calculate the checksums of all snapshots in all packs
+        run_in_parallel(
+            num_cpus::get(),
+            packs.iter().by_ref(),
+            |pack_id| -> Result<_, Error> {
+                let pack = self.load_index(pack_id)?;
+                // Task local map of snapshot -> checksum that will be merged
+                // into the results map.
+                let snapshot_checksums: HashMap<String, _> = pack
+                    .snapshot_tags()
+                    .iter()
+                    .map(|tag| {
+                        (
+                            tag.clone(),
+                            pack.compute_snapshot_checksum(tag)
+                                .expect("failed to resolve snapshot"),
+                        )
+                    })
+                    .collect();
+
+                // Lock the results map and add the checksums in this pack
+                let mut checksum_to_group = checksum_to_group_clone.lock().unwrap();
+                for (tag, checksum) in snapshot_checksums {
+                    let entry = checksum_to_group.entry(checksum).or_insert_with(Vec::new);
+                    entry.push(SnapshotId::new(pack_id.clone(), &tag).unwrap());
+                }
+                Ok(())
+            },
+        )
+        .into_iter()
+        .collect::<Result<(), _>>()?;
+
+        let mut results = checksum_to_group.lock().unwrap();
+        Ok(std::mem::take(&mut *results))
+    }
+
+    /// Identifies loose packs that are redundant -- have been packed.
+    ///
+    /// # Algorithm
+    /// 1. Find duplicate snapshots according to snapshot checksums
+    /// 2. Filter out non-loose snapshots (identify what can be removed)
+    pub fn find_redundant_loose_packs(&self) -> Result<Vec<PackId>, Error> {
+        let is_any_non_loose =
+            |snapshots: &[SnapshotId]| snapshots.iter().any(|s| !self.is_pack_loose(s.pack()));
+        let filter_out_packed_snapshots = |snapshots: Vec<SnapshotId>| {
+            snapshots
+                .into_iter()
+                .filter(|s| self.is_pack_loose(s.pack()))
+                .collect::<Vec<_>>()
+        };
+
+        // 1. Find duplicate snapshots according to snapshot checksums
+        let packs = self.packs()?;
+        let duplicate_snapshots = self.find_duplicate_snapshots(&packs)?;
+        // 2. Filter out non-loose snapshots (identify what can be removed)
+        let loose_snapshots_present_in_packs = duplicate_snapshots
+            .into_iter()
+            // Loose with at least one copy in some non-loose pack
+            .filter(|(_, snapshots)| snapshots.len() > 1 && is_any_non_loose(snapshots))
+            .flat_map(|(_, snapshots)| filter_out_packed_snapshots(snapshots));
+
+        // Loose snapshot ID -> loose pack ID
+        let packs_to_remove: Vec<PackId> = loose_snapshots_present_in_packs
+            .map(|loose_snapshot| {
+                // Some sanity checking that we only have loose snapshots here
+                let PackId::Pack(pack_id) = loose_snapshot.pack();
+                assert_eq!(pack_id, &format!("{}/{}", LOOSE_DIR, loose_snapshot.tag()));
+
+                loose_snapshot.pack().clone()
+            })
+            .collect();
+
+        Ok(packs_to_remove)
+    }
+
+    /// Identifies loose objects that are not referenced from any of the packs.
+    ///
+    /// # Arguments
+    /// * `roots` - the set of packs to consider as the sole referees to objects
+    ///
+    /// # Algorithm
+    /// 1. Read the loose object checksums from disk
+    /// 2. Load the indexes for the packs acting as roots in the object graph
+    /// 3. Tracing: Process the roots and mark loose objects as reachable
+    /// 4. Return the unreachable set of objects
+    pub fn find_unreferenced_objects(
+        &self,
+        roots: impl ExactSizeIterator<Item = PackId>,
+    ) -> Result<Vec<ObjectChecksum>, Error> {
+        // 1. Read the loose object checksums from disk
+        let loose_dir = self.data_dir().join(LOOSE_DIR);
+        let objects_on_disk = WalkDir::new(loose_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .map(|e| self.loose_object_checksum(&e.into_path()))
+            .collect::<Result<HashSet<ObjectChecksum>, _>>()?;
+
+        info!(
+            "find_unreferenced_objects: Found {} objects on disk",
+            objects_on_disk.len()
+        );
+
+        let unreferenced_objects = Arc::new(Mutex::new(objects_on_disk));
+        let unreferenced_objects_clone = unreferenced_objects.clone();
+        run_in_parallel(num_cpus::get(), roots, |pack_id| -> Result<_, Error> {
+            // 2. Load the indexes for the packs acting as roots in the graph
+            let pack = self.load_index(&pack_id)?;
+
+            // 3. Tracing: Process the roots and mark loose objects as reachable
+            let mut unreferenced_objects = unreferenced_objects_clone.lock().unwrap();
+            for checksum in pack.object_checksums() {
+                unreferenced_objects.remove(checksum);
+            }
+            Ok(())
+        })
+        .into_iter()
+        .collect::<Result<Vec<()>, _>>()?;
+
+        // 4. Return the unreachable set of objects
+        let results = unreferenced_objects.lock().unwrap();
+        info!(
+            "find_unreferenced_objects: {} objects are not referenced from any of the roots",
+            results.len()
+        );
+        Ok(results.iter().copied().collect())
+    }
+
+    /// Deletes the files related to the pack on disk. Deleting a non-existent pack is an error.
+    pub fn delete_pack(&self, pack_id: &PackId) -> io::Result<()> {
+        let pack_path = self.get_pack_path(pack_id);
+        let pack_idx_path = self.get_pack_index_path(pack_id);
+
+        let is_loose = self.is_pack_loose(pack_id);
+        let pack_exsits = pack_path.exists();
+        if is_loose && pack_exsits {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Unexpected .pack for loose {:?}", pack_id),
+            ));
+        } else if !is_loose && !pack_exsits {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{:?} not found", pack_path),
+            ));
+        }
+
+        fs::remove_file(&pack_idx_path)?;
+        if !is_loose {
+            fs::remove_file(&pack_path)?;
+        }
+
+        info!("Deleted pack index {:?}", &pack_idx_path);
+        Ok(())
+    }
+
+    /// Deletes the loose object identified by its checksum. Deleting a non-existent object is an error.
+    pub fn delete_object(&self, checksum: &ObjectChecksum) -> io::Result<()> {
+        let path = self.loose_object_path(checksum);
+        fs::remove_file(&path).map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "{:?}: {} object ({:?})",
+                    e.kind(),
+                    hex::encode(checksum),
+                    path
+                ),
+            )
+        })
+    }
+
+    pub fn get_pack_disk_stats(&self, pack_id: &PackId) -> io::Result<PackDiskStats> {
+        let mut pack_path = self.get_pack_index_path(pack_id);
+        let pack_len = fs::metadata(&pack_path).map(|x| x.len()).unwrap_or(0);
+        pack_path.set_extension("");
+        pack_path.set_extension(PACK_INDEX_EXTENSION);
+        println!("{:?}", pack_path);
+        let pack_idx_stats = fs::metadata(&pack_path)?;
+
+        Ok(PackDiskStats {
+            len: pack_len + pack_idx_stats.len(),
+        })
+    }
+
+    pub fn get_object_disk_stats(&self, checksum: &ObjectChecksum) -> io::Result<ObjectDiskStats> {
+        fs::metadata(self.loose_object_path(checksum)).map(|x| ObjectDiskStats { len: x.len() })
+    }
+
     pub fn set_progress_reporter<F>(&mut self, factory: F)
     where
         F: 'static + Fn(&str) -> ProgressReporter<'static> + Send + Sync,
@@ -805,6 +1010,26 @@ impl Repository {
         }
 
         Ok(())
+    }
+
+    fn get_pack_path(&self, pack_id: &PackId) -> PathBuf {
+        match pack_id {
+            PackId::Pack(name) => self
+                .data_dir()
+                .join(PACKS_DIR)
+                .join(name)
+                .with_extension(PACK_EXTENSION),
+        }
+    }
+
+    fn get_pack_index_path(&self, pack_id: &PackId) -> PathBuf {
+        match pack_id {
+            PackId::Pack(name) => self
+                .data_dir()
+                .join(PACKS_DIR)
+                .join(name)
+                .with_extension(PACK_INDEX_EXTENSION),
+        }
     }
 
     /// Returns the pair of lists (`added`, `removed`). `added` contains the entries from
@@ -898,6 +1123,40 @@ impl Repository {
         fs::create_dir_all(obj_path.parent().unwrap())?;
         write_file_atomic(&mut reader, temp_dir, &obj_path)?;
         Ok(())
+    }
+
+    pub fn loose_object_checksum(&self, path: &Path) -> Result<ObjectChecksum, Error> {
+        let bad_object_error = || Error::BadLooseObject(path.to_string_lossy().into());
+        let num_components = path.components().count();
+        let hex0_1 = path
+            .components()
+            .nth(num_components - 3)
+            .ok_or_else(bad_object_error)?;
+        let hex2_3 = path.components().nth(num_components - 2).unwrap();
+        let hex4_19 = path.components().last().unwrap();
+
+        let bytes0_1 =
+            hex::decode(&*hex0_1.as_os_str().to_string_lossy()).map_err(|_| bad_object_error())?;
+        let bytes2_3 =
+            hex::decode(&*hex2_3.as_os_str().to_string_lossy()).map_err(|_| bad_object_error())?;
+        let bytes4_19 =
+            hex::decode(&*hex4_19.as_os_str().to_string_lossy()).map_err(|_| bad_object_error())?;
+
+        if bytes0_1.len() + bytes2_3.len() + bytes4_19.len() != 20 {
+            return Err(bad_object_error());
+        }
+
+        // Copy into array (try_into not supported by our minimum Rust version)
+        let mut result: ObjectChecksum = [0; 20];
+        for (i, byte) in bytes0_1
+            .into_iter()
+            .chain(bytes2_3)
+            .chain(bytes4_19)
+            .enumerate()
+        {
+            result[i] = byte;
+        }
+        Ok(result)
     }
 
     pub fn loose_object_path(&self, checksum: &ObjectChecksum) -> PathBuf {

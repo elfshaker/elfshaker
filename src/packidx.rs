@@ -271,8 +271,236 @@ pub struct ObjectMetadata {
     pub size: u64,
 }
 
+pub trait PackIndex {
+    fn new() -> Self;
+    /// The total size of objects in the pack
+    fn object_size_total(&self) -> u64;
+    /// An iterator over all object checksums in the pack
+    fn object_checksums(&self) -> std::slice::Iter<ObjectChecksum>;
+    /// The metadata stored for the object
+    fn object_metadata(&self, checksum: &ObjectChecksum) -> &ObjectMetadata;
+    /// Partitions the objects into the specified number of partitions while
+    /// maintaining the relative order of the objects and minimising the
+    /// total object size in partitions.
+    fn objects_partitioned_by_size<'l>(
+        &self,
+        partitions: u32,
+        handles: &'l [Handle],
+    ) -> Vec<&'l [Handle]>;
+    /// Reorders the objects for maximum compressability and computes the
+    /// object offsets. Note that this operation invalidates all previously
+    /// held [`Handle`] and [`FileHandle`].
+    fn compute_object_offsets_and_ordering(self) -> (Self, Vec<Handle>)
+    where
+        Self: Sized;
+    /// Returns the checksum referenced by the handle.
+    fn handle_to_checksum(&self, h: Handle) -> &ObjectChecksum;
+    /// Expands the file handle into a file entry.`
+    fn handle_to_entry(&self, handle: &FileHandle) -> Result<FileEntry, PackError>;
+    /// Stores the file entry into the pack index and returns a handle to it.
+    fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError>;
+    /// Returns all snapshots tags stored in the pack.
+    fn snapshot_tags(&self) -> &[String];
+    /// Check for the presence of a snapshot.
+    fn has_snapshot(&self, needle: &str) -> bool;
+    /// Map the snapshot tag to the list of files store in the snapshot.
+    fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>>;
+    /// Dereference all file handles. This is liekly to be more efficient than
+    /// calling entry_from_handle repeatedly.
+    fn entries_from_handles<'l>(
+        &self,
+        handles: impl Iterator<Item = &'l FileHandle>,
+    ) -> Result<Vec<FileEntry>, PackError>;
+    /// Create and add a new snapshot compatible with the loose
+    /// index format. The list of [`FileEntry`] is the files to record in the snapshot.
+    fn push_snapshot(
+        &mut self,
+        tag: String,
+        input: impl IntoIterator<Item = FileEntry>,
+    ) -> Result<(), PackError>;
+    /// Call the closure F with materialized file entries for each snapshot.
+    fn for_each_snapshot<'l, F, S>(&'l self, f: F) -> Result<Option<S>, PackError>
+    where
+        F: FnMut(&'l str, &HashSet<FileEntry>) -> ControlFlow<S>;
+    /// Call the closure F with the file count for each snapshot.
+    fn for_each_snapshot_file_count<'l, F, S>(
+        &'l self,
+        f: F,
+    ) -> Result<Option<S>, PackError>
+    where
+        F: FnMut(&'l str, u64) -> ControlFlow<S>;
+    /// Computes the checksum of the contents of the snapshot.
+    fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum>;
+    /// Parse from a [`Read`].
+    fn parse<R: Read>(rd: R) -> Result<Self, PackError>
+    where
+        Self: Sized;
+    /// Parse from a file.
+    fn load<P: AsRef<Path>>(p: P) -> Result<Self, PackError>
+    where
+        Self: Sized;
+    /// Parse the list of snapshot from a file.
+    fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError>;
+    /// Serialise and write to a file.
+    fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError>;
+}
+
+pub enum VerPackIndex {
+    V1(PackIndexV1),
+}
+
+impl PackIndex for VerPackIndex {
+    fn new() -> Self {
+        // Use the highest supported pack index version.
+        VerPackIndex::V1(PackIndexV1::new())
+    }
+
+    fn object_size_total(&self) -> u64 {
+        match self {
+            VerPackIndex::V1(p) => p.object_size_total(),
+        }
+    }
+
+    fn object_checksums(&self) -> std::slice::Iter<ObjectChecksum> {
+        match self {
+            VerPackIndex::V1(p) => p.object_checksums(),
+        }
+    }
+
+    fn object_metadata(&self, checksum: &ObjectChecksum) -> &ObjectMetadata {
+        match self {
+            VerPackIndex::V1(p) => p.object_metadata(checksum),
+        }
+    }
+
+    fn objects_partitioned_by_size<'l>(
+        &self,
+        partitions: u32,
+        handles: &'l [Handle],
+    ) -> Vec<&'l [Handle]> {
+        match self {
+            VerPackIndex::V1(p) => p.objects_partitioned_by_size(partitions, handles),
+        }
+    }
+
+    fn compute_object_offsets_and_ordering(self) -> (Self, Vec<Handle>)
+    where
+        Self: Sized,
+    {
+        match self {
+            VerPackIndex::V1(p) => {
+                let (p1, vec) = p.compute_object_offsets_and_ordering();
+                (VerPackIndex::V1(p1), vec)
+            }
+        }
+    }
+
+    fn handle_to_checksum(&self, h: Handle) -> &ObjectChecksum {
+        match self {
+            VerPackIndex::V1(p) => p.handle_to_checksum(h),
+        }
+    }
+
+    fn handle_to_entry(&self, handle: &FileHandle) -> Result<FileEntry, PackError> {
+        match self {
+            VerPackIndex::V1(p) => p.handle_to_entry(handle),
+        }
+    }
+
+    fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
+        match self {
+            VerPackIndex::V1(p) => p.entry_to_handle(entry),
+        }
+    }
+
+    fn snapshot_tags(&self) -> &[String] {
+        match self {
+            VerPackIndex::V1(p) => p.snapshot_tags(),
+        }
+    }
+
+    fn has_snapshot(&self, needle: &str) -> bool {
+        match self {
+            VerPackIndex::V1(p) => p.has_snapshot(needle),
+        }
+    }
+
+    fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
+        match self {
+            VerPackIndex::V1(p) => p.resolve_snapshot(needle),
+        }
+    }
+
+    fn entries_from_handles<'l>(
+        &self,
+        handles: impl Iterator<Item = &'l FileHandle>,
+    ) -> Result<Vec<FileEntry>, PackError> {
+        match self {
+            VerPackIndex::V1(p) => p.entries_from_handles(handles),
+        }
+    }
+
+    fn push_snapshot(
+        &mut self,
+        tag: String,
+        input: impl IntoIterator<Item = FileEntry>,
+    ) -> Result<(), PackError> {
+        match self {
+            VerPackIndex::V1(p) => p.push_snapshot(tag, input),
+        }
+    }
+
+    fn for_each_snapshot<'l, F, S>(&'l self, f: F) -> Result<Option<S>, PackError>
+    where
+        F: FnMut(&'l str, &HashSet<FileEntry>) -> ControlFlow<S>,
+    {
+        match self {
+            VerPackIndex::V1(p) => p.for_each_snapshot(f),
+        }
+    }
+
+    fn for_each_snapshot_file_count<'l, F, S>(&'l self, f: F) -> Result<Option<S>, PackError>
+    where
+        F: FnMut(&'l str, u64) -> ControlFlow<S>,
+    {
+        match self {
+            VerPackIndex::V1(p) => p.for_each_snapshot_file_count(f),
+        }
+    }
+
+    fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
+        match self {
+            VerPackIndex::V1(p) => p.compute_snapshot_checksum(snapshot),
+        }
+    }
+
+    fn parse<R: Read>(rd: R) -> Result<Self, PackError>
+    where
+        Self: Sized,
+    {
+        PackIndexV1::parse(rd).map(VerPackIndex::V1)
+    }
+
+    fn load<P: AsRef<Path>>(p: P) -> Result<Self, PackError>
+    where
+        Self: Sized,
+    {
+        PackIndexV1::load(p).map(VerPackIndex::V1)
+    }
+
+    fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
+        PackIndexV1::load_only_snapshots(p)
+    }
+
+    fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), PackError> {
+        match self {
+            VerPackIndex::V1(p) => p.save(path),
+        }
+    }
+}
+
 /// Contains the metadata needed to extract files from a pack file.
-pub struct PackIndex {
+pub struct PackIndexV1 {
     snapshot_tags: Vec<String>,
     snapshot_deltas: Vec<ChangeSet<FileHandle>>,
 
@@ -286,14 +514,14 @@ pub struct PackIndex {
     current: HashSet<FileHandle>,
 }
 
-impl Default for PackIndex {
+impl Default for PackIndexV1 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PackIndex {
-    pub fn new() -> Self {
+impl PackIndex for PackIndexV1 {
+    fn new() -> Self {
         Self {
             snapshot_tags: Vec::new(),
             snapshot_deltas: Vec::new(),
@@ -306,17 +534,17 @@ impl PackIndex {
         }
     }
 
-    pub fn object_size_total(&self) -> u64 {
+    fn object_size_total(&self) -> u64 {
         self.object_metadata.values().map(|x| x.size).sum()
     }
-    pub fn object_checksums(&self) -> impl ExactSizeIterator<Item = &ObjectChecksum> {
+    fn object_checksums(&self) -> std::slice::Iter<ObjectChecksum> {
         self.object_pool.iter()
     }
-    pub fn object_metadata(&self, checksum: &ObjectChecksum) -> &ObjectMetadata {
+    fn object_metadata(&self, checksum: &ObjectChecksum) -> &ObjectMetadata {
         let handle = self.object_pool.get(checksum).unwrap();
         self.object_metadata.get(&handle).unwrap()
     }
-    pub(crate) fn objects_partitioned_by_size<'l>(
+    fn objects_partitioned_by_size<'l>(
         &self,
         partitions: u32,
         handles: &'l [Handle],
@@ -325,7 +553,7 @@ impl PackIndex {
             self.object_metadata.get(handle).unwrap().size
         })
     }
-    pub(crate) fn compute_object_offsets_and_ordering(mut self) -> (Self, Vec<Handle>) {
+    fn compute_object_offsets_and_ordering(mut self) -> (Self, Vec<Handle>) {
         let mut size_handle = self
             .object_metadata
             .iter()
@@ -353,10 +581,10 @@ impl PackIndex {
         (self, handles)
     }
 
-    pub fn handle_to_checksum(&self, h: Handle) -> &ObjectChecksum {
+    fn handle_to_checksum(&self, h: Handle) -> &ObjectChecksum {
         self.object_pool.lookup(h).unwrap()
     }
-    pub fn handle_to_entry(&self, handle: &FileHandle) -> Result<FileEntry, PackError> {
+    fn handle_to_entry(&self, handle: &FileHandle) -> Result<FileEntry, PackError> {
         Ok(FileEntry {
             path: self
                 .path_pool
@@ -370,7 +598,7 @@ impl PackIndex {
             metadata: *self.object_metadata.get(&handle.object).unwrap(),
         })
     }
-    pub fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
+    fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
         let object_handle = self.object_pool.get_or_insert(&entry.checksum);
         self.object_metadata.insert(object_handle, entry.metadata);
         Ok(FileHandle {
@@ -379,13 +607,13 @@ impl PackIndex {
         })
     }
 
-    pub fn snapshot_tags(&self) -> &[String] {
+    fn snapshot_tags(&self) -> &[String] {
         &self.snapshot_tags
     }
-    pub fn has_snapshot(&self, needle: &str) -> bool {
+    fn has_snapshot(&self, needle: &str) -> bool {
         self.snapshot_tags.iter().any(|s| s.eq(needle))
     }
-    pub fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
+    fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
         let mut current = HashSet::new();
         for (tag, delta) in self.snapshot_tags.iter().zip(self.snapshot_deltas.iter()) {
             Snapshot::apply_changes(&mut current, delta);
@@ -395,7 +623,7 @@ impl PackIndex {
         }
         None
     }
-    pub fn entries_from_handles<'l>(
+    fn entries_from_handles<'l>(
         &self,
         handles: impl Iterator<Item = &'l FileHandle>,
     ) -> Result<Vec<FileEntry>, PackError> {
@@ -405,7 +633,7 @@ impl PackIndex {
     }
     /// Create and add a new snapshot compatible with the loose
     /// index format. The list of [`FileEntry`] is the files to record in the snapshot.
-    pub fn push_snapshot(
+    fn push_snapshot(
         &mut self,
         tag: String,
         input: impl IntoIterator<Item = FileEntry>,
@@ -427,7 +655,7 @@ impl PackIndex {
         Ok(())
     }
     // Call the closure F with materialized file entries for each snapshot.
-    pub fn for_each_snapshot<'l, F, S>(&'l self, mut f: F) -> Result<Option<S>, PackError>
+    fn for_each_snapshot<'l, F, S>(&'l self, mut f: F) -> Result<Option<S>, PackError>
     where
         F: FnMut(&'l str, &HashSet<FileEntry>) -> ControlFlow<S>,
     {
@@ -443,7 +671,7 @@ impl PackIndex {
         Ok(None)
     }
     // Call the closure F with the number of file entries for each snapshot.
-    pub fn for_each_snapshot_file_count<'l, F, S>(
+    fn for_each_snapshot_file_count<'l, F, S>(
         &'l self,
         mut f: F,
     ) -> Result<Option<S>, PackError>
@@ -462,7 +690,7 @@ impl PackIndex {
         Ok(None)
     }
     /// Computes the checksum of the contents of the snapshot.
-    pub fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
+    fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
         let handles = self.resolve_snapshot(snapshot)?;
         // Map FileHandle to FileEntry, which contains path and checksum
         let mut entries = self.entries_from_handles(handles.iter()).ok()?;
@@ -476,6 +704,36 @@ impl PackIndex {
         hasher.result(&mut checksum);
         Some(checksum)
     }
+
+    fn load<P: AsRef<Path>>(p: P) -> Result<Self, PackError> {
+        let rd = open_file(p.as_ref())?;
+        Self::parse(rd)
+    }
+
+    fn parse<R: Read>(rd: R) -> Result<Self, PackError> {
+        let mut rd = BufReader::new(rd);
+        Self::read_magic(&mut rd)?;
+
+        Ok(rmp_serde::decode::from_read(rd)?)
+    }
+
+    fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
+        let rd = open_file(p.as_ref())?;
+        let mut rd = BufReader::new(rd);
+        Self::read_magic(&mut rd)?;
+        let mut d = rmp_serde::Deserializer::new(rd);
+        Ok(Self::deserialize_only_snapshots(&mut d)?.snapshot_tags)
+    }
+
+    fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
+        // TODO: Use AtomicCreateFile.
+        let wr = create_file(p.as_ref())?;
+        let mut wr = BufWriter::new(wr);
+        Self::write_magic(&mut wr)?;
+
+        rmp_serde::encode::write(&mut wr, self)?;
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -488,37 +746,7 @@ fn os_str_as_bytes(os_str: &OsStr) -> Cow<[u8]> {
     Cow::Owned(os_str.to_string_lossy().as_bytes())
 }
 
-impl PackIndex {
-    pub fn load<P: AsRef<Path>>(p: P) -> Result<PackIndex, PackError> {
-        let rd = open_file(p.as_ref())?;
-        Self::parse(rd)
-    }
-
-    pub fn parse<R: Read>(rd: R) -> Result<PackIndex, PackError> {
-        let mut rd = BufReader::new(rd);
-        Self::read_magic(&mut rd)?;
-
-        Ok(rmp_serde::decode::from_read(rd)?)
-    }
-
-    pub fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
-        let rd = open_file(p.as_ref())?;
-        let mut rd = BufReader::new(rd);
-        Self::read_magic(&mut rd)?;
-        let mut d = rmp_serde::Deserializer::new(rd);
-        Ok(PackIndex::deserialize_only_snapshots(&mut d)?.snapshot_tags)
-    }
-
-    pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
-        // TODO: Use AtomicCreateFile.
-        let wr = create_file(p.as_ref())?;
-        let mut wr = BufWriter::new(wr);
-        Self::write_magic(&mut wr)?;
-
-        rmp_serde::encode::write(&mut wr, self)?;
-        Ok(())
-    }
-
+impl PackIndexV1 {
     fn read_magic(rd: &mut impl Read) -> Result<(), PackError> {
         let mut magic = [0; 4];
         rd.read_exact(&mut magic)?;
@@ -537,6 +765,15 @@ impl PackIndex {
         wr.write_all(&*b"ELFS")?;
         wr.write_all(&[0, 0, 0, 1])?;
         Ok(())
+    }
+
+    fn deserialize_only_snapshots<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(VisitPackIndex {
+            load_mode: LoadMode::OnlySnapshots,
+        })
     }
 }
 
@@ -561,13 +798,13 @@ where
 }
 
 impl<'de> Visitor<'de> for VisitPackIndex {
-    type Value = PackIndex;
+    type Value = PackIndexV1;
 
-    fn visit_seq<V>(self, mut seq: V) -> Result<PackIndex, V::Error>
+    fn visit_seq<V>(self, mut seq: V) -> Result<PackIndexV1, V::Error>
     where
         V: SeqAccess<'de>,
     {
-        let mut result = PackIndex::new();
+        let mut result = PackIndexV1::new();
         result.snapshot_tags = next_expecting(&mut seq)?;
         if self.load_mode == LoadMode::OnlySnapshots {
             return Ok(result);
@@ -589,8 +826,8 @@ impl<'de> Visitor<'de> for VisitPackIndex {
     }
 }
 
-impl<'de> Deserialize<'de> for PackIndex {
-    fn deserialize<D>(deserializer: D) -> Result<PackIndex, D::Error>
+impl<'de> Deserialize<'de> for PackIndexV1 {
+    fn deserialize<D>(deserializer: D) -> Result<PackIndexV1, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -600,18 +837,7 @@ impl<'de> Deserialize<'de> for PackIndex {
     }
 }
 
-impl PackIndex {
-    fn deserialize_only_snapshots<'de, D>(deserializer: D) -> Result<PackIndex, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_seq(VisitPackIndex {
-            load_mode: LoadMode::OnlySnapshots,
-        })
-    }
-}
-
-impl Serialize for PackIndex {
+impl Serialize for PackIndexV1 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,

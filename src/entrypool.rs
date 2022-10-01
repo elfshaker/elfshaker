@@ -57,7 +57,7 @@ where
         self.entries.get(h as usize)
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &T> {
+    pub fn iter(&self) -> std::slice::Iter<T> {
         self.entries.iter()
     }
 }

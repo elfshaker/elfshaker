@@ -6,6 +6,7 @@ use rand::RngCore;
 use std::{collections::HashMap, error::Error};
 
 use super::utils::open_repo_from_cwd;
+use elfshaker::packidx::PackIndex;
 use elfshaker::repo::fs::open_file;
 use elfshaker::repo::ExtractOptions;
 

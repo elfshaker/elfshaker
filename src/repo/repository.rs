@@ -26,7 +26,7 @@ use super::fs::{
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
-use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
+use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex, VerPackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
@@ -329,7 +329,7 @@ impl Repository {
         pack_index_path.exists()
     }
 
-    pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
+    pub fn load_index(&self, pack_id: &PackId) -> Result<VerPackIndex, Error> {
         let pack_index_path = match pack_id {
             PackId::Pack(name) => self
                 .data_dir()
@@ -338,7 +338,7 @@ impl Repository {
                 .with_extension(PACK_INDEX_EXTENSION),
         };
         info!("Load index {} {}", pack_id, pack_index_path.display());
-        Ok(PackIndex::load(pack_index_path)?)
+        Ok(VerPackIndex::load(pack_index_path)?)
     }
 
     pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
@@ -349,7 +349,7 @@ impl Repository {
                 .join(name)
                 .with_extension(PACK_INDEX_EXTENSION),
         };
-        Ok(PackIndex::load_only_snapshots(pack_index_path)?)
+        Ok(VerPackIndex::load_only_snapshots(pack_index_path)?)
     }
 
     /// Checks-out the specified snapshot.
@@ -567,7 +567,7 @@ impl Repository {
         .into_iter()
         .collect::<io::Result<Vec<_>>>()?;
 
-        let mut index = PackIndex::new();
+        let mut index = VerPackIndex::new();
         index.push_snapshot(snapshot.tag().to_owned(), pack_entries)?;
 
         let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
@@ -594,7 +594,7 @@ impl Repository {
     pub fn create_pack(
         &mut self,
         pack: &PackId,
-        index: PackIndex,
+        index: VerPackIndex,
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {

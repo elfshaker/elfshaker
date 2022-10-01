@@ -7,7 +7,7 @@ use std::{error::Error, ops::ControlFlow, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 use elfshaker::{
-    packidx::PackIndex,
+    packidx::{PackIndex, VerPackIndex},
     repo::{PackId, PackOptions, SnapshotId},
 };
 
@@ -70,7 +70,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         return Err("There are no loose snapshots!".into());
     }
 
-    let mut new_index = PackIndex::new();
+    let mut new_index = VerPackIndex::new();
 
     for pack_id in &indexes {
         assert!(

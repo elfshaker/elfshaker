@@ -5,7 +5,7 @@ use clap::{App, Arg, ArgMatches};
 use std::{error::Error, ffi::OsStr};
 
 use super::utils::{format_size, open_repo_from_cwd};
-use elfshaker::packidx::ObjectChecksum;
+use elfshaker::packidx::{ObjectChecksum, PackIndex};
 use elfshaker::repo::{Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "list-files";

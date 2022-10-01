@@ -6,6 +6,7 @@ use elfshaker::repo::run_in_parallel;
 use std::{error::Error, ops::ControlFlow};
 
 use super::utils::{format_size, open_repo_from_cwd};
+use elfshaker::packidx::PackIndex;
 use elfshaker::repo::{PackId, Repository};
 
 pub(crate) const SUBCOMMAND: &str = "list";

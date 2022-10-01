@@ -544,6 +544,112 @@ test_clone_fetches_indexes() {
   kill $server1_pid $server2_pid $server3_pid || true
 }
 
+test_gc_snapshots() {
+  "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
+  # Create a duplicate loose snapshot
+  "$elfshaker" store "$snapshot_a"
+  duplicate_snapshot_path="./elfshaker_data/packs/loose/$snapshot_a.pack.idx"
+
+  if [ ! -f "$duplicate_snapshot_path" ]; then
+    echo 'Expected to find the packed snapshot file'
+    exit 1
+  fi
+
+  # Create another loose snapshot that is not duplicated
+  touch foo bar
+  "$elfshaker" store non_duplicate
+  non_duplicate_snapshot_path="./elfshaker_data/packs/loose/non_duplicate.pack.idx"
+
+  if [ ! -f "$non_duplicate_snapshot_path" ]; then
+    echo 'Expected to find the loose snapshot file'
+    exit 1
+  fi
+
+  "$elfshaker" gc -s --verbose
+
+  if [ -f "$duplicate_snapshot_path" ]; then
+    echo 'elfshaker gc did not clean up the snapshot'
+    exit 1
+  fi
+
+  if [ ! -f "$non_duplicate_snapshot_path" ]; then
+    echo 'elfshaker gc cleaned up a snapshot that was not redundant'
+    exit 1
+  fi
+}
+
+test_gc_snapshots_dry_run() {
+  "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
+  # Create a duplicate loose snapshot
+  "$elfshaker" store "$snapshot_a"
+  duplicate_snapshot_path="./elfshaker_data/packs/loose/$snapshot_a.pack.idx"
+
+  if [ ! -f "$duplicate_snapshot_path" ]; then
+    echo 'Expected to find the packed snapshot file'
+    exit 1
+  fi
+
+  "$elfshaker" gc -s --dry-run --verbose
+
+  if [ ! -f "$duplicate_snapshot_path" ]; then
+    echo 'elfshaker gc dry run deleted the snapshot'
+    exit 1
+  fi
+}
+
+test_gc_objects() {
+  # Create loose snapshot with two objects
+  touch foo bar
+  "$elfshaker" store two_objects
+  two_objects_pack_path="./elfshaker_data/packs/loose/two_objects.pack.idx"
+
+    # Create loose snapshot with two *more* objects
+  touch baz blar
+  "$elfshaker" store four_objects
+  four_objects_pack_path="./elfshaker_data/packs/loose/four_objects.pack.idx"
+
+  # Delete the second loose snapshot
+  rm $four_objects_pack_path
+
+  objects_before_gc=$(find elfshaker_data/loose -type f | wc -l)
+  if [ objects_before_gc -ne 4 ]; then
+    echo 'Expected 4 loose objects'
+    exit 1
+  fi
+
+  "$elfshaker" gc -o --verbose
+
+  objects_after_gc=$(find elfshaker_data/loose -type f | wc -l)
+  if [ objects_after_gc -ne 2 ]; then
+    echo 'Expected 2 loose objects after GC'
+    exit 1
+  fi
+}
+
+test_gc_objects_dry_run() {
+  # Create loose snapshot with two objects
+  touch foo bar
+  "$elfshaker" store two_objects
+  two_objects_pack_path="./elfshaker_data/packs/loose/two_objects.pack.idx"
+
+  # Delete the loose snapshot
+  rm $two_objects_pack_path
+
+  objects_before_gc=$(find elfshaker_data/loose -type f | wc -l)
+  if [ objects_before_gc -ne 2 ]; then
+    echo 'Expected 2 loose objects'
+    exit 1
+  fi
+
+  "$elfshaker" gc -o --dry-run --verbose
+
+  objects_after_gc=$(find elfshaker_data/loose -type f | wc -l)
+  if [ objects_after_gc -ne 2 ]; then
+    echo 'Expected 2 loose objects after GC'
+    exit 1
+  fi
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -590,6 +696,10 @@ main() {
   run_test test_dirty_repo_can_be_forced
   run_test test_update_fetches_indexes
   run_test test_clone_fetches_indexes
+  run_test test_gc_snapshots
+  run_test test_gc_snapshots_dry_run
+  run_test test_gc_objects
+  run_test test_gc_objects_dry_run
 }
 
 main "$@"

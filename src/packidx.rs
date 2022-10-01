@@ -265,6 +265,37 @@ impl FileEntry {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FileEntryRef<'a> {
+    pub path: &'a OsStr,
+    pub checksum: &'a ObjectChecksum,
+    pub metadata: &'a ObjectMetadata,
+}
+
+impl<'a> FileEntryRef<'a> {
+    pub fn new(
+        path: &'a OsStr,
+        checksum: &'a ObjectChecksum,
+        metadata: &'a ObjectMetadata,
+    ) -> Self {
+        Self {
+            path,
+            checksum,
+            metadata,
+        }
+    }
+}
+
+impl<'a> From<FileEntryRef<'a>> for FileEntry {
+    fn from(entry_ref: FileEntryRef<'a>) -> Self {
+        FileEntry {
+            path: entry_ref.path.to_owned(),
+            checksum: *entry_ref.checksum,
+            metadata: *entry_ref.metadata,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct ObjectMetadata {
     pub offset: u64,
@@ -370,6 +401,22 @@ impl PackIndex {
             metadata: *self.object_metadata.get(&handle.object).unwrap(),
         })
     }
+    pub fn handle_to_entry_ref<'a>(
+        &'a self,
+        handle: &FileHandle,
+    ) -> Result<FileEntryRef<'a>, PackError> {
+        Ok(FileEntryRef {
+            path: self
+                .path_pool
+                .lookup(handle.path)
+                .ok_or(PackError::PathNotFound(handle.path))?,
+            checksum: self
+                .object_pool
+                .lookup(handle.object)
+                .ok_or(PackError::ObjectNotFound)?,
+            metadata: self.object_metadata.get(&handle.object).unwrap(),
+        })
+    }
     pub fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
         let object_handle = self.object_pool.get_or_insert(&entry.checksum);
         self.object_metadata.insert(object_handle, entry.metadata);
@@ -403,12 +450,20 @@ impl PackIndex {
             .map(|h| self.handle_to_entry(h))
             .collect::<Result<Vec<_>, _>>()
     }
+    pub fn entry_refs_from_handles<'a, 'l>(
+        &'a self,
+        handles: impl Iterator<Item = &'l FileHandle>,
+    ) -> Result<Vec<FileEntryRef<'a>>, PackError> {
+        handles
+            .map(|h| self.handle_to_entry_ref(h))
+            .collect::<Result<Vec<_>, _>>()
+    }
     /// Create and add a new snapshot compatible with the loose
     /// index format. The list of [`FileEntry`] is the files to record in the snapshot.
-    pub fn push_snapshot(
+    pub fn push_snapshot<I: Into<FileEntry>>(
         &mut self,
         tag: String,
-        input: impl IntoIterator<Item = FileEntry>,
+        input: impl IntoIterator<Item = I>,
     ) -> Result<(), PackError> {
         if self.snapshot_tags.contains(&tag) {
             return Err(PackError::SnapshotAlreadyExists("<unknown>".into(), tag));
@@ -416,7 +471,7 @@ impl PackIndex {
 
         let files = input
             .into_iter()
-            .map(|e| self.entry_to_handle(&e))
+            .map(|e| self.entry_to_handle(&e.into()))
             .collect::<Result<_, _>>()?;
 
         // Compute delta against last pushed snapshot (temporary implementation).
@@ -429,12 +484,12 @@ impl PackIndex {
     // Call the closure F with materialized file entries for each snapshot.
     pub fn for_each_snapshot<'l, F, S>(&'l self, mut f: F) -> Result<Option<S>, PackError>
     where
-        F: FnMut(&'l str, &HashSet<FileEntry>) -> ControlFlow<S>,
+        F: FnMut(&'l str, &HashSet<FileEntryRef<'l>>) -> ControlFlow<S>,
     {
         let mut complete = HashSet::new();
         let snapshot_deltas = self.snapshot_tags.iter().zip(self.snapshot_deltas.iter());
         for (snapshot, deltas) in snapshot_deltas {
-            let deltas = deltas.map(|handles| self.entries_from_handles(handles.iter()))?;
+            let deltas = deltas.map(|handles| self.entry_refs_from_handles(handles.iter()))?;
             Snapshot::apply_changes(&mut complete, &deltas);
             if let ControlFlow::Break(output) = f(snapshot, &complete) {
                 return Ok(Some(output));
@@ -465,11 +520,11 @@ impl PackIndex {
     pub fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
         let handles = self.resolve_snapshot(snapshot)?;
         // Map FileHandle to FileEntry, which contains path and checksum
-        let mut entries = self.entries_from_handles(handles.iter()).ok()?;
-        entries.sort_by(|a, b| a.checksum.cmp(&b.checksum).then(a.path.cmp(&b.path)));
+        let mut entries = self.entry_refs_from_handles(handles.iter()).ok()?;
+        entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(b.path)));
         let mut hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
-            hasher.input(&os_str_as_bytes(&entry.path));
-            hasher.input(&entry.checksum);
+            hasher.input(&os_str_as_bytes(entry.path));
+            hasher.input(entry.checksum);
             hasher
         });
         let mut checksum: ObjectChecksum = [0; 20];

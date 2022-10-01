@@ -34,6 +34,8 @@ pub enum Error {
     PackNotFound(String),
     /// The directory is not a repository
     RepositoryNotFound,
+    // The loose object is corrupt or is in the wrong path
+    BadLooseObject(String),
     /// The .esi file is corrupted.
     BadRemoteIndexFormat(RemoteIndexFormatError),
     /// A type-erased error resulting from an HTTP operation.
@@ -82,6 +84,7 @@ impl Display for Error {
                 p,
             ),
             Self::RepositoryNotFound => write!(f, "The directory is not an elfshaker repository!"),
+            Self::BadLooseObject(s) => write!(f, "Bad loose object: {}", s),
             Self::HttpError(e) => e.fmt(f),
             Self::BadRemoteIndexFormat(e) => e.fmt(f),
         }

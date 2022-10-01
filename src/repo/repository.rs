@@ -14,6 +14,7 @@ use std::{
 
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
+use fs2::FileExt;
 use log::{error, info, warn};
 use walkdir::WalkDir;
 
@@ -123,6 +124,9 @@ pub struct Repository {
     /// fetching individual pack, etc.), it is useful to use a "factory",
     /// instead of argument passing for the [`ProgressReporter`].
     progress_reporter_factory: Box<dyn Fn(&str) -> ProgressReporter<'static> + Send + Sync>,
+    /// The repository mutex file. This file is locked exclusively and unlocked
+    /// when the repository instance is destroyed.
+    _lock_file: fs::File,
 }
 
 impl Repository {
@@ -163,10 +167,21 @@ impl Repository {
             return Err(Error::RepositoryNotFound);
         }
 
+        let lock_file = fs::File::create(data_dir.join("mutex"))?;
+        if let Err(e) = lock_file.try_lock_exclusive() {
+            if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+                warn!("Blocking until the repository mutex is unlocked...");
+                lock_file.lock_exclusive()?
+            } else {
+                return Err(e.into());
+            }
+        }
+
         Ok(Repository {
             path,
             data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
+            _lock_file: lock_file,
         })
     }
 
@@ -1023,11 +1038,14 @@ mod tests {
             0xFA, 0xF0, 0xDE, 0xAD, 0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0, 0xFA, 0xF0, 0xDE, 0xAD,
             0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0,
         ];
+        let test_lock = std::env::temp_dir().join("elfshaker_test_lock");
         let repo = Repository {
             path: "/repo".into(),
             data_dir: "/repo/elfshaker_data".into(),
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
+            _lock_file: fs::File::create(&test_lock).unwrap(),
         };
+        fs::remove_file(&test_lock).unwrap();
         let path = repo.loose_object_path(&checksum);
         assert_eq!(
             format!(

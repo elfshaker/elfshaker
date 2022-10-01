@@ -9,6 +9,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     time::SystemTime,
 };
@@ -135,9 +136,10 @@ pub struct Repository {
     /// fetching individual pack, etc.), it is useful to use a "factory",
     /// instead of argument passing for the [`ProgressReporter`].
     progress_reporter_factory: Box<dyn Fn(&str) -> ProgressReporter<'static> + Send + Sync>,
-    /// The repository mutex file. This file is locked exclusively and unlocked
-    /// when the repository instance is destroyed.
-    _lock_file: fs::File,
+    /// The repository mutex file. This file is locked and unlocked
+    /// when the repository instance is created/destroyed.
+    lock_file: fs::File,
+    is_locked_exclusively: AtomicBool,
 }
 
 impl Repository {
@@ -179,10 +181,10 @@ impl Repository {
         }
 
         let lock_file = fs::File::create(data_dir.join("mutex"))?;
-        if let Err(e) = lock_file.try_lock_exclusive() {
+        if let Err(e) = lock_file.try_lock_shared() {
             if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                 warn!("Blocking until the repository mutex is unlocked...");
-                lock_file.lock_exclusive()?
+                lock_file.try_lock_shared()?;
             } else {
                 return Err(e.into());
             }
@@ -192,8 +194,25 @@ impl Repository {
             path,
             data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
-            _lock_file: lock_file,
+            lock_file,
+            is_locked_exclusively: AtomicBool::new(false),
         })
+    }
+
+    fn lock_exclusive(&self) -> io::Result<()> {
+        if self.is_locked_exclusively.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if let Err(e) = self.lock_file.try_lock_exclusive() {
+            if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+                warn!("Blocking until the repository mutex is unlocked...");
+                self.lock_file.lock_exclusive()?;
+            } else {
+                return Err(e);
+            }
+        }
+        self.is_locked_exclusively.store(true, Ordering::Release);
+        Ok(())
     }
 
     // Reads the state of HEAD. If the file does not exist, returns None values.
@@ -906,6 +925,8 @@ impl Repository {
 
     /// Deletes the files related to the pack on disk. Deleting a non-existent pack is an error.
     pub fn delete_pack(&self, pack_id: &PackId) -> io::Result<()> {
+        self.lock_exclusive()?;
+
         let pack_path = self.get_pack_path(pack_id);
         let pack_idx_path = self.get_pack_index_path(pack_id);
 
@@ -934,6 +955,8 @@ impl Repository {
 
     /// Deletes the loose object identified by its checksum. Deleting a non-existent object is an error.
     pub fn delete_object(&self, checksum: &ObjectChecksum) -> io::Result<()> {
+        self.lock_exclusive()?;
+
         let path = self.loose_object_path(checksum);
         fs::remove_file(&path).map_err(|e| {
             io::Error::new(
@@ -1302,7 +1325,8 @@ mod tests {
             path: "/repo".into(),
             data_dir: "/repo/elfshaker_data".into(),
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
-            _lock_file: fs::File::create(&test_lock).unwrap(),
+            lock_file: fs::File::create(&test_lock).unwrap(),
+            is_locked_exclusively: AtomicBool::new(false),
         };
         fs::remove_file(&test_lock).unwrap();
         let path = repo.loose_object_path(&checksum);

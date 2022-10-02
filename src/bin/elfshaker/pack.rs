@@ -7,7 +7,7 @@ use std::{error::Error, ops::ControlFlow, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 use elfshaker::{
-    packidx::{PackIndex, VerPackIndex},
+    packidx::{verpackidx::VerPackIndex, PackIndex},
     repo::{PackId, PackOptions, SnapshotId},
 };
 

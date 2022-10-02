@@ -26,7 +26,7 @@ use super::fs::{
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
-use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex, VerPackIndex};
+use crate::packidx::{verpackidx::VerPackIndex, FileEntry, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,

@@ -16,7 +16,7 @@ use url::Url;
 use super::constants::{PACK_EXTENSION, REMOTE_INDEX_EXTENSION};
 use super::error::Error;
 use super::fs::{create_file, open_file};
-use crate::packidx::{ObjectChecksum, PackIndex, VerPackIndex};
+use crate::packidx::{verpackidx::VerPackIndex, ObjectChecksum, PackIndex};
 use crate::progress::{ProgressReporter, ProgressWriter};
 
 const HTTP_STATUS_OK: u16 = 200;

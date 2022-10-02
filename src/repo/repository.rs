@@ -21,8 +21,8 @@ use super::algo::run_in_parallel;
 use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
-    create_file, create_temp_path, ensure_dir, get_last_modified, open_file, write_file_atomic,
-    EmptyDirectoryCleanupQueue,
+    create_file, create_temp_path, ensure_dir, get_last_modified, mode_bits, open_file,
+    write_file_atomic, EmptyDirectoryCleanupQueue,
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
@@ -549,6 +549,7 @@ impl Repository {
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
             let buf = fs::read(&file_path)?;
+            let mode_bits = mode_bits(&file_path)?;
             let mut checksum = [0u8; 20];
             let mut hasher = Sha1::new();
             hasher.input(&buf);
@@ -556,11 +557,15 @@ impl Repository {
             self.write_loose_object(&*buf, &temp_dir, &checksum)?;
 
             Ok(FileEntry::new(
-                file_path.into(),
+                file_path
+                    .to_str()
+                    .expect("File name cannot be encoded as UTF-8!")
+                    .into(),
                 checksum,
                 ObjectMetadata {
                     offset: LOOSE_OBJECT_OFFSET,
                     size: buf.len() as u64,
+                    mode_bits,
                 },
             ))
         })
@@ -1015,6 +1020,7 @@ mod tests {
     static EXAMPLE_MD: ObjectMetadata = ObjectMetadata {
         size: 1,
         offset: LOOSE_OBJECT_OFFSET,
+        mode_bits: 0,
     };
 
     #[test]

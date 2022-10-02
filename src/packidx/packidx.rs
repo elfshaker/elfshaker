@@ -7,7 +7,6 @@ use crate::entrypool::Handle;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::ffi::OsString;
 use std::hash::Hash;
 use std::io::Read;
 use std::iter::FromIterator;
@@ -241,13 +240,13 @@ impl Snapshot {
 /// the object metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileEntry {
-    pub path: OsString,
+    pub path: String,
     pub checksum: ObjectChecksum,
     pub metadata: ObjectMetadata,
 }
 
 impl FileEntry {
-    pub fn new(path: OsString, checksum: ObjectChecksum, metadata: ObjectMetadata) -> Self {
+    pub fn new(path: String, checksum: ObjectChecksum, metadata: ObjectMetadata) -> Self {
         Self {
             path,
             checksum,
@@ -256,10 +255,11 @@ impl FileEntry {
     }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub struct ObjectMetadata {
     pub offset: u64,
     pub size: u64,
+    pub mode_bits: u32,
 }
 
 pub trait PackIndex {
@@ -326,12 +326,10 @@ pub trait PackIndex {
     fn parse<R: Read>(rd: R) -> Result<Self, PackError>
     where
         Self: Sized;
-    /// Parse from a file.
-    fn load<P: AsRef<Path>>(p: P) -> Result<Self, PackError>
+    /// Parse the list of snapshot from a file.
+    fn parse_only_snapshots<R: Read>(rd: R) -> Result<Vec<String>, PackError>
     where
         Self: Sized;
-    /// Parse the list of snapshot from a file.
-    fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError>;
     /// Serialise and write to a file.
     fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError>;
 }

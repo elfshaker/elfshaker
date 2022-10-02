@@ -546,6 +546,7 @@ fn assign_to_frames(
             ObjectMetadata {
                 offset: local_offset, // Replace global offset -> local offset
                 size: entry.metadata.size,
+                mode_bits: entry.metadata.mode_bits,
             },
         );
         frames[frame_index].push(local_entry);
@@ -677,7 +678,11 @@ mod tests {
     use super::*;
 
     fn make_md(offset: u64, size: u64) -> ObjectMetadata {
-        ObjectMetadata { offset, size }
+        ObjectMetadata {
+            offset,
+            size,
+            mode_bits: 0,
+        }
     }
 
     #[test]

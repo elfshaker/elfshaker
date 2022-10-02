@@ -6,23 +6,21 @@ use super::packidx::{
     Snapshot,
 };
 
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
 use serde::de::{SeqAccess, Visitor};
 use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashSet};
-use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::ops::ControlFlow;
 use std::path::Path;
 
 /// Contains the metadata needed to extract files from a pack file.
-pub struct PackIndexV1 {
+pub struct PackIndexV2 {
     snapshot_tags: Vec<String>,
+    snapshot_checksums: Vec<ObjectChecksum>,
     snapshot_deltas: Vec<ChangeSet<FileHandle>>,
 
-    path_pool: EntryPool<OsString>,
+    path_pool: EntryPool<String>,
     object_pool: EntryPool<ObjectChecksum>,
     object_metadata: BTreeMap<Handle, ObjectMetadata>,
 
@@ -32,16 +30,17 @@ pub struct PackIndexV1 {
     current: HashSet<FileHandle>,
 }
 
-impl Default for PackIndexV1 {
+impl Default for PackIndexV2 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PackIndex for PackIndexV1 {
+impl PackIndex for PackIndexV2 {
     fn new() -> Self {
         Self {
             snapshot_tags: Vec::new(),
+            snapshot_checksums: Vec::new(),
             snapshot_deltas: Vec::new(),
 
             path_pool: EntryPool::new(),
@@ -108,9 +107,7 @@ impl PackIndex for PackIndexV1 {
                 .path_pool
                 .lookup(handle.path)
                 .ok_or(PackError::PathNotFound(handle.path))?
-                .to_str()
-                .expect("File name cannot be encoded as UTF-8!")
-                .into(),
+                .clone(),
             checksum: *self
                 .object_pool
                 .lookup(handle.object)
@@ -122,7 +119,7 @@ impl PackIndex for PackIndexV1 {
         let object_handle = self.object_pool.get_or_insert(&entry.checksum);
         self.object_metadata.insert(object_handle, entry.metadata);
         Ok(FileHandle {
-            path: self.path_pool.get_or_insert(OsStr::new(&entry.path)),
+            path: self.path_pool.get_or_insert(&entry.path),
             object: object_handle,
         })
     }
@@ -171,6 +168,7 @@ impl PackIndex for PackIndexV1 {
         let delta = Snapshot::get_changes(&mut self.current, &files);
         self.current = files;
         self.snapshot_tags.push(tag);
+        self.snapshot_checksums.push(todo!());
         self.snapshot_deltas.push(delta);
         Ok(())
     }
@@ -190,7 +188,6 @@ impl PackIndex for PackIndexV1 {
         }
         Ok(None)
     }
-    // Call the closure F with the number of file entries for each snapshot.
     fn for_each_snapshot_file_count<'l, F, S>(
         &'l self,
         mut f: F,
@@ -211,18 +208,8 @@ impl PackIndex for PackIndexV1 {
     }
     /// Computes the checksum of the contents of the snapshot.
     fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
-        let handles = self.resolve_snapshot(snapshot)?;
-        // Map FileHandle to FileEntry, which contains path and checksum
-        let mut entries = self.entries_from_handles(handles.iter()).ok()?;
-        entries.sort_by(|a, b| a.checksum.cmp(&b.checksum).then(a.path.cmp(&b.path)));
-        let mut hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
-            hasher.input(entry.path.as_bytes());
-            hasher.input(&entry.checksum);
-            hasher
-        });
-        let mut checksum: ObjectChecksum = [0; 20];
-        hasher.result(&mut checksum);
-        Some(checksum)
+        let index = self.snapshot_tags.iter().position(|x| x == snapshot)?;
+        Some(self.snapshot_checksums[index])
     }
 
     fn parse<R: Read>(rd: R) -> Result<Self, PackError> {
@@ -247,7 +234,7 @@ impl PackIndex for PackIndexV1 {
     }
 }
 
-impl PackIndexV1 {
+impl PackIndexV2 {
     pub fn read_magic(rd: &mut impl Read) -> Result<(), PackError> {
         let mut magic = [0; 4];
         rd.read_exact(&mut magic)?;
@@ -256,7 +243,7 @@ impl PackIndexV1 {
         }
         let mut version = [0; 4];
         rd.read_exact(&mut version)?;
-        if version.gt(&[0, 0, 0, 1]) {
+        if version.ne(&[0, 0, 0, 2]) {
             return Err(PackError::BadPackVersion(version));
         }
         Ok(())
@@ -264,7 +251,7 @@ impl PackIndexV1 {
 
     fn write_magic(wr: &mut impl Write) -> std::io::Result<()> {
         wr.write_all(&*b"ELFS")?;
-        wr.write_all(&[0, 0, 0, 1])?;
+        wr.write_all(&[0, 0, 0, 2])?;
         Ok(())
     }
 
@@ -279,26 +266,28 @@ impl PackIndexV1 {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ObjectMetadataV1 {
+struct ObjectMetadataV2 {
     pub offset: u64,
     pub size: u64,
+    pub mode_bits: u32,
 }
 
-impl From<ObjectMetadata> for ObjectMetadataV1 {
+impl From<ObjectMetadata> for ObjectMetadataV2 {
     fn from(md: ObjectMetadata) -> Self {
         Self {
             offset: md.offset,
             size: md.size,
+            mode_bits: md.mode_bits,
         }
     }
 }
 
-impl From<ObjectMetadataV1> for ObjectMetadata {
-    fn from(md: ObjectMetadataV1) -> Self {
+impl From<ObjectMetadataV2> for ObjectMetadata {
+    fn from(md: ObjectMetadataV2) -> Self {
         Self {
             offset: md.offset,
             size: md.size,
-            mode_bits: 0o644,
+            mode_bits: md.mode_bits,
         }
     }
 }
@@ -324,21 +313,22 @@ where
 }
 
 impl<'de> Visitor<'de> for VisitPackIndex {
-    type Value = PackIndexV1;
+    type Value = PackIndexV2;
 
-    fn visit_seq<V>(self, mut seq: V) -> Result<PackIndexV1, V::Error>
+    fn visit_seq<V>(self, mut seq: V) -> Result<PackIndexV2, V::Error>
     where
         V: SeqAccess<'de>,
     {
-        let mut result = PackIndexV1::new();
+        let mut result = PackIndexV2::new();
         result.snapshot_tags = next_expecting(&mut seq)?;
         if self.load_mode == LoadMode::OnlySnapshots {
             return Ok(result);
         }
+        result.snapshot_checksums = next_expecting(&mut seq)?;
         result.snapshot_deltas = next_expecting(&mut seq)?;
         result.path_pool = next_expecting(&mut seq)?;
         result.object_pool = next_expecting(&mut seq)?;
-        let md: Vec<ObjectMetadataV1> = next_expecting(&mut seq)?;
+        let md: Vec<ObjectMetadataV2> = next_expecting(&mut seq)?;
         result.object_metadata = md
             .into_iter()
             .enumerate()
@@ -352,8 +342,8 @@ impl<'de> Visitor<'de> for VisitPackIndex {
     }
 }
 
-impl<'de> Deserialize<'de> for PackIndexV1 {
-    fn deserialize<D>(deserializer: D) -> Result<PackIndexV1, D::Error>
+impl<'de> Deserialize<'de> for PackIndexV2 {
+    fn deserialize<D>(deserializer: D) -> Result<PackIndexV2, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -363,13 +353,14 @@ impl<'de> Deserialize<'de> for PackIndexV1 {
     }
 }
 
-impl Serialize for PackIndexV1 {
+impl Serialize for PackIndexV2 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let mut s = serializer.serialize_tuple(5)?;
         s.serialize_element(&self.snapshot_tags)?;
+        s.serialize_element(&self.snapshot_checksums)?;
         s.serialize_element(&self.snapshot_deltas)?;
         s.serialize_element(&self.path_pool)?;
         s.serialize_element(&self.object_pool)?;
@@ -379,7 +370,7 @@ impl Serialize for PackIndexV1 {
                 .object_metadata
                 .values()
                 .map(|x| x.clone().into())
-                .collect::<Vec<ObjectMetadataV1>>(),
+                .collect::<Vec<ObjectMetadataV2>>(),
         )?;
         s.end()
     }

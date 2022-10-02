@@ -13,6 +13,9 @@ use std::{
     time::SystemTime,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// Returns the most recent of [`fs::Metadata::created`] and
 /// [`fs::Metadata::modified`], or [`None`], if neither succeeds.
 pub fn get_last_modified(metadata: fs::Metadata) -> Option<SystemTime> {
@@ -91,11 +94,11 @@ pub fn create_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
     }
 }
 
-#[cfg(all(unix, not(target_os="macos")))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 39 /* ENOTEMPTY */;
 #[cfg(windows)]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 145 /* ERROR_DIR_NOT_EMPTY */;
-#[cfg(target_os="macos")]
+#[cfg(target_os = "macos")]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 66;
 
 /// Removes empty directories by starting at [`leaf_dir`] and bubbling up
@@ -198,6 +201,16 @@ impl EmptyDirectoryCleanupQueue {
         }
         Ok(())
     }
+}
+
+#[cfg(unix)]
+pub fn mode_bits<P: AsRef<Path>>(p: P) -> io::Result<u32> {
+    Ok(fs::metadata(p)?.permissions().mode())
+}
+
+#[cfg(not(unix))]
+pub fn mode_bits<P: AsRef<Path>>(p: P) -> io::Result<u32> {
+    0o644
 }
 
 impl Default for EmptyDirectoryCleanupQueue {

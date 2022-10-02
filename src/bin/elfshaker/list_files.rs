@@ -2,7 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
-use std::{error::Error, ffi::OsStr};
+use std::error::Error;
 
 use super::utils::{format_size, open_repo_from_cwd};
 use elfshaker::packidx::{ObjectChecksum, PackIndex};
@@ -53,10 +53,10 @@ pub(crate) fn get_app() -> App<'static, 'static> {
         )
 }
 
-fn format_file_row(fmt: &str, checksum: &ObjectChecksum, file_name: &OsStr, size: u64) -> String {
+fn format_file_row(fmt: &str, checksum: &ObjectChecksum, file_name: &str, size: u64) -> String {
     fmt.to_owned()
         .replace("%o", &hex::encode(&checksum))
-        .replace("%f", &file_name.to_string_lossy())
+        .replace("%f", &file_name)
         .replace("%h", &format_size(size))
         .replace("%b", &size.to_string())
 }

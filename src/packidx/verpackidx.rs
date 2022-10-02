@@ -1,8 +1,10 @@
 use crate::entrypool::Handle;
+use crate::repo::fs::open_file;
 
 use super::packidx::{FileEntry, FileHandle, ObjectChecksum, ObjectMetadata, PackError, PackIndex};
 
 use super::packidxv1::PackIndexV1;
+use super::packidxv2::PackIndexV2;
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -11,29 +13,33 @@ use std::path::Path;
 
 pub enum VerPackIndex {
     V1(PackIndexV1),
+    V2(PackIndexV2),
 }
 
 impl PackIndex for VerPackIndex {
     fn new() -> Self {
         // Use the highest supported pack index version.
-        VerPackIndex::V1(PackIndexV1::new())
+        VerPackIndex::V2(PackIndexV2::new())
     }
 
     fn object_size_total(&self) -> u64 {
         match self {
             VerPackIndex::V1(p) => p.object_size_total(),
+            VerPackIndex::V2(p) => p.object_size_total(),
         }
     }
 
     fn object_checksums(&self) -> std::slice::Iter<ObjectChecksum> {
         match self {
             VerPackIndex::V1(p) => p.object_checksums(),
+            VerPackIndex::V2(p) => p.object_checksums(),
         }
     }
 
     fn object_metadata(&self, checksum: &ObjectChecksum) -> &ObjectMetadata {
         match self {
             VerPackIndex::V1(p) => p.object_metadata(checksum),
+            VerPackIndex::V2(p) => p.object_metadata(checksum),
         }
     }
 
@@ -44,6 +50,7 @@ impl PackIndex for VerPackIndex {
     ) -> Vec<&'l [Handle]> {
         match self {
             VerPackIndex::V1(p) => p.objects_partitioned_by_size(partitions, handles),
+            VerPackIndex::V2(p) => p.objects_partitioned_by_size(partitions, handles),
         }
     }
 
@@ -56,42 +63,52 @@ impl PackIndex for VerPackIndex {
                 let (p1, vec) = p.compute_object_offsets_and_ordering();
                 (VerPackIndex::V1(p1), vec)
             }
+            VerPackIndex::V2(p) => {
+                let (p2, vec) = p.compute_object_offsets_and_ordering();
+                (VerPackIndex::V2(p2), vec)
+            }
         }
     }
 
     fn handle_to_checksum(&self, h: Handle) -> &ObjectChecksum {
         match self {
             VerPackIndex::V1(p) => p.handle_to_checksum(h),
+            VerPackIndex::V2(p) => p.handle_to_checksum(h),
         }
     }
 
     fn handle_to_entry(&self, handle: &FileHandle) -> Result<FileEntry, PackError> {
         match self {
             VerPackIndex::V1(p) => p.handle_to_entry(handle),
+            VerPackIndex::V2(p) => p.handle_to_entry(handle),
         }
     }
 
     fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
         match self {
             VerPackIndex::V1(p) => p.entry_to_handle(entry),
+            VerPackIndex::V2(p) => p.entry_to_handle(entry),
         }
     }
 
     fn snapshot_tags(&self) -> &[String] {
         match self {
             VerPackIndex::V1(p) => p.snapshot_tags(),
+            VerPackIndex::V2(p) => p.snapshot_tags(),
         }
     }
 
     fn has_snapshot(&self, needle: &str) -> bool {
         match self {
             VerPackIndex::V1(p) => p.has_snapshot(needle),
+            VerPackIndex::V2(p) => p.has_snapshot(needle),
         }
     }
 
     fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
         match self {
             VerPackIndex::V1(p) => p.resolve_snapshot(needle),
+            VerPackIndex::V2(p) => p.resolve_snapshot(needle),
         }
     }
 
@@ -101,6 +118,7 @@ impl PackIndex for VerPackIndex {
     ) -> Result<Vec<FileEntry>, PackError> {
         match self {
             VerPackIndex::V1(p) => p.entries_from_handles(handles),
+            VerPackIndex::V2(p) => p.entries_from_handles(handles),
         }
     }
 
@@ -113,6 +131,7 @@ impl PackIndex for VerPackIndex {
     ) -> Result<(), PackError> {
         match self {
             VerPackIndex::V1(p) => p.push_snapshot(tag, input),
+            VerPackIndex::V2(p) => p.push_snapshot(tag, input),
         }
     }
 
@@ -123,6 +142,7 @@ impl PackIndex for VerPackIndex {
     {
         match self {
             VerPackIndex::V1(p) => p.for_each_snapshot(f),
+            VerPackIndex::V2(p) => p.for_each_snapshot(f),
         }
     }
 
@@ -132,6 +152,7 @@ impl PackIndex for VerPackIndex {
     {
         match self {
             VerPackIndex::V1(p) => p.for_each_snapshot_file_count(f),
+            VerPackIndex::V2(p) => p.for_each_snapshot_file_count(f),
         }
     }
 
@@ -139,30 +160,59 @@ impl PackIndex for VerPackIndex {
     fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
         match self {
             VerPackIndex::V1(p) => p.compute_snapshot_checksum(snapshot),
+            VerPackIndex::V2(p) => p.compute_snapshot_checksum(snapshot),
         }
     }
 
-    fn parse<R: Read>(rd: R) -> Result<Self, PackError>
+    fn parse<R: Read>(mut rd: R) -> Result<Self, PackError>
     where
         Self: Sized,
     {
-        PackIndexV1::parse(rd).map(VerPackIndex::V1)
+        let mut magic = [0; 8];
+        rd.read_exact(&mut magic)?;
+
+        if PackIndexV2::read_magic(&mut &magic[..]).is_ok() {
+            PackIndexV2::parse(rd).map(VerPackIndex::V2)
+        } else {
+            PackIndexV1::read_magic(&mut &magic[..])?;
+            PackIndexV1::parse(rd).map(VerPackIndex::V1)
+        }
     }
 
-    fn load<P: AsRef<Path>>(p: P) -> Result<Self, PackError>
+    fn parse_only_snapshots<R: Read>(mut rd: R) -> Result<Vec<String>, PackError>
     where
         Self: Sized,
     {
-        PackIndexV1::load(p).map(VerPackIndex::V1)
-    }
+        let mut magic = [0; 8];
+        rd.read_exact(&mut magic)?;
 
-    fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
-        PackIndexV1::load_only_snapshots(p)
+        if PackIndexV2::read_magic(&mut &magic[..]).is_ok() {
+            PackIndexV2::parse_only_snapshots(rd)
+        } else {
+            PackIndexV1::read_magic(&mut &magic[..])?;
+            PackIndexV1::parse_only_snapshots(rd)
+        }
     }
 
     fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), PackError> {
         match self {
             VerPackIndex::V1(p) => p.save(path),
+            VerPackIndex::V2(p) => p.save(path),
         }
+    }
+}
+
+impl VerPackIndex {
+    pub fn load<P: AsRef<Path>>(p: P) -> Result<Self, PackError>
+    where
+        Self: Sized,
+    {
+        let rd = open_file(p.as_ref())?;
+        Self::parse(rd)
+    }
+
+    pub fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
+        let rd = open_file(p.as_ref())?;
+        Self::parse_only_snapshots(rd)
     }
 }

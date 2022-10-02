@@ -144,3 +144,17 @@ elfshaker show my-pack:my-snapshot my-file some-dir/my-file-2
 
 ### Description
 Writes the contents of the files specified by the given paths in the snapshot to stdout.
+
+## Cleanup loose snapshots and objects after creating a pack
+```bash
+(1) elfshaker gc -s
+(2) elfshaker gc -o
+(3) elfshaker gc -so
+```
+
+### Description
+(1) - Cleanup redundant loose snapshots.
+
+(2) - Cleanup unreferenced loose objects.
+
+(3) - Cleanup snapshots and objects.

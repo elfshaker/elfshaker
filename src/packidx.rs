@@ -195,7 +195,7 @@ impl Snapshot {
         &self.tag
     }
 
-    fn apply_changes<T>(set: &mut HashSet<T>, changes: &ChangeSet<T>)
+    fn apply_changes<T>(set: &mut hashbrown::HashSet<T>, changes: &ChangeSet<T>)
     where
         T: Eq + Hash + Clone,
     {
@@ -433,7 +433,7 @@ impl PackIndex {
         self.snapshot_tags.iter().any(|s| s.eq(needle))
     }
     pub fn resolve_snapshot(&self, needle: &str) -> Option<Vec<FileHandle>> {
-        let mut current = HashSet::new();
+        let mut current = hashbrown::HashSet::new();
         for (tag, delta) in self.snapshot_tags.iter().zip(self.snapshot_deltas.iter()) {
             Snapshot::apply_changes(&mut current, delta);
             if tag == needle {
@@ -484,9 +484,9 @@ impl PackIndex {
     // Call the closure F with materialized file entries for each snapshot.
     pub fn for_each_snapshot<'l, F, S>(&'l self, mut f: F) -> Result<Option<S>, PackError>
     where
-        F: FnMut(&'l str, &HashSet<FileEntryRef<'l>>) -> ControlFlow<S>,
+        F: FnMut(&'l str, &hashbrown::HashSet<FileEntryRef<'l>>) -> ControlFlow<S>,
     {
-        let mut complete = HashSet::new();
+        let mut complete = hashbrown::HashSet::new();
         let snapshot_deltas = self.snapshot_tags.iter().zip(self.snapshot_deltas.iter());
         for (snapshot, deltas) in snapshot_deltas {
             let deltas = deltas.map(|handles| self.entry_refs_from_handles(handles.iter()))?;

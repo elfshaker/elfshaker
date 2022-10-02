@@ -23,7 +23,10 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let loose_objects = matches.is_present("loose_objects");
 
     if !loose_snapshots && !loose_objects {
-        error!("Specify what to GC (--loose-snapshots, --loose-objects). Nothing to do!");
+        error!(
+            "Specify what to GC (--loose-snapshots, --loose-objects). \
+            Nothing to do!"
+        );
         return Err("Invalid options!".into());
     }
 
@@ -79,18 +82,28 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> App<'static, 'static> {
     App::new(SUBCOMMAND)
-        .about("TODO")
-        .arg(Arg::with_name("dry_run").long("dry-run").help("TODO"))
+        .about(
+            "Cleanup redundant snapshots and unreferenced objects. \
+            This frees up disk space after creating a pack.",
+        )
+        .arg(
+            Arg::with_name("dry_run")
+                .long("dry-run")
+                .help("Do not actually delete anything."),
+        )
         .arg(
             Arg::with_name("loose_snapshots")
                 .short("s")
                 .long("loose-snapshots")
-                .help("TODO"),
+                .help("Delete redundant loose snapshots which exist an a pack."),
         )
         .arg(
             Arg::with_name("loose_objects")
                 .short("o")
                 .long("loose-objects")
-                .help("TODO"),
+                .help(
+                    "Delete unreferenced loose objects (which are not needed \
+                    by any snapshot).",
+                ),
         )
 }

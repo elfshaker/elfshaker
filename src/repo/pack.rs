@@ -422,15 +422,18 @@ impl Pack {
         let bytes_to_decompress = frame_to_entries
             .iter()
             .flat_map(|entries| {
+                // Compute maximum extent of data read.
                 entries
                     .iter()
-                    .map(|e| e.metadata.offset + e.metadata.offset)
+                    .map(|e| e.metadata.offset + e.metadata.size)
                     .max()
             })
             .sum::<u64>();
         info!(
-            "Decompressing {:.3} MiB of data...",
-            bytes_to_decompress as f64 / 1024f64 / 1024f64
+            "Decompressing {:.3} MiB of data in {} frames and {} entries...",
+            bytes_to_decompress as f64 / 1024f64 / 1024f64,
+            self.header.frames.len(),
+            entries.len(),
         );
 
         // Collect required for run_in_parallel ExactSizeIterator argument.

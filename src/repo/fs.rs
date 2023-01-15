@@ -91,11 +91,11 @@ pub fn create_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
     }
 }
 
-#[cfg(all(unix, not(target_os="macos")))]
+#[cfg(all(unix, not(target_os = "macos")))]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 39 /* ENOTEMPTY */;
 #[cfg(windows)]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 145 /* ERROR_DIR_NOT_EMPTY */;
-#[cfg(target_os="macos")]
+#[cfg(target_os = "macos")]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 66;
 
 /// Removes empty directories by starting at [`leaf_dir`] and bubbling up

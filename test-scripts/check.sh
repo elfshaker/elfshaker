@@ -254,6 +254,88 @@ test_pack_two_snapshots_works() {
   fi
 }
 
+test_pack_snapshots_from_list_works() {
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+  sha1_ss1=$(cat ./foo | sha1sum)
+  sha1_ss2=$(cat ./bar | sha1sum)
+
+  # Store the first file in SL-1 and second in SL-2
+  printf "foo\n" | "$elfshaker" --verbose store --files-from - SL-1
+  printf "bar\n" | "$elfshaker" --verbose store --files-from - SL-2
+
+  printf "SL-1\n" | "$elfshaker" --verbose pack --compression-level 1 --snapshots-from - PL-1
+  printf "SL-2\n" | "$elfshaker" --verbose pack --compression-level 1 --snapshots-from - PL-2
+
+  # Modify the files
+  rand_megs 1 > ./foo
+  rand_megs 1 > ./bar
+
+  # Then extract from the pack and verify the checksums
+  "$elfshaker" --verbose extract --reset PL-1:SL-1
+  if [[ "$sha1_ss1" != $(cat ./foo | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+
+  "$elfshaker" --verbose extract --reset PL-2:SL-2
+  if [[ "$sha1_ss2" != $(cat ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+
+  # Check that the pack contains only one snapshot
+  SNAPSHOTS=$("$elfshaker" list PL-1 --format "%t" 2> /dev/null | awk '{print $1}' | xargs)
+  # Expect the output to be a single snapshot
+  [[ "${SNAPSHOTS}" == "SL-1" ]]
+}
+
+test_pack_multi_snapshots_from_list_works() {
+  rand_megs 1 > ./foo1
+  rand_megs 1 > ./foo2
+  rand_megs 1 > ./bar
+  sha1_ss1a=$(cat ./foo1 | sha1sum)
+  sha1_ss1b=$(cat ./foo2 | sha1sum)
+  sha1_ss2=$(cat ./bar | sha1sum)
+
+  # Store the first two files in SL2-1 and second in SL2-2
+  printf "foo1\n" | "$elfshaker" --verbose store --files-from - SL2-1
+  printf "foo2\n" | "$elfshaker" --verbose store --files-from - SL2-2
+  printf "bar\n" | "$elfshaker" --verbose store --files-from - SL2-3
+
+  printf "SL2-1\nSL2-2\n" | "$elfshaker" --verbose pack --compression-level 1 --snapshots-from - PL2-1
+  printf "SL2-3\n" | "$elfshaker" --verbose pack --compression-level 1 --snapshots-from - PL2-2
+
+  # Modify the files
+  rand_megs 1 > ./foo1
+  rand_megs 1 > ./foo2
+  rand_megs 1 > ./bar
+
+  # Then extract from the pack and verify the checksums
+  "$elfshaker" --verbose extract --reset PL2-1:SL2-1
+  if [[ "$sha1_ss1a" != $(cat ./foo1 | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+
+  "$elfshaker" --verbose extract --reset PL2-1:SL2-2
+  if [[ "$sha1_ss1b" != $(cat ./foo2 | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+
+  "$elfshaker" --verbose extract --reset PL2-2:SL2-3
+  if [[ "$sha1_ss2" != $(cat ./bar | sha1sum) ]]; then
+    echo "Checksums do not match!";
+    exit 1
+  fi
+
+  # Check that the pack contains only one snapshot
+  SNAPSHOTS=$("$elfshaker" list PL2-1 --format "%t" 2> /dev/null | awk '{print $1}' | xargs)
+  # Expect the output to be two snapshots
+  [[ "${SNAPSHOTS}" == "SL2-1 SL2-2" ]]
+}
+
 # Same as above, but objects have different sizes, which will cause
 # them to be reordered when emitting the compressed pack.
 test_pack_two_snapshots_object_sort_works() {
@@ -496,6 +578,8 @@ main() {
   run_test test_store_data_dir_works
   run_test test_pack_simple_works
   run_test test_pack_two_snapshots_works
+  run_test test_pack_snapshots_from_list_works
+  run_test test_pack_multi_snapshots_from_list_works
   run_test test_pack_two_snapshots_object_sort_works
   run_test test_pack_two_snapshots_multiframe_works
   run_test test_pack_order_by_mtime

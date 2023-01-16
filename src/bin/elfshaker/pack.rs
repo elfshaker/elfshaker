@@ -2,13 +2,14 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{App, Arg, ArgMatches};
+use log::error;
 use log::info;
-use std::{error::Error, ops::ControlFlow, str::FromStr};
+use std::{error::Error, fs, io, ops::ControlFlow, str::FromStr};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
 use elfshaker::{
     packidx::PackIndex,
-    repo::{PackId, PackOptions, SnapshotId},
+    repo::{PackId, PackOptions, Repository, SnapshotId},
 };
 
 pub(crate) const SUBCOMMAND: &str = "pack";
@@ -23,6 +24,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
     // Parse pack name
     let pack = matches.value_of("pack").unwrap();
+    let snapshots_from = matches.value_of("snapshots-from");
+    let snapshots0_from = matches.value_of("snapshots0-from");
     let pack = PackId::from_str(pack)?;
     let indexes = matches
         .values_of("indexes")
@@ -61,18 +64,32 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let mut repo = open_repo_from_cwd(data_dir)?;
 
-    let indexes = indexes
-        .map(Result::Ok)
-        .unwrap_or_else(|| repo.loose_packs())?;
+    let open = |filename| {
+        if filename == "-" {
+            Box::new(io::stdin()) as Box<dyn io::Read>
+        } else {
+            Box::new(fs::File::open(filename).unwrap()) as Box<dyn io::Read>
+        }
+    };
+    let snapshots = match (snapshots_from, snapshots0_from, indexes) {
+        (Some(s), None, None) => packs_from_list(&repo, open(s), b'\n'),
+        (None, Some(s), None) => packs_from_list(&repo, open(s), b'\0'),
+        (None, None, Some(s)) => Ok(s),
+        (None, None, None) => repo.loose_packs(),
+        _ => {
+            error!("Cannot specify a combination of --snapshots-from, --snapshots0-from and <indexes>!");
+            return Err("Invalid options!".into());
+        }
+    }?;
 
     // No point in creating an empty pack.
-    if indexes.is_empty() {
+    if snapshots.is_empty() {
         return Err("There are no loose snapshots!".into());
     }
 
     let mut new_index = PackIndex::new();
 
-    for pack_id in &indexes {
+    for pack_id in &snapshots {
         assert!(
             repo.is_pack_loose(pack_id),
             "packing non-loose indexes not yet supported"
@@ -118,7 +135,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     )?;
 
     if let (Some(head), _) = repo.read_head()? {
-        if indexes.iter().any(|pack_id| head.pack() == pack_id) {
+        if snapshots.iter().any(|pack_id| head.pack() == pack_id) {
             info!("Updating HEAD to point to the newly-created pack...");
             // The current HEAD was referencing a snapshot an index which has
             // been packed. Update HEAD to point into the new pack.
@@ -132,6 +149,30 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // repo.remove_loose_all()?;
 
     Ok(())
+}
+
+fn packs_from_list(
+    repo: &Repository,
+    mut reader: impl io::Read,
+    separator: u8,
+) -> Result<Vec<PackId>, elfshaker::repo::Error> {
+    let mut buf = vec![];
+    reader.read_to_end(&mut buf)?;
+
+    buf.split(|c| *c == separator)
+        .filter(|s| !s.is_empty())
+        .map(std::str::from_utf8)
+        .map(|s| match s {
+            Ok(v) => repo.find_snapshot(v).map(|l| l.pack().clone()),
+            Err(e) => {
+                let msg = format!("Unable to decode snapshot list: {}", e);
+                Err(elfshaker::repo::Error::IOError(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    msg,
+                )))
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn get_app() -> App<'static, 'static> {
@@ -176,6 +217,20 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                     frames can result in poorer compression. Specify 0 to \
                     auto-detect the appropriate number of frames to emit.")
                 .default_value("0")
+        )
+        .arg(
+            Arg::with_name("snapshots-from")
+                .takes_value(true)
+                .long("snapshots-from")
+                .value_name("file")
+                .help("Reads the list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
+        )
+        .arg(
+            Arg::with_name("snapshots0-from")
+                .takes_value(true)
+                .long("snapshots0-from")
+                .value_name("file")
+                .help("Reads the NUL-separated (ASCII \\0) list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
         )
         .arg(
             Arg::with_name("indexes")

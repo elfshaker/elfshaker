@@ -199,7 +199,7 @@ fn create_temp_path<P: AsRef<Path>>(temp_dir: P) -> PathBuf {
     temp_filename.push_str(&{
         let mut bytes = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut bytes);
-        hex::encode(&bytes)
+        hex::encode(bytes)
     });
     temp_dir.as_ref().join(&temp_filename)
 }
@@ -239,7 +239,7 @@ mod tests {
         fs::remove_file(&p)?;
         let (n_success, n_fail) = (1, n_total - 1);
         // Test that we see exactly one success and the rest as failures.
-        assert_eq!((n_success * 1) + (n_fail * -1), result);
+        assert_eq!(n_success + -n_fail, result);
 
         Ok(())
     }

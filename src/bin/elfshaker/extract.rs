@@ -67,7 +67,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     eprintln!("A \t{} files", result.added_file_count);
     eprintln!("D \t{} files", result.removed_file_count);
     eprintln!("M \t{} files", result.modified_file_count);
-    eprintln!("Extracted '{}'", new_head);
+    eprintln!("Extracted '{new_head}'");
 
     Ok(())
 }

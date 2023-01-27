@@ -59,9 +59,9 @@ impl Display for Error {
             Self::PackError(packerr) => packerr.fmt(f),
             Self::IdError(iderr) => iderr.fmt(f),
             Self::WalkDirError(wderr) => wderr.fmt(f),
-            Self::Utf8Error(s) => write!(f, "Unable to interpret path as utf8: {:?}", s),
+            Self::Utf8Error(s) => write!(f, "Unable to interpret path as utf8: {s:?}"),
             Self::CorruptHead => write!(f, "HEAD is corrupt!"),
-            Self::BrokenHeadRef(e) => write!(f, "Broken HEAD: {}", e),
+            Self::BrokenHeadRef(e) => write!(f, "Broken HEAD: {e}"),
             Self::CorruptPack => {
                 write!(f, "The pack file is corrupt!")
             }
@@ -69,8 +69,7 @@ impl Display for Error {
             Self::AmbiguousSnapshotMatch(snapshot, packs) => {
                 write!(
                     f,
-                    "The requested snapshot {} lives in multiple packs: {:?}",
-                    snapshot, packs
+                    "The requested snapshot {snapshot} lives in multiple packs: {packs:?}"
                 )
             }
             Self::DirtyWorkDir => write!(
@@ -80,11 +79,10 @@ impl Display for Error {
             ),
             Self::PackNotFound(p) => write!(
                 f,
-                "The specified pack file '{}' could not be found in the repository index!",
-                p,
+                "The specified pack file '{p}' could not be found in the repository index!",
             ),
             Self::RepositoryNotFound => write!(f, "The directory is not an elfshaker repository!"),
-            Self::BadLooseObject(s) => write!(f, "Bad loose object: {}", s),
+            Self::BadLooseObject(s) => write!(f, "Bad loose object: {s}"),
             Self::HttpError(e) => e.fmt(f),
             Self::BadRemoteIndexFormat(e) => e.fmt(f),
         }

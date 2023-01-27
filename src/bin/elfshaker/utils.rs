@@ -48,7 +48,7 @@ where
 {
     let format = |row: C| {
         row.into_iter()
-            .map(|item| format!("{}", item))
+            .map(|item| format!("{item}"))
             .collect::<Vec<_>>()
     };
     let header_strings = header.map(format);
@@ -57,7 +57,7 @@ where
     if strings.is_empty() {
         if let Some(header) = header_strings {
             for item in header.iter() {
-                eprint!("{} ", item);
+                eprint!("{item} ");
             }
             eprintln!();
         }
@@ -228,7 +228,7 @@ pub fn create_percentage_print_reporter(message: &str, step: u32) -> ProgressRep
                     );
                     // Optional "detail" message
                     if let Some(detail) = &checkpoint.detail {
-                        print!(": {}", detail);
+                        print!(": {detail}");
                     }
                 }
                 std::io::stdout().flush().unwrap();

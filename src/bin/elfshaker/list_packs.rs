@@ -43,7 +43,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 
 fn format_pack_row(fmt: &str, pack_id: &PackId, snapshot_count: usize, size: u64) -> String {
     fmt.to_owned()
-        .replace("%p", &format!("{}", pack_id))
+        .replace("%p", &format!("{pack_id}"))
         .replace("%c", &snapshot_count.to_string())
         .replace("%b", &size.to_string())
         .replace("%h", &format_size(size))
@@ -64,7 +64,7 @@ fn print_packs(repo: &Repository, fmt: &str) -> Result<(), Box<dyn Error>> {
     lines.sort();
 
     for line in lines {
-        println!("{}", line);
+        println!("{line}");
     }
 
     Ok(())

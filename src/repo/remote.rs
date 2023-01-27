@@ -43,7 +43,7 @@ impl RemoteIndexFormatError {
         } else {
             RemoteIndexFormatError {
                 message: self.message,
-                source: Some(format!("{}", display_name)),
+                source: Some(format!("{display_name}")),
             }
         }
     }
@@ -147,8 +147,7 @@ impl RemoteIndex {
         let url = Self::read_keyed_line(&mut lines, "url")?;
         let base_url = url.parse::<Url>().map_err(|_| {
             RemoteIndexFormatError::new(format!(
-                "Expected a valid elfshaker index URL, found {} on line {}",
-                url, line_no
+                "Expected a valid elfshaker index URL, found {url} on line {line_no}"
             ))
         })?;
         line_no += 1;
@@ -162,23 +161,20 @@ impl RemoteIndex {
                 .filter(|&p| !p.is_empty());
             let index_checksum = parts.next().ok_or_else(|| {
                 RemoteIndexFormatError::new(format!(
-                    "Expected pack index checksum, reached end of line {}",
-                    line_no
+                    "Expected pack index checksum, reached end of line {line_no}"
                 ))
             })?;
 
             let pack_checksum = parts.next().ok_or_else(|| {
                 RemoteIndexFormatError::new(format!(
-                    "Expected pack checksum, reached end of line {}",
-                    line_no
+                    "Expected pack checksum, reached end of line {line_no}"
                 ))
             })?;
 
             // Pack URL (possibly relative)
             let relative_url = parts.next().ok_or_else(|| {
                 RemoteIndexFormatError::new(format!(
-                    "Expected pack URL, reached end of line {}",
-                    line_no
+                    "Expected pack URL, reached end of line {line_no}"
                 ))
             })?;
 
@@ -188,8 +184,7 @@ impl RemoteIndex {
                 Ok(url) => url,
                 Err(_) => {
                     return Err(RemoteIndexFormatError::new(format!(
-                        "Expected a valid pack URL, found {} on line {}",
-                        url, line_no
+                        "Expected a valid pack URL, found {url} on line {line_no}"
                     ))
                     .into());
                 }
@@ -197,8 +192,7 @@ impl RemoteIndex {
 
             if parts.next().is_some() {
                 return Err(RemoteIndexFormatError::new(format!(
-                    "Too many values on line {}",
-                    line_no
+                    "Too many values on line {line_no}"
                 ))
                 .into());
             }
@@ -206,30 +200,26 @@ impl RemoteIndex {
             let index_checksum = hex::decode(index_checksum)
                 .map_err(|_| {
                     RemoteIndexFormatError::new(format!(
-                        "Bad pack index checksum format on line {}",
-                        line_no
+                        "Bad pack index checksum format on line {line_no}"
                     ))
                 })?
                 .try_into()
                 .map_err(|_| {
                     RemoteIndexFormatError::new(format!(
-                        "The value for pack index checksum on line {} is not the right length",
-                        line_no
+                        "The value for pack index checksum on line {line_no} is not the right length"
                     ))
                 })?;
 
             let pack_checksum = hex::decode(pack_checksum)
                 .map_err(|_| {
                     RemoteIndexFormatError::new(format!(
-                        "Bad pack checksum format on line {}",
-                        line_no
+                        "Bad pack checksum format on line {line_no}"
                     ))
                 })?
                 .try_into()
                 .map_err(|_| {
                     RemoteIndexFormatError::new(format!(
-                        "The value for pack checksum on line {} is not the right length",
-                        line_no
+                        "The value for pack checksum on line {line_no} is not the right length"
                     ))
                 })?;
 
@@ -251,8 +241,7 @@ impl RemoteIndex {
     fn read_keyed_line<R: BufRead>(lines: &mut io::Lines<R>, key: &str) -> Result<String, Error> {
         let line = match lines.next() {
             None => Err(RemoteIndexFormatError::new(format!(
-                "Expected '{} ...', but end of file was reached!",
-                key
+                "Expected '{key} ...', but end of file was reached!"
             ))
             .into()),
             Some(Err(e)) => Err(Error::IOError(e)),
@@ -265,16 +254,16 @@ impl RemoteIndex {
 
         if parts.next() != Some(key) {
             return Err(
-                RemoteIndexFormatError::new(format!("Expected '{} ...': '{}'", key, line)).into(),
+                RemoteIndexFormatError::new(format!("Expected '{key} ...': '{line}'")).into(),
             );
         }
 
         let value = parts.next().ok_or_else(|| {
-            RemoteIndexFormatError::new(format!("Expected a value after '{}': '{}'", key, line))
+            RemoteIndexFormatError::new(format!("Expected a value after '{key}': '{line}'"))
         })?;
 
         if parts.next().is_some() {
-            return Err(RemoteIndexFormatError::new(format!("Too many values: '{}'", line)).into());
+            return Err(RemoteIndexFormatError::new(format!("Too many values: '{line}'")).into());
         }
 
         Ok(value.to_string())
@@ -389,7 +378,7 @@ pub fn update_remote_pack(
     pack_path: &Path,
     reporter: &ProgressReporter,
 ) -> Result<(), Error> {
-    let date_modified = fs::metadata(&pack_path)
+    let date_modified = fs::metadata(pack_path)
         .ok()
         .and_then(|x| x.modified().ok());
 
@@ -452,7 +441,7 @@ pub fn update_remote_pack_indexes(
 /// Updates the pack index file by fetching its contents from the URL only
 /// when the content at the URL is newer than what is available on-disk.
 fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result<(), Error> {
-    let date_modified = fs::metadata(&pack_index_path)
+    let date_modified = fs::metadata(pack_index_path)
         .ok()
         .and_then(|x| x.modified().ok());
 
@@ -472,7 +461,7 @@ fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result
                 pack_index_path.display(),
                 pack_index_bytes.len()
             );
-            fs::write(&pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
+            fs::write(pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
         }
     }
     Ok(())
@@ -516,7 +505,7 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
 
     match response {
         // The local version is up-to-date.
-        None => RemoteIndex::load(&path).reify(path.display()),
+        None => RemoteIndex::load(path).reify(path.display()),
         Some(data) => {
             let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
             // Update the .esi
@@ -567,7 +556,7 @@ fn compute_checksum(path: &Path) -> io::Result<ObjectChecksum> {
 /// GMT`
 fn format_http_date(t: SystemTime) -> String {
     let datetime: DateTime<Utc> = t.into();
-    return format!("{}", datetime.format("%a, %d %h %Y %H:%M:%S GMT"));
+    format!("{}", datetime.format("%a, %d %h %Y %H:%M:%S GMT"))
 }
 
 #[cfg(test)]

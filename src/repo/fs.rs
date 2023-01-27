@@ -27,7 +27,7 @@ pub fn get_last_modified(metadata: fs::Metadata) -> Option<SystemTime> {
 /// Ensures that the directory exists.
 /// Unlike [`fs::create_dir()`], this function does not return Err if the directory already exists.
 pub fn ensure_dir(path: &Path) -> io::Result<()> {
-    match fs::create_dir_all(&path) {
+    match fs::create_dir_all(path) {
         Ok(_) => Ok(()),
         Err(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
@@ -57,7 +57,7 @@ pub fn create_temp_path(temp_dir: &Path) -> PathBuf {
     let temp_filename = {
         let mut bytes = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut bytes);
-        hex::encode(&bytes)
+        hex::encode(bytes)
     };
     temp_dir.join(temp_filename)
 }
@@ -271,7 +271,7 @@ mod tests {
         let file = leaf_dir.join("file");
 
         fs::create_dir_all(&leaf_dir)?;
-        fs::write(&file, &[])?;
+        fs::write(&file, [])?;
 
         remove_empty_dirs(&leaf_dir, &boundary_dir)?;
 

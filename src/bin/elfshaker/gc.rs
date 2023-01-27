@@ -49,7 +49,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             freed_bytes += repo.get_pack_disk_stats(&loose_pack)?.len;
 
             let PackId::Pack(ref name) = &loose_pack;
-            println!("Deleting pack {:?}", name);
+            println!("Deleting pack {name:?}");
 
             // Delete if requested
             if !dry_run {

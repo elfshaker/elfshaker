@@ -156,6 +156,9 @@ impl RemoteIndex {
         for line in lines {
             line_no += 1;
             let line = line.map_err(Error::IOError)?;
+            if line.is_empty() {
+                continue;
+            }
             let mut parts = line
                 .split(Self::is_field_separator)
                 .filter(|&p| !p.is_empty());

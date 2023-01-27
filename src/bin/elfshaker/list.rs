@@ -88,11 +88,7 @@ fn print_snapshots(
             let mut pack_lines = vec![];
             let mut iter = |snapshot, file_size, file_count| {
                 pack_lines.push(format_snapshot_row(
-                    fmt,
-                    pack_id,
-                    snapshot,
-                    file_size,
-                    file_count,
+                    fmt, pack_id, snapshot, file_size, file_count,
                 ));
                 ControlFlow::<(), ()>::Continue(())
             };

@@ -378,9 +378,7 @@ pub fn update_remote_pack(
     pack_path: &Path,
     reporter: &ProgressReporter,
 ) -> Result<(), Error> {
-    let date_modified = fs::metadata(pack_path)
-        .ok()
-        .and_then(|x| x.modified().ok());
+    let date_modified = fs::metadata(pack_path).ok().and_then(|x| x.modified().ok());
 
     let url = remote_pack.url.parse::<Url>().unwrap();
     if let Some((content_length, mut reader)) =

@@ -606,6 +606,7 @@ test_clone_fetches_indexes() {
     printf 'meta\tv1\n'
     printf 'url\thttp://127.0.0.1:43103/index.esi\n'
     printf "$pack_idx_sha\t$pack_sha\thttp://127.0.0.1:43104/test.pack\n"
+    echo
   } > "$index"
 
   # First request returns the .esi

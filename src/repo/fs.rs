@@ -6,7 +6,7 @@ use rand::RngCore;
 
 use std::{
     fs,
-    fs::File,
+    fs::{File, Permissions},
     io,
     io::Read,
     path::{Path, PathBuf},
@@ -41,7 +41,7 @@ pub fn ensure_dir(path: &Path) -> io::Result<()> {
 /// NOTE: [`temp_dir`] and [`dest`] must be on the same filesystem!
 pub fn write_file_atomic(mut r: impl Read, temp_dir: &Path, dest: &Path) -> io::Result<()> {
     let temp_path = create_temp_path(temp_dir);
-    let mut temp_file = create_file(&temp_path)?;
+    let mut temp_file = create_file(&temp_path, None)?;
     // The presence of a lock on the file indicates that this tempfile is in
     // use, in case a garbage collection process wants to know which files it
     // can delete. The lock is dropped after the rename.
@@ -78,7 +78,7 @@ pub fn open_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
 /// returned will contain the provided [`path`] in the error message.
 ///
 /// This function will create a file if it does not exist, and will truncate it if it does
-pub fn create_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
+pub fn create_file<P: AsRef<Path>>(path: P, perm: Option<Permissions>) -> io::Result<File> {
     match File::create(&path) {
         Err(error) => Err(io::Error::new(
             error.kind(),
@@ -87,7 +87,10 @@ pub fn create_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
                 path.as_ref().display()
             ),
         )),
-        Ok(file) => Ok(file),
+        Ok(file) => {
+            perm.map_or(Ok(()), |perm| file.set_permissions(perm))?;
+            Ok(file)
+        }
     }
 }
 

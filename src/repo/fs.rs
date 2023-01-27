@@ -131,8 +131,7 @@ pub fn create_with_mode<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<File> 
 pub fn create_empty<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<()> {
     let tmp = create_temp_path(path.as_ref().parent().unwrap());
     create_with_mode(&tmp, mode)?;
-    fs::rename(tmp, path)?;
-    Ok(())
+    fs::rename(tmp, path)
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

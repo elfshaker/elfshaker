@@ -145,6 +145,52 @@ test_extract_different_works() {
   verify_snapshot "$pack":"$snapshot_b"
 }
 
+
+test_extract_multiple_file_removal_same_dir() {
+  mkdir dir
+  echo foo > dir/a
+  echo bar > dir/b
+
+  "$elfshaker" store snap1
+
+  rm dir/a dir/b
+  "$elfshaker" store snap2
+
+  # This should remove both files and try to clean up 'dir' twice
+  "$elfshaker" extract --force snap1
+  "$elfshaker" extract --force snap2
+  "$elfshaker" extract --force snap1
+}
+
+test_extract_filetype_change_works() {
+  # Check that transitioning between a path being a directory and not a
+  # directory works, when the files are empty.
+  touch a
+  "$elfshaker" --verbose store s0
+  rm a
+  mkdir a
+  touch a/b
+  "$elfshaker" --verbose store s1
+  "$elfshaker" --verbose extract s0
+  "$elfshaker" --verbose extract s1
+  "$elfshaker" --verbose extract s0
+}
+
+test_extract_filetype_change_works_with_contents() {
+  # Check that transitioning between a path being a directory and not a
+  # directory works; same as test_extract_filetype_change_works, but
+  # with non-empty files.
+  echo x > a
+  "$elfshaker" --verbose store s0
+  rm a
+  mkdir a
+  echo y >> a/b
+  "$elfshaker" --verbose store s1
+  "$elfshaker" --verbose extract s0
+  "$elfshaker" --verbose extract s1
+  "$elfshaker" --verbose extract s0
+}
+
 test_extract_file_modes_preserved() {
   umask 0002
   touch foobar
@@ -779,8 +825,11 @@ main() {
   run_test test_extract_reset_on_empty_works
   run_test test_extract_again_works
   run_test test_extract_different_works
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_filetype_change_works
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_filetype_change_works_with_contents
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_file_modes_preserved
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_zero_length_noreadperm_works
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && test_extract_multiple_file_removal_same_dir
   run_test test_store_works
   run_test test_store_and_extract_different_works
   run_test test_store_twice_works

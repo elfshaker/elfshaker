@@ -717,7 +717,7 @@ impl Repository {
         let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
 
         // And a writer to that temporary file.
-        let mut pack_writer = io::BufWriter::new(create_file(&temp_path)?);
+        let mut pack_writer = io::BufWriter::new(create_file(&temp_path, None)?);
         // Write header and frames.
         write_skippable_frame(&mut pack_writer, &header_bytes)?;
         for frame_buf in frame_bufs {

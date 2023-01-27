@@ -395,7 +395,7 @@ pub fn update_remote_pack(
         hasher.result(&mut checksum);
 
         if checksum == remote_pack.pack_checksum {
-            create_file(pack_path)?.write_all(&data)?;
+            create_file(pack_path, None)?.write_all(&data)?;
         } else {
             log::error!(
                 "The pack checksum did not match the one in the .esi! The download failed."
@@ -477,7 +477,7 @@ pub fn fetch_remote(agent: &Agent, url: &str, path: &Path) -> Result<RemoteIndex
         Some(data) => {
             let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
             // Update the .esi
-            create_file(path)
+            create_file(path, None)
                 .map_err(Error::IOError)?
                 .write_all(data.as_slice())
                 .map_err(Error::IOError)?;
@@ -507,7 +507,7 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
         Some(data) => {
             let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
             // Update the .esi
-            create_file(path)
+            create_file(path, None)
                 .map_err(Error::IOError)?
                 .write_all(data.as_slice())
                 .map_err(Error::IOError)?;

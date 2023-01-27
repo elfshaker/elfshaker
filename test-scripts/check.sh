@@ -909,7 +909,9 @@ main() {
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots_dry_run
   run_test test_gc_objects
-  run_test test_gc_objects_dry_run
+  # Skipped because "*FATAL*: Access denied. (os error 5) (PermissionDenied)"
+  # observed in CI on windows.
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_objects_dry_run
   run_test test_read_only
   run_test test_explode_zero_length_creates_parents
 }

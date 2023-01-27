@@ -31,11 +31,14 @@ use super::fs::{
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
-use crate::packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
+};
+use crate::{
+    packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex},
+    repo::fs::create_empty,
 };
 
 /// A struct specifying the the extract options.
@@ -178,7 +181,7 @@ impl Repository {
         if !Path::exists(data_dir) {
             return Err(Error::RepositoryNotFound(data_dir.to_path_buf()));
         }
-        let data_dir = data_dir.canonicalize()?;
+        let data_dir = data_dir.canonicalize().expect("canonicalise failed");
 
         let mut open_options = fs::OpenOptions::new();
         let open_options = open_options.create(true).write(true).read(true);
@@ -597,7 +600,31 @@ impl Repository {
         let threads = num_cpus::get();
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
-            let mut fd = File::open(&file_path)?;
+            let mut fd = match File::open(&file_path) {
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    let md = fs::metadata(&file_path)?;
+                    // md.mode()
+                    // md.mode()
+                    if md.len() != 0 {
+                        return Err(e);
+                    }
+                    // Special case file of zero byte length with no
+                    // permission to read. We can still represent this,
+                    // and it has uses (e.g. for testing)
+                    return Ok(FileEntry::new(
+                        file_path.into(),
+                        [0; 20],
+                        ObjectMetadata {
+                            offset: LOOSE_OBJECT_OFFSET,
+                            size: 0,
+                        },
+                        FileMetadata {
+                            mode: md.file_mode().0,
+                        },
+                    ));
+                }
+                r => r,
+            }?;
             let (buf, mode) = {
                 let mut buf = vec![];
                 fd.read_to_end(&mut buf)?;
@@ -696,12 +723,17 @@ impl Repository {
             opts.num_workers as usize,
             object_partitions.into_iter(),
             |objects| {
-                let object_readers = objects.iter().map(|&handle| {
+                let object_readers = objects.iter().map(|&handle| -> io::Result<Box<dyn Read>> {
                     // TODO: Method of obtaining readers from packs? Or we can
                     // just assume packs first get unpacked.
-                    Ok(Box::new(open_file(
-                        self.loose_object_path(index.handle_to_checksum(handle)),
-                    )?))
+                    let checksum = index.handle_to_checksum(handle);
+                    // All zero checksum is special case of empty object, which
+                    // is not represented on disk.
+                    if checksum.iter().all(|x| *x == 0) {
+                        return Ok(Box::new(&[] as &[u8])); // Empty reader.
+                    }
+
+                    Ok(Box::new(open_file(self.loose_object_path(checksum))?))
                 });
 
                 let mut buf = vec![];
@@ -1118,6 +1150,12 @@ impl Repository {
                 dest_path.push(&entry.path);
                 fs::create_dir_all(dest_path.parent().unwrap())?;
                 let object_path = self.loose_object_path(&entry.checksum);
+                if entry.object_metadata.size == 0 {
+                    // Special case empty files, which aren't represented in
+                    // the store and have extra handling for missing permissions.
+                    create_empty(&dest_path, entry.file_metadata.mode)?;
+                    return Ok(dest_path);
+                }
                 fs::copy(&object_path, &dest_path).map_err(|e| {
                     io::Error::new(
                         e.kind(),
@@ -1128,7 +1166,6 @@ impl Repository {
                         ),
                     )
                 })?;
-
                 let file_mode = FileMode(entry.file_metadata.mode);
                 set_file_mode(&dest_path, file_mode)?;
                 Ok(dest_path)

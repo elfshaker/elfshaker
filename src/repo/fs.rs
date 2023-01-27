@@ -5,10 +5,8 @@ use fs2::FileExt;
 use rand::RngCore;
 
 use std::{
-    fs,
-    fs::File,
-    io,
-    io::Read,
+    fs::{self, File},
+    io::{self, Read},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -92,6 +90,49 @@ pub fn create_file<P: AsRef<Path>>(path: P, file_mode: Option<FileMode>) -> io::
             Ok(file)
         }
     }
+}
+
+// Unix implementation: uses `OpenOptionsExt::mode(...)`
+#[cfg(unix)]
+pub fn create_with_mode<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<File> {
+    use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt};
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(path)
+}
+
+// Windows implementation: no `mode(...)`. We'll open/write as usual,
+// then adjust the `readonly` flag based on the owner‐write bit (0o200).
+//
+#[cfg(not(unix))]
+pub fn create_with_mode<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<File> {
+    // On Windows, `OpenOptionsExt::mode` doesn’t exist. Use create,
+    // then set the readonly attribute if the owner write‐bit is not
+    // present.
+    use std::fs::OpenOptions;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)?;
+    file.set_file_mode(FileMode(mode))?;
+    Ok(file)
+}
+
+// create_empty creates an empty file with the given permissions. It
+// exists particularly to support the case where it's being requested to
+// create an empty file with no permissions, or overwrite one with no
+// permissions, in which case a File::create in situ may fail.
+pub fn create_empty<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<()> {
+    let tmp = create_temp_path(path.as_ref().parent().unwrap());
+    create_with_mode(&tmp, mode)?;
+    fs::rename(tmp, path)?;
+    Ok(())
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

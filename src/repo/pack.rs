@@ -8,6 +8,7 @@ use std::{
     fs::{self, Permissions},
     io,
     io::{BufReader, Read, Write},
+    os::unix::prelude::PermissionsExt,
     path::{Path, PathBuf},
 };
 use std::{fmt::Display, str::FromStr};
@@ -549,7 +550,7 @@ fn assign_to_frames(
                 offset: local_offset, // Replace global offset -> local offset
                 size: entry.object_metadata.size,
             },
-            Default::default(),
+            entry.file_metadata,
         );
         frames[frame_index].push(local_entry);
     }
@@ -662,9 +663,12 @@ fn extract_files(
             path_buf.clear();
             path_buf.push(&output_dir);
             path_buf.push(&entry.path);
-            stats.write_time += measure_ok(|| write_object(&buf[..], &path_buf, None))?
-                .0
-                .as_secs_f64();
+            stats.write_time += measure_ok(|| {
+                let perm = Permissions::from_mode(entry.file_metadata.mode);
+                write_object(&buf[..], &path_buf, Some(perm))
+            })?
+            .0
+            .as_secs_f64();
         }
 
         Ok(())

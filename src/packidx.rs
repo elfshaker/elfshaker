@@ -121,12 +121,18 @@ pub struct FileHandle {
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct FileMetadata {}
+pub struct FileMetadata {
+    pub mode: u32,
+}
 
 /// Format version 1 packs will use a default file metadata.
 impl Default for FileMetadata {
     fn default() -> Self {
-        Self {}
+        Self {
+            // The default mode bits are owner can rw, everyone else can read,
+            // which is the same behaviour as in version 1 of the pack format.
+            mode: 0o100664,
+        }
     }
 }
 

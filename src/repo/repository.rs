@@ -5,8 +5,10 @@ use super::{constants::*, pack::IdError};
 
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fs::{self, File, Permissions},
+    io,
     io::{Read, Write},
+    os::unix::prelude::PermissionsExt,
     path::{Path, PathBuf},
     str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
@@ -29,7 +31,7 @@ use super::fs::{
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
-use crate::packidx::{FileEntry, ObjectChecksum, PackError, PackIndex};
+use crate::packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
@@ -581,7 +583,11 @@ impl Repository {
         let threads = num_cpus::get();
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
-            let buf = fs::read(&file_path)?;
+            let mut fd = File::open(&file_path)?;
+            let mut buf = vec![];
+            fd.read_to_end(&mut buf)?;
+            let mode = fd.metadata()?.permissions().mode();
+            drop(fd);
             let mut checksum = [0u8; 20];
             let mut hasher = Sha1::new();
             hasher.input(&buf);
@@ -595,7 +601,7 @@ impl Repository {
                     offset: LOOSE_OBJECT_OFFSET,
                     size: buf.len() as u64,
                 },
-                Default::default(),
+                FileMetadata { mode },
             ))
         })
         .into_iter()
@@ -1020,6 +1026,9 @@ impl Repository {
                     ),
                 )
             })?;
+
+            let perm = Permissions::from_mode(entry.file_metadata.mode);
+            fs::set_permissions(&dest_path, perm)?
         }
 
         if verify {
@@ -1068,11 +1077,11 @@ impl Repository {
         // but not, for example, the offset of the object in the pack file.
         let from_lookup: HashMap<_, _> = from_entries
             .iter()
-            .map(|e| ((&e.path, &e.checksum), e))
+            .map(|e| ((&e.path, &e.checksum, &e.file_metadata), e))
             .collect();
         let to_lookup: HashMap<_, _> = to_entries
             .iter()
-            .map(|e| ((&e.path, &e.checksum), e))
+            .map(|e| ((&e.path, &e.checksum, &e.file_metadata), e))
             .collect();
 
         let mut added = vec![];

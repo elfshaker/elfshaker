@@ -21,7 +21,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     let original_cwd = std::env::current_dir()?;
     if Path::new(directory).exists() {
-        return Err(format!("'{}' already exists!", directory).into());
+        return Err(format!("'{directory}' already exists!").into());
     }
 
     let temp_directory = PathBuf::from(format!(
@@ -52,7 +52,7 @@ fn do_clone(work_dir: &Path, data_dir: &Path, origin_url: &str) -> Result<(), Bo
     fs::create_dir(work_dir)?;
     fs::create_dir_all(&data_dir)?;
 
-    let mut repo = Repository::open_with_data_dir(&work_dir, &data_dir)?;
+    let mut repo = Repository::open_with_data_dir(work_dir, &data_dir)?;
 
     repo.set_progress_reporter(|msg| create_percentage_print_reporter(msg, 5));
     repo.add_remote("origin", origin_url)?;
@@ -80,5 +80,5 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 fn create_random_name() -> String {
     let mut bytes = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut bytes);
-    hex::encode(&bytes)
+    hex::encode(bytes)
 }

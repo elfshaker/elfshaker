@@ -45,7 +45,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let temp_dir = {
         let mut bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
-        hex::encode(&bytes)
+        hex::encode(bytes)
     };
     let temp_dir = std::env::temp_dir().join(temp_dir);
 

@@ -55,7 +55,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 
 fn format_file_row(fmt: &str, checksum: &ObjectChecksum, file_name: &OsStr, size: u64) -> String {
     fmt.to_owned()
-        .replace("%o", &hex::encode(&checksum))
+        .replace("%o", &hex::encode(checksum))
         .replace("%f", &file_name.to_string_lossy())
         .replace("%h", &format_size(size))
         .replace("%b", &size.to_string())
@@ -80,7 +80,7 @@ fn print_files(
     lines.sort();
 
     for line in lines {
-        println!("{}", line);
+        println!("{line}");
     }
 
     Ok(())

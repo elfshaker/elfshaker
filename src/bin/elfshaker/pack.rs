@@ -165,7 +165,7 @@ fn packs_from_list(
         .map(|s| match s {
             Ok(v) => repo.find_snapshot(v).map(|l| l.pack().clone()),
             Err(e) => {
-                let msg = format!("Unable to decode snapshot list: {}", e);
+                let msg = format!("Unable to decode snapshot list: {e}");
                 Err(elfshaker::repo::Error::IOError(io::Error::new(
                     io::ErrorKind::InvalidData,
                     msg,

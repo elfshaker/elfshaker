@@ -63,7 +63,7 @@ fn format_snapshot_row(
     file_count: usize,
 ) -> String {
     fmt.to_owned()
-        .replace("%s", &format!("{}:{}", pack_id, snapshot))
+        .replace("%s", &format!("{pack_id}:{snapshot}"))
         .replace("%t", snapshot)
         .replace("%h", &format_size(size))
         .replace("%b", &size.to_string())
@@ -92,7 +92,7 @@ fn print_snapshots(
                     pack_id,
                     snapshot,
                     file_size,
-                    file_count as usize,
+                    file_count,
                 ));
                 ControlFlow::<(), ()>::Continue(())
             };
@@ -122,7 +122,7 @@ fn print_snapshots(
     lines.sort();
 
     for line in lines {
-        println!("{}", line);
+        println!("{line}");
     }
 
     Ok(())

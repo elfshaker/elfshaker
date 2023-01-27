@@ -325,7 +325,7 @@ impl Repository {
             .into_iter()
             .filter_map(|pack_id| {
                 self.load_index_snapshots(&pack_id)
-                    .map(|idx| idx.iter().any(|x| x == snapshot).then(|| pack_id))
+                    .map(|idx| idx.iter().any(|x| x == snapshot).then_some(pack_id))
                     .transpose()
             })
             .collect::<Result<Vec<PackId>, Error>>()?;
@@ -539,7 +539,7 @@ impl Repository {
         let pack_file_name = pack.to_string() + "." + PACK_EXTENSION;
 
         let agent = ureq::AgentBuilder::new().build();
-        let reporter = (self.progress_reporter_factory)(&format!("Fetching {}", pack_file_name));
+        let reporter = (self.progress_reporter_factory)(&format!("Fetching {pack_file_name}"));
 
         for remote in remotes {
             if let Some(remote_pack) = remote.find_pack(pack) {
@@ -607,7 +607,7 @@ impl Repository {
         ensure_dir(&loose_path)?;
 
         index.save(
-            &loose_path
+            loose_path
                 .join(snapshot.tag())
                 .with_extension(PACK_INDEX_EXTENSION),
         )?;
@@ -637,7 +637,7 @@ impl Repository {
         let pack_path = {
             let mut pack_path = self.data_dir().join(PACKS_DIR);
             ensure_dir(&pack_path)?;
-            pack_path.push(format!("{}.{}", pack_name, PACK_EXTENSION));
+            pack_path.push(format!("{pack_name}.{PACK_EXTENSION}"));
             pack_path
         };
 
@@ -740,7 +740,7 @@ impl Repository {
     pub fn remove_loose_all(&mut self) -> Result<(), Error> {
         let loose_dir = self.data_dir().join(LOOSE_DIR);
 
-        match fs::remove_dir_all(&loose_dir) {
+        match fs::remove_dir_all(loose_dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             r => r,
         }?;
@@ -749,7 +749,7 @@ impl Repository {
 
     /// Updates the HEAD snapshot id.
     pub fn update_head(&mut self, snapshot_id: &SnapshotId) -> Result<(), Error> {
-        let snapshot_string = format!("{}\n", snapshot_id);
+        let snapshot_string = format!("{snapshot_id}\n");
         ensure_dir(&self.temp_dir())?;
         write_file_atomic(
             snapshot_string.as_bytes(),
@@ -767,8 +767,7 @@ impl Repository {
 
         let agent = ureq::AgentBuilder::new().build();
         let reporter = (self.progress_reporter_factory)(&format!(
-            "Fetching remote repository index from {}",
-            name
+            "Fetching remote repository index from {name}"
         ));
 
         reporter.checkpoint_with_detail(0, Some(1), url.to_owned());
@@ -935,12 +934,12 @@ impl Repository {
         if is_loose && pack_exsits {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("Unexpected .pack for loose {:?}", pack_id),
+                format!("Unexpected .pack for loose {pack_id:?}"),
             ));
         } else if !is_loose && !pack_exsits {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("{:?} not found", pack_path),
+                format!("{pack_path:?} not found"),
             ));
         }
 
@@ -976,7 +975,7 @@ impl Repository {
         let pack_len = fs::metadata(&pack_path).map(|x| x.len()).unwrap_or(0);
         pack_path.set_extension("");
         pack_path.set_extension(PACK_INDEX_EXTENSION);
-        println!("{:?}", pack_path);
+        println!("{pack_path:?}");
         let pack_idx_stats = fs::metadata(&pack_path)?;
 
         Ok(PackDiskStats {
@@ -1095,7 +1094,7 @@ impl Repository {
     }
 
     fn check_changed_since(&self, head_time: SystemTime, path: &Path) -> Result<(), Error> {
-        let last_modified = fs::metadata(&path)
+        let last_modified = fs::metadata(path)
             // The modification date of the file is unknown, there is no other
             // option to fallback on, so we mark the directory as dirty.
             .map_err(|_| {

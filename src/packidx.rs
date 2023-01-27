@@ -50,12 +50,11 @@ impl std::fmt::Display for PackError {
                 "Expected a complete file list, but got the delta format instead!"
             ),
             PackError::ObjectNotFound => write!(f, "The object was not found!"),
-            PackError::PathNotFound(p) => write!(f, "Corrupt pack, PathHandle {:?} not found", p),
-            PackError::SnapshotNotFound(s) => write!(f, "The snapshot '{}' was not found!", s),
+            PackError::PathNotFound(p) => write!(f, "Corrupt pack, PathHandle {p:?} not found"),
+            PackError::SnapshotNotFound(s) => write!(f, "The snapshot '{s}' was not found!"),
             PackError::SnapshotAlreadyExists(p, s) => write!(
                 f,
-                "A snapshot with the tag '{}' is already present in the pack '{}'!",
-                s, p,
+                "A snapshot with the tag '{s}' is already present in the pack '{p}'!",
             ),
             PackError::ChecksumMismatch(exp, got) => write!(
                 f,
@@ -63,18 +62,17 @@ impl std::fmt::Display for PackError {
                 hex::encode(exp),
                 hex::encode(got)
             ),
-            PackError::IOError(e) => write!(f, "Reading pack index: {}", e),
+            PackError::IOError(e) => write!(f, "Reading pack index: {e}"),
             PackError::DeserializeError(e) => {
-                write!(f, "Deserialization failed, corrupt pack index: {}", e)
+                write!(f, "Deserialization failed, corrupt pack index: {e}")
             }
             PackError::SerializeError(e) => {
-                write!(f, "Serialization failed: {}", e)
+                write!(f, "Serialization failed: {e}")
             }
             PackError::BadMagic => write!(f, "Bad pack magic, expected ELFS!"),
             PackError::BadPackVersion(v) => write!(
                 f,
-                "Pack version is too recent ({:?}), please upgrade elfshaker!",
-                v
+                "Pack version is too recent ({v:?}), please upgrade elfshaker!"
             ),
         }
     }
@@ -577,7 +575,7 @@ impl PackIndex {
     fn read_magic(rd: &mut impl Read) -> Result<(), PackError> {
         let mut magic = [0; 4];
         rd.read_exact(&mut magic)?;
-        if magic.ne(&*b"ELFS") {
+        if magic.ne(b"ELFS") {
             return Err(PackError::BadMagic);
         }
         let mut version = [0; 4];
@@ -589,7 +587,7 @@ impl PackIndex {
     }
 
     fn write_magic(wr: &mut impl Write) -> std::io::Result<()> {
-        wr.write_all(&*b"ELFS")?;
+        wr.write_all(b"ELFS")?;
         wr.write_all(&[0, 0, 0, 1])?;
         Ok(())
     }

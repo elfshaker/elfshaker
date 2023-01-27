@@ -9,8 +9,10 @@ pub struct Checkpoint {
     pub detail: Option<String>,
 }
 
+type CallbackFn<'a> = Option<Box<dyn Fn(&Checkpoint) + Sync + 'a>>;
+
 pub struct ProgressReporter<'a> {
-    callback: Option<Box<dyn Fn(&Checkpoint) + Sync + 'a>>,
+    callback: CallbackFn<'a>,
 }
 
 unsafe impl<'a> Send for ProgressReporter<'a> {}

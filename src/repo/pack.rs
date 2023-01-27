@@ -42,16 +42,14 @@ pub enum IdError {
 impl Display for IdError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::BadFormat(s) => write!(f, "Unrecognized identifier format '{}'!", s),
+            Self::BadFormat(s) => write!(f, "Unrecognized identifier format '{s}'!"),
             Self::InvalidPack(s) => write!(
                 f,
-                "Invalid pack identifier '{}'! Latin letters, digits, -, _ and / are allowed!",
-                s
+                "Invalid pack identifier '{s}'! Latin letters, digits, -, _ and / are allowed!"
             ),
             Self::InvalidSnapshot(s) => write!(
                 f,
-                "Invalid snapshot identifier '{}'! Latin letters, digits, - and _ are allowed!",
-                s
+                "Invalid snapshot identifier '{s}'! Latin letters, digits, - and _ are allowed!"
             ),
         }
     }
@@ -94,7 +92,7 @@ impl FromStr for PackId {
 impl Display for PackId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            PackId::Pack(s) => write!(f, "{}", s),
+            PackId::Pack(s) => write!(f, "{s}"),
         }
     }
 }
@@ -317,7 +315,7 @@ impl Pack {
 
     /// Opens the pack file for reading.
     fn open_pack(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
-        let file = open_file(&pack_path)?;
+        let file = open_file(pack_path)?;
         let file_size = file.metadata()?.len();
         let mut reader = io::BufReader::new(file);
 
@@ -336,7 +334,7 @@ impl Pack {
         let frame_readers = frame_offsets
             .iter()
             .map(|offset| -> Result<_, Error> {
-                let mut reader = open_file(&pack_path)?;
+                let mut reader = open_file(pack_path)?;
                 io::Seek::seek(&mut reader, io::SeekFrom::Start(header_size + offset))?;
                 let mut reader = Decoder::new(reader)?;
                 reader.set_parameter(DParameter::WindowLogMax(DEFAULT_WINDOW_LOG_MAX))?;
@@ -351,7 +349,7 @@ impl Pack {
 
     /// Backwards-compatible open_pack for the legacy pack format (no skippable frame/no header).
     fn open_pack_legacy(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
-        let file = open_file(&pack_path)?;
+        let file = open_file(pack_path)?;
         let file_size = file.metadata()?.len();
 
         // This manufactured pack header works for the current implementation. We might

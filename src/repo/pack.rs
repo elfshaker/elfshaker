@@ -3,8 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    fmt, fs,
+    fmt,
     fs::File,
+    fs::{self, Permissions},
     io,
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -491,9 +492,9 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
 
 /// Writes the object to the specified path, taking care
 /// of adjusting file permissions.
-fn write_object(buf: &[u8], path: &Path) -> Result<(), Error> {
+fn write_object(buf: &[u8], path: &Path, perm: Option<Permissions>) -> Result<(), Error> {
     fs::create_dir_all(path.parent().unwrap())?;
-    let mut f = create_file(path)?;
+    let mut f = create_file(path, perm)?;
     f.write_all(buf)?;
     Ok(())
 }
@@ -660,7 +661,7 @@ fn extract_files(
             path_buf.clear();
             path_buf.push(&output_dir);
             path_buf.push(&entry.path);
-            stats.write_time += measure_ok(|| write_object(&buf[..], &path_buf))?
+            stats.write_time += measure_ok(|| write_object(&buf[..], &path_buf, None))?
                 .0
                 .as_secs_f64();
         }

@@ -564,7 +564,7 @@ impl PackIndex {
 
     pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
         // TODO: Use AtomicCreateFile.
-        let wr = create_file(p.as_ref())?;
+        let wr = create_file(p.as_ref(), None)?;
         let mut wr = BufWriter::new(wr);
         Self::write_magic(&mut wr)?;
 

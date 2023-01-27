@@ -66,8 +66,7 @@ main() {
             (create_rand_file $APPROX_FILE_SIZE)
         done
         # Delete some files.
-        # TODO(peterwaller-arm): Reinstate this when #20 is fixed? Investigate if this is buggy?
-        # find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int_inclusive 0 $NUM_FILES) | xargs rm -v
+        find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int_inclusive 0 $NUM_FILES) | xargs rm -f
         "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --verbose
     done
 

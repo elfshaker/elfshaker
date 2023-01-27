@@ -200,6 +200,42 @@ test_extract_file_modes_preserved() {
   rm elfshaker_data/packs/p0.pack{,.idx}
 }
 
+test_extract_zero_length_noreadperm_works() {
+  umask 0022
+
+  touch foobar
+  "$elfshaker" store s0
+  chmod -rw foobar
+  "$elfshaker" store s1
+
+  "$elfshaker" extract s0
+  [[ "$(stat -c %A foobar)" == "-rw-r--r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+  "$elfshaker" extract s1
+  [[ "$(stat -c %A foobar)" == "----------" ]] || {
+    echo "Failed."
+    exit 1
+  }
+
+  "$elfshaker" pack p0
+  "$elfshaker" gc --loose-snapshots
+
+  "$elfshaker" extract s0
+  [[ "$(stat -c %A foobar)" == "-rw-r--r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+  "$elfshaker" extract s1
+  [[ "$(stat -c %A foobar)" == "----------" ]] || {
+    echo "Failed."
+    exit 1
+  }
+
+  rm elfshaker_data/packs/p0.pack{,.idx}
+}
+
 test_store_works() {
   "$elfshaker" --verbose extract --verify --reset "$pack":"$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
@@ -744,6 +780,7 @@ main() {
   run_test test_extract_again_works
   run_test test_extract_different_works
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_file_modes_preserved
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_zero_length_noreadperm_works
   run_test test_store_works
   run_test test_store_and_extract_different_works
   run_test test_store_twice_works

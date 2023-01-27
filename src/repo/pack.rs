@@ -26,8 +26,11 @@ use super::constants::{
 use super::error::Error;
 use super::fs::{create_file, open_file, FileMode};
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
-use crate::packidx::{FileEntry, ObjectChecksum, PackError};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
+use crate::{
+    packidx::{FileEntry, ObjectChecksum, PackError},
+    repo::fs::create_empty,
+};
 
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
 const EXTRA_ID_CHARS: &[char] = &['-', '_', '/'];
@@ -663,8 +666,15 @@ fn extract_files(
             path_buf.push(&output_dir);
             path_buf.push(&entry.path);
             stats.write_time += measure_ok(|| {
-                let file_mode = FileMode(entry.file_metadata.mode);
-                write_object(&buf[..], &path_buf, Some(file_mode))
+                let file_mode = entry.file_metadata.mode;
+                // Special case empty files, which aren't represented in
+                // the pack and have extra handling for missing
+                // permissions.
+                if entry.object_metadata.size == 0 {
+                    create_empty(&path_buf, file_mode)?;
+                    return Ok(());
+                }
+                write_object(&buf[..], &path_buf, Some(FileMode(file_mode)))
             })?
             .0
             .as_secs_f64();

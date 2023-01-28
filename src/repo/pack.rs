@@ -424,7 +424,7 @@ impl Pack {
                 // Compute maximum extent of data read.
                 entries
                     .iter()
-                    .map(|e| e.metadata.offset + e.metadata.size)
+                    .map(|e| e.object_metadata.offset + e.object_metadata.size)
                     .max()
             })
             .sum::<u64>();
@@ -538,16 +538,16 @@ fn assign_to_frames(
             .iter()
             // Find the index of the frame containing the object (objects are
             // assumed to not be split across two frames)
-            .rposition(|&x| x <= entry.metadata.offset)
+            .rposition(|&x| x <= entry.object_metadata.offset)
             .ok_or(Error::CorruptPack)?;
         // Compute the offset relative to that frame.
-        let local_offset = entry.metadata.offset - frame_decompressed_offset[frame_index];
+        let local_offset = entry.object_metadata.offset - frame_decompressed_offset[frame_index];
         let local_entry = FileEntry::new(
             entry.path.clone(),
             entry.checksum,
             ObjectMetadata {
                 offset: local_offset, // Replace global offset -> local offset
-                size: entry.metadata.size,
+                size: entry.object_metadata.size,
             },
         );
         frames[frame_index].push(local_entry);
@@ -621,8 +621,8 @@ fn extract_files(
     let mut entries: Vec<FileEntry> = entries.to_vec();
     // Sort objects to allow for forward-only seeking
     entries.sort_by(|x, y| {
-        let offset_x = x.metadata.offset;
-        let offset_y = y.metadata.offset;
+        let offset_x = x.object_metadata.offset;
+        let offset_y = y.object_metadata.offset;
         offset_x.cmp(&offset_y)
     });
 
@@ -634,7 +634,7 @@ fn extract_files(
         let mut path_buf = PathBuf::new();
         let mut pos = 0;
         for entry in entries {
-            let metadata = &entry.metadata;
+            let metadata = &entry.object_metadata;
             // Seek forward
             let discard_bytes = metadata.offset - pos;
             // Check if we need to read a new object.

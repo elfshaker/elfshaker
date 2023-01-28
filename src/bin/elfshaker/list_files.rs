@@ -74,7 +74,14 @@ fn print_files(
     let mut lines: Vec<_> = index
         .entries_from_handles(handles.iter())?
         .into_iter()
-        .map(|entry| format_file_row(fmt, &entry.checksum, &entry.path, entry.metadata.size))
+        .map(|entry| {
+            format_file_row(
+                fmt,
+                &entry.checksum,
+                &entry.path,
+                entry.object_metadata.size,
+            )
+        })
         .collect();
 
     lines.sort();

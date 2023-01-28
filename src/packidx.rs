@@ -115,14 +115,30 @@ pub const LOOSE_OBJECT_OFFSET: u64 = std::u64::MAX;
 #[derive(Hash, PartialEq, Clone, Copy, Serialize, Deserialize, Debug)]
 pub struct FileHandle {
     pub path: Handle,   // offset into path_pool
-    pub object: Handle, // ofset into object_pool
+    pub object: Handle, // offset into object_pool
+    #[serde(default)] // New in PackIndex version 2, default None.
+    pub file_metadata: FileMetadata,
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub struct FileMetadata {}
+
+/// Format version 1 packs will use a default file metadata.
+impl Default for FileMetadata {
+    fn default() -> Self {
+        Self {}
+    }
 }
 
 impl Eq for FileHandle {}
 
 impl FileHandle {
-    pub fn new(path: Handle, object: Handle) -> Self {
-        Self { path, object }
+    pub fn new(path: Handle, object: Handle, file_metadata: FileMetadata) -> Self {
+        Self {
+            path,
+            object,
+            file_metadata,
+        }
     }
 }
 
@@ -251,14 +267,21 @@ pub struct FileEntry {
     pub path: OsString,
     pub checksum: ObjectChecksum,
     pub object_metadata: ObjectMetadata,
+    pub file_metadata: FileMetadata,
 }
 
 impl FileEntry {
-    pub fn new(path: OsString, checksum: ObjectChecksum, object_metadata: ObjectMetadata) -> Self {
+    pub fn new(
+        path: OsString,
+        checksum: ObjectChecksum,
+        object_metadata: ObjectMetadata,
+        file_metadata: FileMetadata,
+    ) -> Self {
         Self {
             path,
             checksum,
-            object_metadata: object_metadata,
+            object_metadata,
+            file_metadata,
         }
     }
 }
@@ -268,6 +291,7 @@ pub struct FileEntryRef<'a> {
     pub path: &'a OsStr,
     pub checksum: &'a ObjectChecksum,
     pub object_metadata: &'a ObjectMetadata,
+    pub file_metadata: FileMetadata,
 }
 
 impl<'a> FileEntryRef<'a> {
@@ -275,11 +299,13 @@ impl<'a> FileEntryRef<'a> {
         path: &'a OsStr,
         checksum: &'a ObjectChecksum,
         object_metadata: &'a ObjectMetadata,
+        file_metadata: FileMetadata,
     ) -> Self {
         Self {
             path,
             checksum,
             object_metadata,
+            file_metadata,
         }
     }
 }
@@ -290,6 +316,7 @@ impl<'a> From<FileEntryRef<'a>> for FileEntry {
             path: entry_ref.path.to_owned(),
             checksum: *entry_ref.checksum,
             object_metadata: *entry_ref.object_metadata,
+            file_metadata: entry_ref.file_metadata,
         }
     }
 }
@@ -315,6 +342,7 @@ pub struct PackIndex {
     current: HashSet<FileHandle>,
 }
 
+/// Packs which don't
 impl Default for PackIndex {
     fn default() -> Self {
         Self::new()
@@ -397,6 +425,7 @@ impl PackIndex {
                 .lookup(handle.object)
                 .ok_or(PackError::ObjectNotFound)?,
             object_metadata: *self.object_metadata.get(&handle.object).unwrap(),
+            file_metadata: handle.file_metadata,
         })
     }
     pub fn handle_to_entry_ref<'a>(
@@ -413,6 +442,7 @@ impl PackIndex {
                 .lookup(handle.object)
                 .ok_or(PackError::ObjectNotFound)?,
             object_metadata: self.object_metadata.get(&handle.object).unwrap(),
+            file_metadata: handle.file_metadata,
         })
     }
     pub fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
@@ -422,6 +452,7 @@ impl PackIndex {
         Ok(FileHandle {
             path: self.path_pool.get_or_insert(&entry.path),
             object: object_handle,
+            file_metadata: entry.file_metadata,
         })
     }
 
@@ -573,6 +604,11 @@ impl PackIndex {
         Ok(())
     }
 
+    // Max supported version of the pack index by this version of elfshaker.
+    // It's intended to remain backwards compatible with previous packs.
+    // When changing the on-disk format it's necessary to bump this integer.
+    const MAX_VERSION: u32 = 2;
+
     fn read_magic(rd: &mut impl Read) -> Result<(), PackError> {
         let mut magic = [0; 4];
         rd.read_exact(&mut magic)?;
@@ -581,7 +617,7 @@ impl PackIndex {
         }
         let mut version = [0; 4];
         rd.read_exact(&mut version)?;
-        if version.gt(&[0, 0, 0, 1]) {
+        if u32::from_be_bytes(version) > PackIndex::MAX_VERSION {
             return Err(PackError::BadPackVersion(version));
         }
         Ok(())
@@ -589,7 +625,7 @@ impl PackIndex {
 
     fn write_magic(wr: &mut impl Write) -> std::io::Result<()> {
         wr.write_all(b"ELFS")?;
-        wr.write_all(&[0, 0, 0, 1])?;
+        wr.write_all(&u32::to_be_bytes(PackIndex::MAX_VERSION)[..])?;
         Ok(())
     }
 }

@@ -144,6 +144,61 @@ test_extract_different_works() {
   verify_snapshot "$pack":"$snapshot_b"
 }
 
+test_extract_file_modes_preserved() {
+  umask 0002
+  touch foobar
+  [[ "$(stat -c %A foobar)" == "-rw-rw-r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+
+  # Pack an empty file called foobar, change the mode.
+  "$elfshaker" store s0
+  chmod +x foobar
+  "$elfshaker" store s1
+  chmod -x foobar
+  "$elfshaker" store s2
+
+  # Verify that extract from loose snapshot sets the expected mode.
+  "$elfshaker" extract s0
+  [[ "$(stat -c %A foobar)" == "-rw-rw-r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+  "$elfshaker" extract s1
+  [[ "$(stat -c %A foobar)" == "-rwxrwxr-x" ]] || {
+    echo "Failed."
+    exit 1
+  }
+  "$elfshaker" extract s2
+  [[ "$(stat -c %A foobar)" == "-rw-rw-r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+
+  # Verify that extracting from a pack  sets the mode.
+  "$elfshaker" pack p0
+  "$elfshaker" gc --loose-snapshots
+
+  "$elfshaker" extract p0:s0
+  [[ "$(stat -c %A foobar)" == "-rw-rw-r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+  "$elfshaker" extract p0:s1
+  [[ "$(stat -c %A foobar)" == "-rwxrwxr-x" ]] || {
+    echo "Failed."
+    exit 1
+  }
+  "$elfshaker" extract p0:s2
+  [[ "$(stat -c %A foobar)" == "-rw-rw-r--" ]] || {
+    echo "Failed."
+    exit 1
+  }
+
+  rm elfshaker_data/packs/p0.pack{,.idx}
+}
+
 test_store_works() {
   "$elfshaker" --verbose extract --verify --reset "$pack":"$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
@@ -676,6 +731,7 @@ main() {
   run_test test_extract_reset_on_empty_works
   run_test test_extract_again_works
   run_test test_extract_different_works
+  run_test test_extract_file_modes_preserved
   run_test test_store_works
   run_test test_store_and_extract_different_works
   run_test test_store_twice_works

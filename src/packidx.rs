@@ -250,15 +250,15 @@ impl Snapshot {
 pub struct FileEntry {
     pub path: OsString,
     pub checksum: ObjectChecksum,
-    pub metadata: ObjectMetadata,
+    pub object_metadata: ObjectMetadata,
 }
 
 impl FileEntry {
-    pub fn new(path: OsString, checksum: ObjectChecksum, metadata: ObjectMetadata) -> Self {
+    pub fn new(path: OsString, checksum: ObjectChecksum, object_metadata: ObjectMetadata) -> Self {
         Self {
             path,
             checksum,
-            metadata,
+            object_metadata: object_metadata,
         }
     }
 }
@@ -267,19 +267,19 @@ impl FileEntry {
 pub struct FileEntryRef<'a> {
     pub path: &'a OsStr,
     pub checksum: &'a ObjectChecksum,
-    pub metadata: &'a ObjectMetadata,
+    pub object_metadata: &'a ObjectMetadata,
 }
 
 impl<'a> FileEntryRef<'a> {
     pub fn new(
         path: &'a OsStr,
         checksum: &'a ObjectChecksum,
-        metadata: &'a ObjectMetadata,
+        object_metadata: &'a ObjectMetadata,
     ) -> Self {
         Self {
             path,
             checksum,
-            metadata,
+            object_metadata,
         }
     }
 }
@@ -289,7 +289,7 @@ impl<'a> From<FileEntryRef<'a>> for FileEntry {
         FileEntry {
             path: entry_ref.path.to_owned(),
             checksum: *entry_ref.checksum,
-            metadata: *entry_ref.metadata,
+            object_metadata: *entry_ref.object_metadata,
         }
     }
 }
@@ -358,7 +358,7 @@ impl PackIndex {
         let mut size_handle = self
             .object_metadata
             .iter()
-            .map(|(handle, metadata)| (metadata.size, *handle))
+            .map(|(handle, om)| (om.size, *handle))
             .collect::<Vec<_>>();
 
         // Heuristic for good compression: Sort objects by size. This happens to
@@ -396,7 +396,7 @@ impl PackIndex {
                 .object_pool
                 .lookup(handle.object)
                 .ok_or(PackError::ObjectNotFound)?,
-            metadata: *self.object_metadata.get(&handle.object).unwrap(),
+            object_metadata: *self.object_metadata.get(&handle.object).unwrap(),
         })
     }
     pub fn handle_to_entry_ref<'a>(
@@ -412,12 +412,13 @@ impl PackIndex {
                 .object_pool
                 .lookup(handle.object)
                 .ok_or(PackError::ObjectNotFound)?,
-            metadata: self.object_metadata.get(&handle.object).unwrap(),
+            object_metadata: self.object_metadata.get(&handle.object).unwrap(),
         })
     }
     pub fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
         let object_handle = self.object_pool.get_or_insert(&entry.checksum);
-        self.object_metadata.insert(object_handle, entry.metadata);
+        self.object_metadata
+            .insert(object_handle, entry.object_metadata);
         Ok(FileHandle {
             path: self.path_pool.get_or_insert(&entry.path),
             object: object_handle,

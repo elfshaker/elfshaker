@@ -96,7 +96,7 @@ fn print_snapshots(
             if is_file_size_required(fmt) {
                 index.for_each_snapshot(|snapshot, entries| {
                     let file_count = entries.len();
-                    let file_size = entries.iter().map(|entry| entry.metadata.size).sum();
+                    let file_size = entries.iter().map(|entry| entry.object_metadata.size).sum();
                     iter(snapshot, file_size, file_count)
                 })?;
             } else {

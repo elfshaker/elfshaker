@@ -26,13 +26,13 @@ ln -s ~/.local/opt/elfshaker/elfshaker ~/.local/bin/elfshaker
 
 elfshaker is written in Rust, so you will need to install the Rust build system.
 - Install using rustup from https://www.rust-lang.org/tools/install
-- Install toolchain version 1.55
+- Install a stable toolchain (1.67 known to work, YMMV for older versions):
   - ```bash
-    rustup install 1.55
+    rustup install stable
     ```
 - Build elfshaker in Release mode
   - ```bash
-    cargo +1.55 build --release --bin elfshaker
+    cargo +stable build --release --bin elfshaker
     ```
   - ```bash
     ./target/release/elfshaker --help

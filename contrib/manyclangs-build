@@ -135,7 +135,7 @@ main() {
         chmod +x link.sh
 
         # Avoid writing binaries out to disk, saves disk space when we're writing to tmpfs.
-        sed -E '/TARGET_FILE = bin\/(clang-ast-dump|(clang|llvm)-tblgen)/!s|TARGET_FILE = bin/.*|TARGET_FILE = /dev/null|' build.ninja > build.patched.ninja
+        sed -E '/TARGET_FILE = bin\/(clang-ast-dump|(clang|llvm)(-min)?-tblgen)/!s|TARGET_FILE = bin/.*|TARGET_FILE = /dev/null|' build.ninja > build.patched.ninja
     fi
 
     patch_clang_version "$COMMIT_SHA"

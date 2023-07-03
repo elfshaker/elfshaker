@@ -43,10 +43,12 @@ ELFSHAKER_ARCH=${ELFSHAKER_ARCH-$MANYCLANGS_ARCH}
 # If modifying this, beware of the contrib scripts.
 MANYCLANGS_CLANG_VERSION=${MANYCLANGS_CLANG_VERSION-12}
 
-# Installation path of elfshaker. Installed if not present.
+# Installation path of elfshaker. Installed by this script if not present.
 ELFSHAKER_BIN=${ELFSHAKER_BIN-$HOME/.local/bin/elfshaker}
 ELFSHAKER_BIN_DIR=$(dirname "${ELFSHAKER_BIN}")
 mkdir -p "${ELFSHAKER_BIN_DIR}"
+
+ELFSHAKER_ROOT_DIR=$(dirname "${ELFSHAKER_BIN_DIR}")
 
 export PATH="${ELFSHAKER_BIN_DIR}:$PATH"
 
@@ -56,7 +58,6 @@ install_system_dependencies() {
         command -v cc &&
         command -v clang-${MANYCLANGS_CLANG_VERSION} &&
         command -v curl &&
-        command -v cmake &&
         command -v git &&
         command -v go &&
         command -v jq &&
@@ -72,7 +73,6 @@ install_system_dependencies() {
     fi
     PKGS=(
         clang-${MANYCLANGS_CLANG_VERSION}
-        cmake
         curl
         g++
         gcc
@@ -87,6 +87,32 @@ install_system_dependencies() {
     )
     sudo apt update
     sudo apt install -y "${PKGS[@]}"
+}
+
+install_cmake() {
+    if command -v cmake > /dev/null
+    then
+        return
+    fi
+    CMAKE_VERSION=3.26.4
+    case "$(uname -m)" in
+        aarch64 )
+            CMAKE_HASH=1c9843c92f40bee1a16baa12871693d3e190c9a222259a89e406d4d9aae6cf74
+            ;;
+        x86_64 )
+            CMAKE_HASH=ba1e0dcc710e2f92be6263f9617510b3660fa9dc409ad2fb8190299563f952a0
+            ;;
+        * )
+            echo "Unknown platform $(uname -m)"
+            exit 1
+            ;;
+    esac
+
+
+    FILENAME=cmake-${CMAKE_VERSION}-linux-$(uname -m)
+    curl -Lo cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/${FILENAME}.tar.gz
+    echo "$CMAKE_HASH"'  cmake.tar.gz' | sha256sum --check -
+    tar x --strip-components=1 --directory "${ELFSHAKER_ROOT_DIR}" -f cmake.tar.gz
 }
 
 fetch_elfshaker_source() {
@@ -178,8 +204,8 @@ install_ninja_jobclient() {
 install_ccache_from_source() {
     if [ ! -d ccache ]
     then
-        curl -Lo ccache.tar.gz https://github.com/ccache/ccache/archive/refs/tags/v4.6.1.tar.gz
-        echo '5bad04666e16026460d6ca11b2562a573dbc62dade5c86a541ac3c3baa3bd1e0  ccache.tar.gz' | sha256sum --check -
+        curl -Lo ccache.tar.gz https://github.com/ccache/ccache/archive/refs/tags/v4.8.2.tar.gz
+        echo '3ba679c9e91101bfc3f3c0aab6622d8132f83e2e3c92633dcc61eef810e92ce0  ccache.tar.gz' | sha256sum --check -
         mkdir -p ccache
         tar xf ccache.tar.gz --directory ccache --strip-components=1
     fi
@@ -205,13 +231,14 @@ main() {
     install_elfshaker
     install_jobserver
     install_ninja_jobclient
+    install_cmake
     install_ccache_from_source
     install_compdb2line
 
     echo "Dependencies installed."
     echo
     echo "Now run, e.g:"
-    echo 'sudo mkdir /build && sudo mount -t tmpfs -o size=100G none /build && sudo chown $(id -u):$(id -g) /build && cd /build && time PATH=$HOME/elfshaker/contrib:'"$ELFSHAKER_BIN_DIR"':$PATH GIT_DIR=${HOME}/llvm-project/.git $HOME/elfshaker/contrib/manyclangs-build-month '$(date "+%Y %m")
+    echo 'sudo mkdir /build && sudo mount -t tmpfs -o size=100G none /build && sudo chown $(id -u):$(id -g) /build && cd /build && mkdir '$(date "+%Y%m")' && cd '$(date "+%Y%m")' && time PATH=$HOME/elfshaker/contrib:'"$ELFSHAKER_BIN_DIR"':$PATH GIT_DIR=${HOME}/llvm-project/.git $HOME/elfshaker/contrib/manyclangs-build-month '$(date "+%Y %m")
 }
 
 main

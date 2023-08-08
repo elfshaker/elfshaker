@@ -584,10 +584,12 @@ impl Repository {
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
             let mut fd = File::open(&file_path)?;
-            let mut buf = vec![];
-            fd.read_to_end(&mut buf)?;
-            let mode = fd.metadata()?.permissions().mode();
-            drop(fd);
+            let (buf, mode) = {
+                let mut buf = vec![];
+                fd.read_to_end(&mut buf)?;
+                let mode = fd.metadata()?.permissions().mode();
+                (buf, mode)
+            };
             let mut checksum = [0u8; 20];
             let mut hasher = Sha1::new();
             hasher.input(&buf);

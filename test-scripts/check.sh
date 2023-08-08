@@ -116,7 +116,7 @@ serve_file_http() {
   port=$1
   file="$2"
   content_length="$(wc -c <"$file")"
-  (printf "HTTP/1.1 200 OK\r\nContent-Length: $content_length\r\n\r\n"; cat "$file") | nc -l -p $port
+  (printf "HTTP/1.1 200 OK\r\nContent-Length: $content_length\r\n\r\n"; cat "$file") | nc -l $port
 }
 
 # TESTS

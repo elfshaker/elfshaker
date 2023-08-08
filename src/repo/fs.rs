@@ -94,6 +94,27 @@ pub fn create_file<P: AsRef<Path>>(path: P, perm: Option<Permissions>) -> io::Re
     }
 }
 
+// create_empty creates an empty file with the given permissions. It
+// exists particularly to support the case where it's being requested to
+// create an empty file with no permissions, or overwrite one with no
+// permissions, in which case a File::create may fail. To support this
+// case, first check if the file is the requested size, and if so, only
+// set its permission bits. This also protects against overwriting a
+// non-empty file which lacks permission (those may contain precious
+// data and should raise an appropriate error).
+pub fn create_empty<P: AsRef<Path>>(path: P, perm: Option<Permissions>) -> io::Result<()> {
+    if fs::metadata(path.as_ref()).map_or(true, |m| m.len() != 0) {
+        // File doesn't exist or is wrong size. Recreate it as zero
+        // bytes (or fail if the permission bits don't allow it, to
+        // protect against clobbering a file which has content and no
+        // permissions to overwrite it).
+        let fd = File::create(path.as_ref())?;
+        perm.map_or(Ok(()), |perm| fd.set_permissions(perm))
+    } else {
+        perm.map_or(Ok(()), |perm| fs::set_permissions(path.as_ref(), perm))
+    }
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 const OS_ERROR_DIR_NOT_EMPTY: i32 = 39 /* ENOTEMPTY */;
 #[cfg(windows)]

@@ -31,11 +31,14 @@ use super::fs::{
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
-use crate::packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
+};
+use crate::{
+    packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex},
+    repo::fs::create_empty,
 };
 
 /// A struct specifying the the extract options.
@@ -583,7 +586,29 @@ impl Repository {
         let threads = num_cpus::get();
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
-            let mut fd = File::open(&file_path)?;
+            let mut fd = match File::open(&file_path) {
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    let md = fs::metadata(&file_path)?;
+                    if md.len() != 0 {
+                        return Err(e);
+                    }
+                    // Special case file of zero byte length with no
+                    // permission to read. We can still represent this,
+                    // and it has uses (e.g. for testing)
+                    return Ok(FileEntry::new(
+                        file_path.into(),
+                        [0; 20],
+                        ObjectMetadata {
+                            offset: LOOSE_OBJECT_OFFSET,
+                            size: 0,
+                        },
+                        Some(FileMetadata {
+                            mode: md.permissions().mode(),
+                        }),
+                    ));
+                }
+                r => r,
+            }?;
             let (buf, mode) = {
                 let mut buf = vec![];
                 fd.read_to_end(&mut buf)?;
@@ -682,12 +707,17 @@ impl Repository {
             opts.num_workers as usize,
             object_partitions.into_iter(),
             |objects| {
-                let object_readers = objects.iter().map(|&handle| {
+                let object_readers = objects.iter().map(|&handle| -> io::Result<Box<dyn Read>> {
                     // TODO: Method of obtaining readers from packs? Or we can
                     // just assume packs first get unpacked.
-                    Ok(Box::new(open_file(
-                        self.loose_object_path(index.handle_to_checksum(handle)),
-                    )?))
+                    let checksum = index.handle_to_checksum(handle);
+                    // All zero checksum is special case of empty object, which
+                    // is not represented on disk.
+                    if checksum.iter().all(|x| *x == 0) {
+                        return Ok(Box::new(&[] as &[u8])); // Empty reader.
+                    }
+
+                    Ok(Box::new(open_file(self.loose_object_path(checksum))?))
                 });
 
                 let mut buf = vec![];
@@ -1018,21 +1048,28 @@ impl Repository {
             dest_paths.push(dest_path.clone());
             fs::create_dir_all(dest_path.parent().unwrap())?;
             let object_path = self.loose_object_path(&entry.checksum);
-            fs::copy(&object_path, &dest_path).map_err(|e| {
-                io::Error::new(
-                    e.kind(),
-                    format!(
-                        "couldn't copy {} to {}",
-                        object_path.display(),
-                        dest_path.display()
-                    ),
-                )
-            })?;
-
-            entry
+            let perm = entry
                 .file_metadata
-                .map(|md| Permissions::from_mode(md.mode))
-                .map_or(Ok(()), |p| fs::set_permissions(&dest_path, p))?;
+                .map(|fm| Permissions::from_mode(fm.mode));
+            if entry.object_metadata.size == 0 {
+                // Special case empty files, which aren't represented in
+                // the store and have extra handling for missing permissions.
+                create_empty(&dest_path, perm)?;
+                continue;
+            } else {
+                fs::copy(&object_path, &dest_path).map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!(
+                            "couldn't copy {} to {}",
+                            object_path.display(),
+                            dest_path.display()
+                        ),
+                    )
+                })?;
+            }
+
+            perm.map_or(Ok(()), |p| fs::set_permissions(&dest_path, p))?;
         }
 
         if verify {

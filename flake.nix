@@ -1,63 +1,127 @@
 {
   inputs = {
-    naersk.url = "github:nix-community/naersk/cddffb5aa211f50c4b8750adbec0bbbdfb26bb9f";
+    naersk.url = "github:nix-community/naersk";
     naersk.inputs.nixpkgs.follows = "nixpkgs";
+    # Note: the flake.lock revision of this package determines the rust
+    # version used.
     fenix.url = "github:nix-community/fenix";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
-    nixpkgs.url = "github:NixOS/nixpkgs/release-22.05";
-    utils.url = "github:numtide/flake-utils/7e2a3b3dfd9af950a856d66b0a7d01e3c18aa249";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.05";
   };
 
-  outputs = { self, nixpkgs, utils, naersk, fenix }:
-    utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-        naersk-lib = pkgs.callPackage naersk { };
-      in
-      {
-        defaultPackage = naersk-lib.buildPackage {
-          root = ./.;
-        };
+  outputs = { self, nixpkgs, naersk, fenix }: let
+    inherit (nixpkgs) lib;
+    forAllSystems = lib.genAttrs lib.systems.flakeExposed;
+  in {
 
-        defaultApp = utils.lib.mkApp {
-          drv = self.defaultPackage."${system}";
-        };
+    devShell = forAllSystems (system: let
+      pkgs = import nixpkgs { inherit system; };
+    in pkgs.mkShell {
+      nativeBuildInputs = [ self.packages.${system}.rustToolchain ];
+      CARGO_BUILD_TARGET = pkgs.stdenv.hostPlatform.config;
+      NIX_PATH = "nixpkgs=${nixpkgs.outPath}";
+    });
 
-        devShell = with pkgs; mkShell {
-          nativeBuildInputs = [
-            pre-commit
-            pkgs.pkgsStatic.buildPackages.gcc # aarch64-unknown-linux-musl-gcc
-            pkg-config
-            gcc
-            (python310.withPackages (pkgs: with pkgs; [
-              msgpack
-              ipython
-            ]))
-          ] ++ (with fenix.packages.${system}; [
-            (
-              combine [
-                stable.cargo
-                stable.clippy
-                rust-analyzer
-                stable.rust-src
-                stable.rustc
-                stable.rustfmt
-                targets.aarch64-unknown-linux-gnu.stable.rust-std
-                targets.aarch64-unknown-linux-musl.stable.rust-std
-                targets.x86_64-unknown-linux-musl.stable.rust-std
-              ]
-            )
-          ]);
+    packages = forAllSystems (system: let
+      pkgs = import nixpkgs { inherit system; };
 
-          CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-gcc";
-          CC_aarch64_unknown_linux_gnu = "cc";
+      rustToolchain = with fenix.packages.${system};
+        combine [
+          stable.cargo
+          stable.clippy
+          rust-analyzer
+          stable.rust-src
+          stable.rustc
+          stable.rustfmt
+          targets.aarch64-unknown-linux-gnu.stable.rust-std
+          targets.aarch64-unknown-linux-musl.stable.rust-std
+          targets.aarch64-unknown-linux-musl.stable.rust-std
+          targets.x86_64-unknown-linux-musl.stable.rust-std
+          targets.x86_64-pc-windows-gnu.stable.rust-std
+        ];
 
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsStatic.buildPackages.gcc.cc.lib}/aarch64-unknown-linux-musl/lib -lstatic=stdc++";
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "aarch64-unknown-linux-musl-ld";
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "cc";
+      naersk' = naersk.lib.${system}.override {
+        cargo = rustToolchain;
+        rustc = rustToolchain;
+      };
 
-          NIX_PATH = "nixpkgs=${nixpkgs.outPath}";
-        };
-      });
+      naerskBuildPackage = target: args:
+        naersk'.buildPackage (args // { CARGO_BUILD_TARGET = target; } // cargoConfig);
+
+      # On Linux, configure cross compilers.
+      cargoConfig = lib.optionalAttrs pkgs.stdenv.isLinux {
+        CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-gcc";
+        CC_aarch64_unknown_linux_gnu = "cc";
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic.stdenv.cc.cc.lib}/aarch64-unknown-linux-musl/lib -lstatic=stdc++ -C target-feature=+crt-static -C link-arg=-lc";
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "aarch64-unknown-linux-musl-ld";
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "cc";
+
+        CC_x86_64_unknown_linux_musl = "x86_64-unknown-linux-musl-gcc";
+        CC_x86_64_unknown_linux_gnu = "cc";
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsCross.musl64.pkgsStatic.stdenv.cc.cc.lib}/x86_64-unknown-linux-musl/lib -lstatic=stdc++ -C target-feature=+crt-static";
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "x86_64-unknown-linux-musl-ld";
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "cc";
+
+        # (Not fully tested, build gets as far as programming errors
+        # relating to our handling of file permissions which needs
+        # fixing, but this may work.)
+        CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc";
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.stdenv.cc.cc.lib}/x86_64-w64-mingw32/lib -lstatic=stdc++.dll";
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-ld";
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeScript "wine-wrapper" ''
+          export WINEPREFIX="$(mktemp -d)"
+          exec wine64 $@
+        '';
+      };
+
+      packages = self.packages.${system};
+      args = { inherit naerskBuildPackage rustToolchain; };
+      nativePlatform = pkgs.stdenv.buildPlatform;
+      nativeArch = nativePlatform.qemuArch; # (the correct spelling)
+
+
+    in {
+      inherit rustToolchain;
+
+      # Native package build.
+      default = packages.elfshaker;
+      elfshaker = pkgs.callPackage ./elfshaker.nix args;
+
+      # Release binaries.
+      elfshaker-aarch64-musl = pkgs.pkgsCross.aarch64-multiplatform-musl.callPackage ./elfshaker.nix args;
+      elfshaker-x86_64-musl = pkgs.pkgsCross.musl64.callPackage ./elfshaker.nix args;
+      elfshaker-x86_64-windows = pkgs.pkgsCross.mingwW64.callPackage ./elfshaker.nix args;
+      # Note: aarch64-windows cross compiler doesn't yet exist.
+      # elfshaker-aarch64-windows = pkgs.pkgsCross.?.callPackage ./elfshaker.nix args;
+
+      # Note: Can't cross compile to darwin from linux, can't currently
+      # cross compile between architectures on darwin (but these work on
+      # their respective architectures).
+      elfshaker-aarch64-darwin = pkgs.pkgsCross.aarch64-darwin.callPackage ./elfshaker.nix args;
+      elfshaker-x86_64-darwin = pkgs.pkgsCross.x86_64-darwin.callPackage ./elfshaker.nix args;
+
+      release = pkgs.runCommandNoCC "elfshaker-release" {} (
+        if nativePlatform.isLinux then ''
+            tar czf elfshaker-aarch64-musl.tar.gz --directory ${packages.elfshaker-aarch64-musl}/bin elfshaker
+            sha256sum elfshaker-aarch64-musl.tar.gz > elfshaker-aarch64-musl.tar.gz.sha256sum
+
+            tar czf elfshaker-x86_64-musl.tar.gz --directory ${packages.elfshaker-x86_64-musl}/bin elfshaker
+            sha256sum elfshaker-x86_64-musl.tar.gz > elfshaker-x86_64-musl.tar.gz.sha256sum
+
+            # TODO: Windows cross compile.
+
+            mkdir $out
+            cp *.tar.gz* $out
+        ''
+        else if nativePlatform.isDarwin then ''
+          tar czf elfshaker-${nativePlatform.darwinArch}-darwin${nativePlatform.darwinMinVersion}.tar.gz --directory ${packages.elfshaker}/bin elfshaker
+          sha256sum elfshaker-${nativePlatform.darwinArch}-darwin${nativePlatform.darwinMinVersion}.tar.gz > elfshaker-${nativePlatform.darwinArch}-darwin${nativePlatform.darwinMinVersion}.tar.gz.sha256sum
+
+          mkdir $out
+          cp *.tar.gz* $out
+        ''
+        else builtins.throw "elfshaker flake: Unknown platform ${nativePlatform.config}"
+      );
+    });
+  };
 }
-

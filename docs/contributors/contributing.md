@@ -2,7 +2,7 @@
 
 Contributions are welcome and appreciated. Any work you submit is considered to be under the Apache 2.0 software license (see [LICENSE](../../LICENSE)), unless otherwise stated.
 
-Please make sure to go though the following steps before you open a pull request.
+Please make sure to go through the following steps before you open a pull request that edits the source code.
 
 ## Building
 

@@ -20,7 +20,7 @@
 **Important: Understanding of the following concepts is critical to working with the tool.**
 
 - Snapshot
-    - Store a directory state (a set of files)
+    - Stores a directory state (a set of files)
     - Created by `elfshaker store`
     - Can be packed into a pack file by `elfshaker pack` (otherwise called a loose snapshot)
 - Repository

@@ -450,7 +450,7 @@ test_head_updated_after_packing() {
 
 test_touched_file_dirties_repo() {
   "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
-  find . -not -path "./elfshaker_data/*" -exec touch -d "$(date --date='now +10 sec')" {} +
+  find . -not -path "./elfshaker_data/*" -exec touch -d "$(date -R --date='now +10 sec')" {} +
   if "$elfshaker" extract --verbose --verify "$pack":"$snapshot_b"; then
     echo 'Failed to detect files changes!'
     exit 1
@@ -459,7 +459,7 @@ test_touched_file_dirties_repo() {
 
 test_dirty_repo_can_be_forced() {
   "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
-  find . -not -path "./elfshaker_data/*" -exec touch -d "$(date --date='now +10 sec')" {} +
+  find . -not -path "./elfshaker_data/*" -exec touch -d "$(date -R --date='now +10 sec')" {} +
   if ! "$elfshaker" extract --verbose --force --verify "$pack":"$snapshot_b"; then
     echo 'Could not use --force to skip dirty repository checks!'
     exit 1

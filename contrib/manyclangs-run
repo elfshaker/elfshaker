@@ -38,7 +38,7 @@ link_and_run() {
     LINK_AND_RUN_COMMAND="bash ./link.sh $COMMAND_BASENAME || exit 125; ./bin/$@"
 
     if [ "${USE_DOCKER_QEMU-,,}" = "aarch64" ]; then
-        TEST_OBJECT=lib/Object/CMakeFiles/LLVMObject.dir/Object.cpp.o
+        TEST_OBJECT=${ELFSHAKER_DIR}/lib/Object/CMakeFiles/LLVMObject.dir/Object.cpp.o
         HOST_ARCH="$(get_file_arch /bin/cat)"
         TARGET_ARCH="$(get_file_arch "$TEST_OBJECT")"
         if [ "$HOST_ARCH" != "$TARGET_ARCH" ] && [ "$TARGET_ARCH" = "AArch64" ]; then

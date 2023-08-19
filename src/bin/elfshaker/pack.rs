@@ -204,6 +204,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .help(leak_static_str(format!("The ZStandard compression level to use (up to {}). Negative values enable fast compression.",
                     compression_level_range.end())))
                 .default_value("22")
+                .allow_hyphen_values(true)
         )
         .arg(
             Arg::with_name("frames")

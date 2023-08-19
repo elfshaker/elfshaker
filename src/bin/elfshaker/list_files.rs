@@ -48,17 +48,25 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                     \t%o - file checksum\n\
                     \t%f - file name\n\
                     \t%h - human-readable size\n\
-                    \t%b - size in bytes\n",
+                    \t%b - size in bytes\n\
+                    \t%p - permissions",
                 ),
         )
 }
 
-fn format_file_row(fmt: &str, checksum: &ObjectChecksum, file_name: &OsStr, size: u64) -> String {
+fn format_file_row(
+    fmt: &str,
+    checksum: &ObjectChecksum,
+    file_name: &OsStr,
+    size: u64,
+    file_mode: u32,
+) -> String {
     fmt.to_owned()
         .replace("%o", &hex::encode(checksum))
         .replace("%f", &file_name.to_string_lossy())
         .replace("%h", &format_size(size))
         .replace("%b", &size.to_string())
+        .replace("%p", &format!("{:o}", file_mode))
 }
 
 fn print_files(
@@ -80,6 +88,7 @@ fn print_files(
                 &entry.checksum,
                 &entry.path,
                 entry.object_metadata.size,
+                entry.file_metadata.mode,
             )
         })
         .collect();

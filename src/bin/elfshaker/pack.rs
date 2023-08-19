@@ -201,8 +201,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
             Arg::with_name("compression-level")
                 .takes_value(true)
                 .long("compression-level")
-                .help(leak_static_str(format!("The level of compression to use (between {} and {})",
-                    compression_level_range.start(),
+                .help(leak_static_str(format!("The ZStandard compression level to use (up to {}). Negative values enable fast compression.",
                     compression_level_range.end())))
                 .default_value("22")
         )

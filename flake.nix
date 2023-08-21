@@ -16,11 +16,16 @@
 
     devShell = forAllSystems (system: let
       pkgs = import nixpkgs { inherit system; };
-    in pkgs.mkShell {
-      nativeBuildInputs = [ self.packages.${system}.rustToolchain ];
+    in pkgs.mkShell (self.packages.${system}.elfshakerCargoConfig // {
+      nativeBuildInputs = [
+        self.packages.${system}.rustToolchain
+        pkgs.pkgsCross.aarch64-multiplatform-musl.stdenv.cc
+        pkgs.pkgsCross.musl64.stdenv.cc
+        pkgs.pkgsCross.mingwW64.stdenv.cc
+      ];
       CARGO_BUILD_TARGET = pkgs.stdenv.hostPlatform.config;
       NIX_PATH = "nixpkgs=${nixpkgs.outPath}";
-    });
+    }));
 
     packages = forAllSystems (system: let
       pkgs = import nixpkgs { inherit system; };
@@ -82,6 +87,7 @@
 
     in {
       inherit rustToolchain;
+      elfshakerCargoConfig = cargoConfig;
 
       # Native package build.
       default = packages.elfshaker;

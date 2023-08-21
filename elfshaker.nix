@@ -15,6 +15,7 @@ let
 in
 
 naerskBuildPackage target {
+  name = "elfshaker-${stdenv.hostPlatform.config}";
   root = ./.;
 
   # Check is broken on x86 musl with:

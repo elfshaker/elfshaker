@@ -23,7 +23,7 @@ input=$(realpath "$2")
 pack=$(basename -- "$input")
 pack="${pack%.*}"
 
-temp_dir=$(realpath /dev/shm/"test-T$(timestamp)")
+temp_dir=$(realpath ${TMP-${TMPDIR-/tmp}}/"test-T$(timestamp)")
 trap 'trap_exit' EXIT
 
 cleanup() {

@@ -14,7 +14,7 @@ mod store;
 mod update;
 mod utils;
 
-use clap::{App, Arg, ArgMatches};
+use clap::{crate_version, App, Arg, ArgMatches};
 use elfshaker::log::Logger;
 use log::error;
 use std::error::Error;
@@ -65,6 +65,7 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
 
 fn get_app() -> App<'static, 'static> {
     App::new("elfshaker")
+        .version(crate_version!())
         .subcommand(extract::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())

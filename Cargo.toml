@@ -3,7 +3,7 @@
 
 [package]
 name = "elfshaker"
-version = "0.1.0"
+version = "1.0.0-rc1"
 authors = ["Veselin Karaganev <veselin.karaganev@arm.com>", "Peter Waller <peter.waller@arm.com>"]
 edition = "2018"
 

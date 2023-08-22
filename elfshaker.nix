@@ -18,11 +18,7 @@ naerskBuildPackage target {
   name = "elfshaker-${stdenv.hostPlatform.config}";
   root = ./.;
 
-  # Check is broken on x86 musl with:
-  # >   = note: /nix/store/hjmy3kzf3cv15argfc10mgml1hbnyzph-x86_64-unknown-linux-musl-binutils-2.40/bin/x86_64-unknown-linux-musl-ld: /nix/store/cdaf8ha86l89d0nbfwhm42sg1q4jziic-x86_64-unknown-linux-musl-stage-final-gcc-12.2.0-lib/x86_64-unknown-linux-musl/lib/libstdc++.a(compatibility.o): relocation R_X86_64_32 against symbol `__gxx_personality_v0' can not be used when making a PIE object; recompi le with -fPIE
-  # >           /nix/store/hjmy3kzf3cv15argfc10mgml1hbnyzph-x86_64-unknown-linux-musl-binutils-2.40/bin/x86_64-unknown-linux-musl-ld: failed to set dynamic section sizes: bad value
-  doCheck = stdenv.hostPlatform.config != "x86_64-unknown-linux-musl";
-  # doCheck = true;
+  doCheck = true;
   strictDeps = true;
 
   nativeBuildInputs = [

@@ -63,7 +63,18 @@
 
         CC_x86_64_unknown_linux_musl = "x86_64-unknown-linux-musl-gcc";
         CC_x86_64_unknown_linux_gnu = "cc";
-        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsCross.musl64.pkgsStatic.stdenv.cc.cc.lib}/x86_64-unknown-linux-musl/lib -lstatic=stdc++ -C target-feature=+crt-static";
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = [
+          "-L${pkgs.pkgsCross.musl64.pkgsStatic.stdenv.cc.cc.lib}/x86_64-unknown-linux-musl/lib"
+          "-lstatic=stdc++"
+          "-Ctarget-feature=+crt-static"
+          # The default of static pie executables results in the error message:
+          # > x86_64-unknown-linux-musl-ld: gcc-12.2.0-lib/x86_64-unknown-linux-musl/lib/libstdc++.a(compatibility.o):
+          # >   relocation R_X86_64_32 against symbol `__gxx_personality_v0' can not be used when making a PIE object; recompile with -fPIE
+          # > x86_64-unknown-linux-musl-ld: failed to set dynamic section sizes: bad value
+          # ... But only in the test binary, presumably because it somehow ends
+          # up using the symbol in a problematic way.
+          "-Crelocation-model=pic"
+        ];
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "x86_64-unknown-linux-musl-ld";
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "cc";
 

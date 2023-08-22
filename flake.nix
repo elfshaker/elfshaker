@@ -57,24 +57,24 @@
       cargoConfig = lib.optionalAttrs pkgs.stdenv.isLinux {
         CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-gcc";
         CC_aarch64_unknown_linux_gnu = "cc";
-        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic.stdenv.cc.cc.lib}/aarch64-unknown-linux-musl/lib -lstatic=stdc++ -C target-feature=+crt-static -C link-arg=-lc";
+        # CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic.stdenv.cc.cc.lib}/aarch64-unknown-linux-musl/lib -lstatic=stdc++ -C target-feature=+crt-static -C link-arg=-lc";
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "aarch64-unknown-linux-musl-ld";
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "cc";
 
         CC_x86_64_unknown_linux_musl = "x86_64-unknown-linux-musl-gcc";
         CC_x86_64_unknown_linux_gnu = "cc";
-        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = [
-          "-L${pkgs.pkgsCross.musl64.pkgsStatic.stdenv.cc.cc.lib}/x86_64-unknown-linux-musl/lib"
-          "-lstatic=stdc++"
-          "-Ctarget-feature=+crt-static"
-          # The default of static pie executables results in the error message:
-          # > x86_64-unknown-linux-musl-ld: gcc-12.2.0-lib/x86_64-unknown-linux-musl/lib/libstdc++.a(compatibility.o):
-          # >   relocation R_X86_64_32 against symbol `__gxx_personality_v0' can not be used when making a PIE object; recompile with -fPIE
-          # > x86_64-unknown-linux-musl-ld: failed to set dynamic section sizes: bad value
-          # ... But only in the test binary, presumably because it somehow ends
-          # up using the symbol in a problematic way.
-          "-Crelocation-model=pic"
-        ];
+        # CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = [
+        #   "-L${pkgs.pkgsCross.musl64.pkgsStatic.stdenv.cc.cc.lib}/x86_64-unknown-linux-musl/lib"
+        #   "-lstatic=stdc++"
+        #   "-Ctarget-feature=+crt-static"
+        #   # The default of static pie executables results in the error message:
+        #   # > x86_64-unknown-linux-musl-ld: gcc-12.2.0-lib/x86_64-unknown-linux-musl/lib/libstdc++.a(compatibility.o):
+        #   # >   relocation R_X86_64_32 against symbol `__gxx_personality_v0' can not be used when making a PIE object; recompile with -fPIE
+        #   # > x86_64-unknown-linux-musl-ld: failed to set dynamic section sizes: bad value
+        #   # ... But only in the test binary, presumably because it somehow ends
+        #   # up using the symbol in a problematic way.
+        #   "-Crelocation-model=pic"
+        # ];
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "x86_64-unknown-linux-musl-ld";
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "cc";
 
@@ -82,7 +82,7 @@
         # relating to our handling of file permissions which needs
         # fixing, but this may work.)
         CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc";
-        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.stdenv.cc.cc.lib}/x86_64-w64-mingw32/lib -lstatic=stdc++.dll";
+        # CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.stdenv.cc.cc.lib}/x86_64-w64-mingw32/lib -lstatic=stdc++.dll";
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-ld";
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeScript "wine-wrapper" ''
           export WINEPREFIX="$(mktemp -d)"

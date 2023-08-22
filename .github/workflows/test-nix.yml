@@ -11,15 +11,15 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
-      - uses: docker/setup-qemu-action@v2
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: docker/setup-qemu-action@v2
       - name: Build
         run: nix build .#release
       - name: ls
         run: ls -la result/
 
-  build-macos:
+  build-macos-x86_64:
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v3

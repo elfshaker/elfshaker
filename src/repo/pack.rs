@@ -5,10 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     fs::File,
-    fs::{self, Permissions},
+    fs::{self},
     io,
     io::{BufReader, Read, Write},
-    os::unix::prelude::PermissionsExt,
     path::{Path, PathBuf},
 };
 use std::{fmt::Display, str::FromStr};
@@ -25,7 +24,7 @@ use super::constants::{
     DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC, PACK_INDEX_EXTENSION,
 };
 use super::error::Error;
-use super::fs::{create_file, open_file};
+use super::fs::{create_file, open_file, FileMode};
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
 use crate::packidx::{FileEntry, ObjectChecksum, PackError};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
@@ -493,9 +492,9 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
 
 /// Writes the object to the specified path, taking care
 /// of adjusting file permissions.
-fn write_object(buf: &[u8], path: &Path, perm: Option<Permissions>) -> Result<(), Error> {
+fn write_object(buf: &[u8], path: &Path, file_mode: Option<FileMode>) -> Result<(), Error> {
     fs::create_dir_all(path.parent().unwrap())?;
-    let mut f = create_file(path, perm)?;
+    let mut f = create_file(path, file_mode)?;
     f.write_all(buf)?;
     Ok(())
 }
@@ -664,8 +663,8 @@ fn extract_files(
             path_buf.push(&output_dir);
             path_buf.push(&entry.path);
             stats.write_time += measure_ok(|| {
-                let perm = Permissions::from_mode(entry.file_metadata.mode);
-                write_object(&buf[..], &path_buf, Some(perm))
+                let file_mode = FileMode(entry.file_metadata.mode);
+                write_object(&buf[..], &path_buf, Some(file_mode))
             })?
             .0
             .as_secs_f64();

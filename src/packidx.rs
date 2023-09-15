@@ -577,7 +577,7 @@ fn os_str_as_bytes(os_str: &OsStr) -> Cow<[u8]> {
 
 #[cfg(not(unix))]
 fn os_str_as_bytes(os_str: &OsStr) -> Cow<[u8]> {
-    Cow::Owned(os_str.to_string_lossy().as_bytes())
+    Cow::Owned(os_str.to_string_lossy().as_bytes().into())
 }
 
 impl PackIndex {

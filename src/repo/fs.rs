@@ -6,7 +6,7 @@ use rand::RngCore;
 
 use std::{
     fs,
-    fs::{File, Permissions},
+    fs::File,
     io,
     io::Read,
     path::{Path, PathBuf},
@@ -78,7 +78,7 @@ pub fn open_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
 /// returned will contain the provided [`path`] in the error message.
 ///
 /// This function will create a file if it does not exist, and will truncate it if it does
-pub fn create_file<P: AsRef<Path>>(path: P, perm: Option<Permissions>) -> io::Result<File> {
+pub fn create_file<P: AsRef<Path>>(path: P, file_mode: Option<FileMode>) -> io::Result<File> {
     match File::create(&path) {
         Err(error) => Err(io::Error::new(
             error.kind(),
@@ -88,7 +88,7 @@ pub fn create_file<P: AsRef<Path>>(path: P, perm: Option<Permissions>) -> io::Re
             ),
         )),
         Ok(file) => {
-            perm.map_or(Ok(()), |perm| file.set_permissions(perm))?;
+            file_mode.map_or(Ok(()), |fm| file.set_file_mode(fm))?;
             Ok(file)
         }
     }
@@ -308,4 +308,73 @@ mod tests {
 
         Ok(())
     }
+}
+
+#[cfg(unix)]
+use std::fs::Permissions;
+#[cfg(unix)]
+use std::os::unix::prelude::{MetadataExt, PermissionsExt};
+
+/**
+ * Represents a file's access mode/permissions.
+ */
+pub struct FileMode(pub u32);
+
+/**
+ * Provides a way to update a file's access mode.
+ */
+pub trait FileModeExt {
+    fn set_file_mode(&self, mode: FileMode) -> io::Result<()>;
+}
+
+/**
+ * Provides a way to read a file's access mode.
+ */
+pub trait MetadataFileModeExt {
+    fn file_mode(&self) -> FileMode;
+}
+
+#[cfg(unix)]
+impl MetadataFileModeExt for fs::Metadata {
+    fn file_mode(&self) -> FileMode {
+        FileMode(self.mode())
+    }
+}
+
+#[cfg(unix)]
+impl FileModeExt for fs::File {
+    fn set_file_mode(&self, mode: FileMode) -> io::Result<()> {
+        self.set_permissions(Permissions::from_mode(mode.0))
+    }
+}
+
+#[cfg(windows)]
+impl MetadataFileModeExt for fs::Metadata {
+    fn file_mode(&self) -> FileMode {
+        // On Windows, the only access mode we toggle is read-only and we based
+        // that off whether the owner has write access.
+        if self.permissions().readonly() {
+            FileMode(0o100444)
+        } else {
+            FileMode(0o100664)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl FileModeExt for fs::File {
+    fn set_file_mode(&self, mode: FileMode) -> io::Result<()> {
+        let mut perm = self.metadata()?.permissions();
+        // Treat as readonly if the ownner cannot write
+        let owner_readonly = mode.0 & 0o200 == 0;
+        perm.set_readonly(owner_readonly);
+        self.set_permissions(perm)
+    }
+}
+
+/**
+ * Sets the file access mode bits on the specified file.
+ */
+pub fn set_file_mode<P: AsRef<Path>>(path: P, mode: FileMode) -> io::Result<()> {
+    File::open(path)?.set_file_mode(mode)
 }

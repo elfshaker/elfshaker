@@ -1342,12 +1342,12 @@ mod tests {
         fs::remove_file(&test_lock).unwrap();
         let path = repo.loose_object_path(&checksum);
         assert_eq!(
-            format!(
-                "{}/{}/fa/f0/deadbeefbadc0de0faf0deadbeefbadc0de0",
-                repo.data_dir().to_string_lossy(),
-                LOOSE_DIR
-            ),
-            path.to_str().unwrap(),
+            repo.data_dir()
+                .join(LOOSE_DIR)
+                .join("fa")
+                .join("f0")
+                .join("deadbeefbadc0de0faf0deadbeefbadc0de0"),
+            path,
         );
     }
 

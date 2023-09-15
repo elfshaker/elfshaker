@@ -1,14 +1,13 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use super::{constants::*, pack::IdError};
+use super::{constants::*, fs::set_file_mode, pack::IdError};
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File, Permissions},
+    fs::{self, File},
     io,
     io::{Read, Write},
-    os::unix::prelude::PermissionsExt,
     path::{Path, PathBuf},
     str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
@@ -27,7 +26,7 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
     create_file, create_temp_path, ensure_dir, get_last_modified, open_file, write_file_atomic,
-    EmptyDirectoryCleanupQueue,
+    EmptyDirectoryCleanupQueue, FileMode, MetadataFileModeExt,
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
@@ -587,7 +586,7 @@ impl Repository {
             let (buf, mode) = {
                 let mut buf = vec![];
                 fd.read_to_end(&mut buf)?;
-                let mode = fd.metadata()?.permissions().mode();
+                let mode = fd.metadata()?.file_mode();
                 (buf, mode)
             };
             let mut checksum = [0u8; 20];
@@ -603,7 +602,7 @@ impl Repository {
                     offset: LOOSE_OBJECT_OFFSET,
                     size: buf.len() as u64,
                 },
-                FileMetadata { mode },
+                FileMetadata { mode: mode.0 },
             ))
         })
         .into_iter()
@@ -1029,8 +1028,8 @@ impl Repository {
                 )
             })?;
 
-            let perm = Permissions::from_mode(entry.file_metadata.mode);
-            fs::set_permissions(&dest_path, perm)?
+            let file_mode = FileMode(entry.file_metadata.mode);
+            set_file_mode(&dest_path, file_mode)?
         }
 
         if verify {

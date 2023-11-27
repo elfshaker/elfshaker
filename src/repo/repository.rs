@@ -140,7 +140,7 @@ pub struct Repository {
     progress_reporter_factory: Box<dyn Fn(&str) -> ProgressReporter<'static> + Send + Sync>,
     /// The repository mutex file. This file is locked and unlocked
     /// when the repository instance is created/destroyed.
-    lock_file: fs::File,
+    lock_file: Option<fs::File>,
     is_locked_exclusively: AtomicBool,
 }
 
@@ -182,15 +182,24 @@ impl Repository {
             return Err(Error::RepositoryNotFound);
         }
 
-        let lock_file = fs::File::create(data_dir.join("mutex"))?;
-        if let Err(e) = lock_file.try_lock_shared() {
-            if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
-                warn!("Blocking until the repository mutex is unlocked...");
-                lock_file.try_lock_shared()?;
-            } else {
-                return Err(e.into());
+        let readonly = fs::metadata(&data_dir)?.permissions().readonly();
+
+        let lock_file = match fs::File::create(data_dir.join("mutex")) {
+            Ok(lock_file) => {
+                if let Err(e) = lock_file.try_lock_shared() {
+                    if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+                        warn!("Blocking until the repository mutex is unlocked...");
+                        lock_file.try_lock_shared()?;
+                    } else {
+                        return Err(e.into());
+                    }
+                }
+
+                Some(lock_file)
             }
-        }
+            Err(e) if readonly && e.kind() == io::ErrorKind::PermissionDenied => None,
+            Err(e) => Err(e)?,
+        };
 
         Ok(Repository {
             path,
@@ -205,13 +214,17 @@ impl Repository {
         if self.is_locked_exclusively.load(Ordering::Acquire) {
             return Ok(());
         }
-        if let Err(e) = self.lock_file.try_lock_exclusive() {
-            if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
-                warn!("Blocking until the repository mutex is unlocked...");
-                self.lock_file.lock_exclusive()?;
-            } else {
-                return Err(e);
+        if let Some(lock_file) = &self.lock_file {
+            if let Err(e) = lock_file.try_lock_exclusive() {
+                if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+                    warn!("Blocking until the repository mutex is unlocked...");
+                    lock_file.lock_exclusive()?;
+                } else {
+                    return Err(e);
+                }
             }
+        } else {
+            error!("Modifying readonly repository is not allowed.");
         }
         self.is_locked_exclusively.store(true, Ordering::Release);
         Ok(())
@@ -758,6 +771,11 @@ impl Repository {
 
     /// Updates the HEAD snapshot id.
     pub fn update_head(&mut self, snapshot_id: &SnapshotId) -> Result<(), Error> {
+        // Readonly, do not update HEAD.
+        if self.lock_file.is_none() {
+            return Ok(());
+        }
+
         let snapshot_string = format!("{snapshot_id}\n");
         ensure_dir(&self.temp_dir())?;
         write_file_atomic(
@@ -1336,7 +1354,7 @@ mod tests {
             path: "/repo".into(),
             data_dir: "/repo/elfshaker_data".into(),
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
-            lock_file: fs::File::create(&test_lock).unwrap(),
+            lock_file: Some(fs::File::create(&test_lock).unwrap()),
             is_locked_exclusively: AtomicBool::new(false),
         };
         fs::remove_file(&test_lock).unwrap();

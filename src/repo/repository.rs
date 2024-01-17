@@ -356,7 +356,8 @@ impl Repository {
         let PackId::Pack(pack_name) = pack_id;
 
         // The pack is loose if the .pack.idx is in the loose packs directory
-        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + "/")) {
+        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + &std::path::MAIN_SEPARATOR.to_string()))
+        {
             return false;
         }
 

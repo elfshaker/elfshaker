@@ -57,7 +57,6 @@
       cargoConfig = lib.optionalAttrs pkgs.stdenv.isLinux {
         CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-gcc";
         CC_aarch64_unknown_linux_gnu = "cc";
-        # CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "-L${pkgs.pkgsCross.aarch64-multiplatform-musl.pkgsStatic.stdenv.cc.cc.lib}/aarch64-unknown-linux-musl/lib -lstatic=stdc++ -C target-feature=+crt-static -C link-arg=-lc";
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "aarch64-unknown-linux-musl-ld";
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "cc";
 
@@ -82,11 +81,15 @@
         # relating to our handling of file permissions which needs
         # fixing, but this may work.)
         CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc";
-        # CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.stdenv.cc.cc.lib}/x86_64-w64-mingw32/lib -lstatic=stdc++.dll";
-        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-ld";
-        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeScript "wine-wrapper" ''
-          export WINEPREFIX="$(mktemp -d)"
-          exec wine64 $@
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.windows.mingw_w64_pthreads}/lib";
+
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc";
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeShellScript "wine-wrapper" ''
+          export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all
+          export HOME=$WINEPREFIX
+          export FONTCONFIG_PATH=${pkgs.buildPackages.fontconfig.out}/etc/fonts/
+          mkdir -p $WINEPREFIX
+          exec ${pkgs.buildPackages.wine64}/bin/wine64 "$@"
         '';
       };
 

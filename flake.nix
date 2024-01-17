@@ -128,7 +128,8 @@
             tar czf elfshaker-x86_64-musl.tar.gz --directory ${packages.elfshaker-x86_64-musl}/bin elfshaker
             sha256sum elfshaker-x86_64-musl.tar.gz > elfshaker-x86_64-musl.tar.gz.sha256sum
 
-            # TODO: Windows cross compile.
+            tar czf elfshaker-x86_64-windows.tar.gz --directory ${packages.elfshaker-x86_64-windows}/bin elfshaker.exe
+            sha256sum elfshaker-x86_64-windows.tar.gz > elfshaker-x86_64-windows.tar.gz.sha256sum
 
             mkdir $out
             cp *.tar.gz* $out

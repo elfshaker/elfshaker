@@ -48,7 +48,8 @@ all_pwd_sha1sums() {
 }
 
 elfshaker_sha1sums() {
-  "$elfshaker" list-files "$@" 2> /dev/null | awk '{print $1" "$3}' | sort -k2,2
+  # Note: Canonicalizes windows paths to unix paths for now.
+  "$elfshaker" list-files "$@" 2> /dev/null | awk '{print $1" "$3}' | sort -k2,2 | sed 's|\\|/|g'
 }
 
 verify_snapshot() {

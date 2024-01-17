@@ -3,7 +3,12 @@
 
 use clap::{App, Arg, ArgMatches};
 use log::error;
-use std::{error::Error, ffi::OsStr, fs, io, path::PathBuf};
+use std::{
+    error::Error,
+    ffi::OsStr,
+    fs, io,
+    path::{Path, PathBuf},
+};
 use walkdir::WalkDir;
 
 use super::utils::open_repo_from_cwd;
@@ -102,6 +107,13 @@ fn find_files() -> Vec<PathBuf> {
     WalkDir::new(".")
         .follow_links(true)
         .into_iter()
+        .filter_entry(|p| {
+            p.path()
+                .components()
+                .nth(1)
+                .and_then(|p| Some(p.as_os_str() != Path::new("elfshaker_data")))
+                .unwrap_or(true)
+        })
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file() || e.file_type().is_symlink())
         .map(|e| e.path().into())

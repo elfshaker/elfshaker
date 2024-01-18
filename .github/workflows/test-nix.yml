@@ -20,7 +20,18 @@ jobs:
         run: ls -la result/
 
   build-macos-x86_64:
-    runs-on: macos-13
+    runs-on: macos-13 # 13 runner is x86.
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Build
+        run: nix build --log-lines 1000 .#release
+      - name: ls
+        run: ls -la result/
+
+  build-macos-arm64:
+    runs-on: macos-14 # 14 runner is aarch64.
     steps:
       - uses: actions/checkout@v3
       - uses: DeterminateSystems/nix-installer-action@main

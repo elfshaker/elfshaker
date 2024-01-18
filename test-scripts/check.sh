@@ -706,6 +706,15 @@ test_gc_objects_dry_run() {
   fi
 }
 
+test_read_only() {
+  chmod u-w -R $temp_dir/elfshaker_data
+
+  "$elfshaker" list
+  "$elfshaker" --verbose extract --reset --verify "$pack":"$snapshot_a"
+
+  chmod u+w -R $temp_dir/elfshaker_data
+}
+
 main() {
   mkdir "$temp_dir"
   cd "$temp_dir"
@@ -759,6 +768,7 @@ main() {
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots_dry_run
   run_test test_gc_objects
   run_test test_gc_objects_dry_run
+  run_test test_read_only
 }
 
 main "$@"

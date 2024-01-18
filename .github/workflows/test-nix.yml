@@ -20,7 +20,7 @@ jobs:
         run: ls -la result/
 
   build-macos-x86_64:
-    runs-on: macos-13
+    runs-on: macos-13 # at time of writing, this is the documented way to get an x86_64 macos builder.
     steps:
       - uses: actions/checkout@v3
       - uses: DeterminateSystems/nix-installer-action@main
@@ -31,7 +31,7 @@ jobs:
         run: ls -la result/
 
   build-macos-arm64:
-    runs-on: macos-13-arm64
+    runs-on: macos-13-xlarge # at time of writing, this is the documented way to get an arm64 macos builder.
     steps:
       - uses: actions/checkout@v3
       - uses: DeterminateSystems/nix-installer-action@main

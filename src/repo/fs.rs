@@ -20,7 +20,7 @@ pub fn get_last_modified(metadata: fs::Metadata) -> Option<SystemTime> {
         .created()
         .ok()
         .into_iter()
-        .chain(metadata.modified().ok().into_iter())
+        .chain(metadata.modified().ok())
         .max()
 }
 
@@ -216,6 +216,75 @@ impl Drop for EmptyDirectoryCleanupQueue {
     }
 }
 
+#[cfg(unix)]
+use std::fs::Permissions;
+#[cfg(unix)]
+use std::os::unix::prelude::{MetadataExt, PermissionsExt};
+
+/**
+ * Represents a file's access mode/permissions.
+ */
+pub struct FileMode(pub u32);
+
+/**
+ * Provides a way to update a file's access mode.
+ */
+pub trait FileModeExt {
+    fn set_file_mode(&self, mode: FileMode) -> io::Result<()>;
+}
+
+/**
+ * Provides a way to read a file's access mode.
+ */
+pub trait MetadataFileModeExt {
+    fn file_mode(&self) -> FileMode;
+}
+
+#[cfg(unix)]
+impl MetadataFileModeExt for fs::Metadata {
+    fn file_mode(&self) -> FileMode {
+        FileMode(self.mode())
+    }
+}
+
+#[cfg(unix)]
+impl FileModeExt for fs::File {
+    fn set_file_mode(&self, mode: FileMode) -> io::Result<()> {
+        self.set_permissions(Permissions::from_mode(mode.0))
+    }
+}
+
+#[cfg(windows)]
+impl MetadataFileModeExt for fs::Metadata {
+    fn file_mode(&self) -> FileMode {
+        // On Windows, the only access mode we toggle is read-only and we based
+        // that off whether the owner has write access.
+        if self.permissions().readonly() {
+            FileMode(0o100444)
+        } else {
+            FileMode(0o100664)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl FileModeExt for fs::File {
+    fn set_file_mode(&self, mode: FileMode) -> io::Result<()> {
+        let mut perm = self.metadata()?.permissions();
+        // Treat as readonly if the ownner cannot write
+        let owner_readonly = mode.0 & 0o200 == 0;
+        perm.set_readonly(owner_readonly);
+        self.set_permissions(perm)
+    }
+}
+
+/**
+ * Sets the file access mode bits on the specified file.
+ */
+pub fn set_file_mode<P: AsRef<Path>>(path: P, mode: FileMode) -> io::Result<()> {
+    File::open(path)?.set_file_mode(mode)
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -308,73 +377,4 @@ mod tests {
 
         Ok(())
     }
-}
-
-#[cfg(unix)]
-use std::fs::Permissions;
-#[cfg(unix)]
-use std::os::unix::prelude::{MetadataExt, PermissionsExt};
-
-/**
- * Represents a file's access mode/permissions.
- */
-pub struct FileMode(pub u32);
-
-/**
- * Provides a way to update a file's access mode.
- */
-pub trait FileModeExt {
-    fn set_file_mode(&self, mode: FileMode) -> io::Result<()>;
-}
-
-/**
- * Provides a way to read a file's access mode.
- */
-pub trait MetadataFileModeExt {
-    fn file_mode(&self) -> FileMode;
-}
-
-#[cfg(unix)]
-impl MetadataFileModeExt for fs::Metadata {
-    fn file_mode(&self) -> FileMode {
-        FileMode(self.mode())
-    }
-}
-
-#[cfg(unix)]
-impl FileModeExt for fs::File {
-    fn set_file_mode(&self, mode: FileMode) -> io::Result<()> {
-        self.set_permissions(Permissions::from_mode(mode.0))
-    }
-}
-
-#[cfg(windows)]
-impl MetadataFileModeExt for fs::Metadata {
-    fn file_mode(&self) -> FileMode {
-        // On Windows, the only access mode we toggle is read-only and we based
-        // that off whether the owner has write access.
-        if self.permissions().readonly() {
-            FileMode(0o100444)
-        } else {
-            FileMode(0o100664)
-        }
-    }
-}
-
-#[cfg(windows)]
-impl FileModeExt for fs::File {
-    fn set_file_mode(&self, mode: FileMode) -> io::Result<()> {
-        let mut perm = self.metadata()?.permissions();
-        // Treat as readonly if the ownner cannot write
-        let owner_readonly = mode.0 & 0o200 == 0;
-        perm.set_readonly(owner_readonly);
-        self.set_permissions(perm)
-    }
-}
-
-/**
- * Sets the file access mode bits on the specified file.
- */
-pub fn set_file_mode<P: AsRef<Path>>(path: P, mode: FileMode) -> io::Result<()> {
-    File::open(path)?.set_file_mode(mode)
 }

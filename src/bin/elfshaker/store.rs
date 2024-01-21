@@ -111,7 +111,7 @@ fn find_files() -> Vec<PathBuf> {
             p.path()
                 .components()
                 .nth(1)
-                .and_then(|p| Some(p.as_os_str() != Path::new("elfshaker_data")))
+                .map(|p| p.as_os_str() != Path::new("elfshaker_data"))
                 .unwrap_or(true)
         })
         .filter_map(|e| e.ok())

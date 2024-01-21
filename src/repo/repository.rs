@@ -356,8 +356,7 @@ impl Repository {
         let PackId::Pack(pack_name) = pack_id;
 
         // The pack is loose if the .pack.idx is in the loose packs directory
-        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + &std::path::MAIN_SEPARATOR.to_string()))
-        {
+        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + std::path::MAIN_SEPARATOR_STR)) {
             return false;
         }
 
@@ -826,7 +825,7 @@ impl Repository {
                 // Lock the results map and add the checksums in this pack
                 let mut checksum_to_group = checksum_to_group_clone.lock().unwrap();
                 for (tag, checksum) in snapshot_checksums {
-                    let entry = checksum_to_group.entry(checksum).or_insert_with(Vec::new);
+                    let entry = checksum_to_group.entry(checksum).or_default();
                     entry.push(SnapshotId::new(pack_id.clone(), &tag).unwrap());
                 }
                 Ok(())

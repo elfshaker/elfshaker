@@ -439,7 +439,7 @@ impl Pack {
         let tasks = self
             .frame_readers
             .into_iter()
-            .zip(frame_to_entries.into_iter())
+            .zip(frame_to_entries)
             // Skip empty frames.
             .filter(|(_, entries)| !entries.is_empty())
             .collect::<Vec<_>>();

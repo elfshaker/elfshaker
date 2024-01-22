@@ -196,6 +196,8 @@ impl Repository {
                 Some(lock_file)
             }
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => None,
+            // Replace with ReadOnlyFilesystem once stabilized (io_error_more #86442).
+            Err(e) if e.kind().to_string() == "read-only filesystem or storage medium" => None,
             Err(e) => Err(e)?,
         };
 

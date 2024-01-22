@@ -140,6 +140,7 @@ pub struct Repository {
     progress_reporter_factory: Box<dyn Fn(&str) -> ProgressReporter<'static> + Send + Sync>,
     /// The repository mutex file. This file is locked and unlocked
     /// when the repository instance is created/destroyed.
+    /// None represents read-only repository.
     lock_file: Option<fs::File>,
     is_locked_exclusively: AtomicBool,
 }
@@ -182,8 +183,6 @@ impl Repository {
             return Err(Error::RepositoryNotFound);
         }
 
-        let readonly = fs::metadata(&data_dir)?.permissions().readonly();
-
         let lock_file = match fs::File::create(data_dir.join("mutex")) {
             Ok(lock_file) => {
                 if let Err(e) = lock_file.try_lock_shared() {
@@ -197,7 +196,7 @@ impl Repository {
 
                 Some(lock_file)
             }
-            Err(e) if readonly && e.kind() == io::ErrorKind::PermissionDenied => None,
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => None,
             Err(e) => Err(e)?,
         };
 

@@ -67,7 +67,10 @@ fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
     let i0 = fd.metadata()?.ino();
     let i1 = fs::metadata(name)?.ino();
     if i0 != i1 {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock, "would block"));
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("file lock for {name:?} acquired by a different process"),
+        ));
     }
     Ok(())
 }
@@ -231,6 +234,7 @@ mod tests {
         .into_iter()
         .map(|r| match r {
             Ok(_) => 1,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => -1,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => -1,
             Err(e) => panic!("unexpected error: {:?}", e),
         })

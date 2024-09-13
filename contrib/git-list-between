@@ -22,7 +22,6 @@ find-first-commit() {
         --first-parent
         --topo-order
         --until="$DATETIME_UPPER"
-        --no-commit-header
         --format='%cd %H'
         --date=format-local:"%Y/%m/%d"
         "$BRANCH"
@@ -31,7 +30,7 @@ find-first-commit() {
     TZ=UTC git rev-list "${ARGS[@]}" | \
         egrep "^$DATE_LOWER" | \
         tail -n1 | \
-        awk '{print $2}'
+        awk '$1 != "commit" {print $2}'
 }
 
 list() {

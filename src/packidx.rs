@@ -100,7 +100,7 @@ impl From<rmp_serde::encode::Error> for PackError {
 pub type ObjectChecksum = [u8; 20];
 /// The offset used for [`ObjectEntry::offset`], when the object is loose (not
 /// in a pack file).
-pub const LOOSE_OBJECT_OFFSET: u64 = std::u64::MAX;
+pub const LOOSE_OBJECT_OFFSET: u64 = u64::MAX;
 
 /// A [`FileHandle`] identifies a file stored in a pack. It contains two
 /// handles: a path, which can be used to get the path of the file

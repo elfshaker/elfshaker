@@ -27,10 +27,10 @@ where
     }
 
     /// get returns the entry for the intern'd Handle, or None if absent.
-    pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<Handle>
+    pub fn get<Q>(&self, k: &Q) -> Option<Handle>
     where
         T: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.entry_map.get(k).copied()
     }

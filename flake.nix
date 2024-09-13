@@ -21,6 +21,7 @@
         self.packages.${system}.rustToolchain
         pkgs.pkgsCross.aarch64-multiplatform-musl.stdenv.cc
         pkgs.pkgsCross.musl64.stdenv.cc
+      ] ++ lib.optionals pkgs.stdenv.hostPlatform.isx86 [ # Don't do windows cross-arch cross-compile for now.
         pkgs.pkgsCross.mingwW64.stdenv.cc
       ];
       CARGO_BUILD_TARGET = pkgs.stdenv.hostPlatform.config;
@@ -50,11 +51,11 @@
         rustc = rustToolchain;
       };
 
-      naerskBuildPackage = target: args:
-        naersk'.buildPackage (args // { CARGO_BUILD_TARGET = target; } // cargoConfig);
+      naerskBuildPackage = isWindows: target: args:
+        naersk'.buildPackage (args // { CARGO_BUILD_TARGET = target; } // (cargoConfig isWindows));
 
       # On Linux, configure cross compilers.
-      cargoConfig = lib.optionalAttrs pkgs.stdenv.isLinux {
+      cargoConfig = isWindows: (lib.optionalAttrs pkgs.stdenv.isLinux {
         CC_aarch64_unknown_linux_musl = "aarch64-unknown-linux-musl-gcc";
         CC_aarch64_unknown_linux_gnu = "cc";
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER = "aarch64-unknown-linux-musl-ld";
@@ -76,7 +77,7 @@
         # ];
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "x86_64-unknown-linux-musl-ld";
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "cc";
-
+      } // lib.optionalAttrs isWindows {
         # (Not fully tested, build gets as far as programming errors
         # relating to our handling of file permissions which needs
         # fixing, but this may work.)
@@ -91,7 +92,7 @@
           mkdir -p $WINEPREFIX
           exec ${pkgs.buildPackages.wine64}/bin/wine64 "$@"
         '';
-      };
+      });
 
       packages = self.packages.${system};
       args = { inherit naerskBuildPackage rustToolchain; };
@@ -101,7 +102,7 @@
 
     in {
       inherit rustToolchain;
-      elfshakerCargoConfig = cargoConfig;
+      elfshakerCargoConfig = cargoConfig false; #pkgs.stdenv.hostPlatform.isWindows;
 
       # Native package build.
       default = packages.elfshaker;
@@ -128,8 +129,10 @@
             tar czf elfshaker-x86_64-musl.tar.gz --directory ${packages.elfshaker-x86_64-musl}/bin elfshaker
             sha256sum elfshaker-x86_64-musl.tar.gz > elfshaker-x86_64-musl.tar.gz.sha256sum
 
-            tar czf elfshaker-x86_64-windows.tar.gz --directory ${packages.elfshaker-x86_64-windows}/bin elfshaker.exe
-            sha256sum elfshaker-x86_64-windows.tar.gz > elfshaker-x86_64-windows.tar.gz.sha256sum
+            ${lib.optionalString (nativePlatform.isx86) ''
+              tar czf elfshaker-x86_64-windows.tar.gz --directory ${packages.elfshaker-x86_64-windows}/bin elfshaker.exe
+              sha256sum elfshaker-x86_64-windows.tar.gz > elfshaker-x86_64-windows.tar.gz.sha256sum
+            ''}
 
             mkdir $out
             cp *.tar.gz* $out

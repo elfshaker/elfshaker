@@ -42,7 +42,7 @@ let
     else "verification.pack";
 in
 
-naerskBuildPackage target {
+naerskBuildPackage isWindows target {
   name = "elfshaker-${stdenv.hostPlatform.config}";
   root = ./.;
 

@@ -50,7 +50,8 @@ FLAGS=(
     # Rel + assertions build.
     "-DCMAKE_BUILD_TYPE=Release"
     "-DLLVM_ENABLE_ASSERTIONS=On"
-    "-DLLVM_ENABLE_PROJECTS=clang"
+    "-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra"
+    "-DCLANG_ENABLE_CLANGD=Off"
 
     # VC revision is written into binaries with manyclangs-build. This is not
     # used because it invalidates tablegen which causes a lot of rebuilding.

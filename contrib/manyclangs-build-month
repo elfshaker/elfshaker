@@ -112,7 +112,7 @@ _manyclangs_build_part() {
         # efficient.
         (cd .. &&
          git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
-             {llvm,clang} :^{llvm,clang}/test "${EXTRA[@]}"
+             {llvm,clang,clang-tools-extra} :^{llvm,clang,clang-tools-extra}/test "${EXTRA[@]}"
         )
 
         echo "$COMMIT_SHA" > COMMIT_SHA

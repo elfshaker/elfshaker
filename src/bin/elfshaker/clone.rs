@@ -79,6 +79,6 @@ pub(crate) fn get_app() -> App<'static, 'static> {
 
 fn create_random_name() -> String {
     let mut bytes = [0u8; 8];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }

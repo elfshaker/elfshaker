@@ -18,6 +18,7 @@
       pkgs = import nixpkgs { inherit system; };
     in pkgs.mkShell (self.packages.${system}.elfshakerCargoConfig // {
       nativeBuildInputs = [
+        pkgs.cargo-edit
         self.packages.${system}.rustToolchain
         pkgs.pkgsCross.aarch64-multiplatform-musl.stdenv.cc
         pkgs.pkgsCross.musl64.stdenv.cc

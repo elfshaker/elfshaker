@@ -56,7 +56,7 @@ pub fn create_temp_path(temp_dir: &Path) -> PathBuf {
     // Pick filename from a 128-bit random distribution.
     let temp_filename = {
         let mut bytes = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut bytes);
+        rand::rng().fill_bytes(&mut bytes);
         hex::encode(bytes)
     };
     temp_dir.join(temp_filename)

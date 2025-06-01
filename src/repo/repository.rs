@@ -1020,6 +1020,37 @@ impl Repository {
         self.progress_reporter_factory = Box::new(factory);
     }
 
+    /// Copies loose file entries from the repository's loose object
+    /// store to the specified destination path.
+    ///
+    /// For each `FileEntry` in `entries`, this function:
+    /// - Ensures the destination directory exists.
+    /// - Copies the corresponding loose object file to the destination
+    ///   path.
+    /// - Sets the file mode (permissions) to match the original entry.
+    /// - Optionally verifies the checksum of the copied file if
+    ///   `verify` is true.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - A slice of `FileEntry` objects representing the
+    ///   files to copy.
+    /// * `path` - The destination directory where files should be
+    ///   copied.
+    /// * `verify` - If true, verifies the checksum of each copied file
+    ///   after copying.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any file cannot be copied, if directory
+    /// creation fails, if setting file permissions fails, or if
+    /// checksum verification fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// repo.copy_loose_entries(&entries, Path::new("/destination"), true)?;
+    /// ```
     fn copy_loose_entries(
         &mut self,
         entries: &[FileEntry],
@@ -1039,7 +1070,7 @@ impl Repository {
                 io::Error::new(
                     e.kind(),
                     format!(
-                        "couldn't copy {} to {}",
+                        "couldn't copy loose object {} to {}",
                         object_path.display(),
                         dest_path.display()
                     ),

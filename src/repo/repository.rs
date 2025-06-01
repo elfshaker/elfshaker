@@ -180,7 +180,10 @@ impl Repository {
         }
         let data_dir = data_dir.canonicalize()?;
 
-        let lock_file = match fs::File::create(data_dir.join("mutex")) {
+        let mut open_options = fs::OpenOptions::new();
+        let open_options = open_options.create(true).write(true).read(true);
+
+        let lock_file = match open_options.open(data_dir.join("mutex")) {
             Ok(lock_file) => {
                 if let Err(e) = fs2::FileExt::try_lock_shared(&lock_file) {
                     if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {

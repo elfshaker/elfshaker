@@ -959,10 +959,9 @@ impl Repository {
         let is_loose = self.is_pack_loose(pack_id);
         let pack_exsits = pack_path.exists();
         if is_loose && pack_exsits {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Unexpected .pack for loose {pack_id:?}"),
-            ));
+            return Err(io::Error::other(format!(
+                "Unexpected .pack for loose {pack_id:?}"
+            )));
         } else if !is_loose && !pack_exsits {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -1185,7 +1184,7 @@ impl Repository {
             .nth(num_components - 3)
             .ok_or_else(bad_object_error)?;
         let hex2_3 = path.components().nth(num_components - 2).unwrap();
-        let hex4_19 = path.components().last().unwrap();
+        let hex4_19 = path.components().next_back().unwrap();
 
         let bytes0_1 =
             hex::decode(&*hex0_1.as_os_str().to_string_lossy()).map_err(|_| bad_object_error())?;

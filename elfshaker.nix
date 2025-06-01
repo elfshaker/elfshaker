@@ -14,6 +14,8 @@ let
     if stdenv.hostPlatform.config == "x86_64-w64-mingw32"
     # Rust spells the target differently.
     then "x86_64-pc-windows-gnu"
+    else if stdenv.hostPlatform.config == "arm64-apple-darwin"
+    then "aarch64-apple-darwin" # Current rust toolchain doesn't understand the triple.
     else stdenv.hostPlatform.config;
 
   # Note for native builds, buildPackages.buildPackages == buildPackages; but

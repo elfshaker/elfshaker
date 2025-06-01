@@ -23,7 +23,7 @@ chrono = "0.4.19"
 url = "2.2.2"
 ureq = "2.4.0"
 serde = { version = "1.0.126", features = ["derive", "rc"] }
-rmp-serde = "0.15.5"
+rmp-serde = "1.1.1"
 num_cpus = "1.13.0"
 log = "0.4.0"
 lazy_static = "1.4.0"

@@ -759,6 +759,56 @@ impl Repository {
         Ok(())
     }
 
+    /// Extracts all objects from the specified pack into the loose
+    /// object store.
+    ///
+    /// This function takes a `pack_id` identifying a pack file and
+    /// unpacks all of its contained objects, writing each object as a
+    /// separate file into the repository's loose object storage. This
+    /// operation is useful for scenarios where individual object access
+    /// is required, or for maintenance tasks such as repacking or
+    /// garbage collection. The function is currently unimplemented and
+    /// serves as a placeholder for future development.
+    ///
+    /// # Arguments
+    ///
+    /// * `pack_id` - The identifier of the pack to be exploded into
+    ///   loose objects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the operation fails, such as if the pack
+    /// cannot be read or objects cannot be written.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// repo.explode_pack(&pack_id)?;
+    /// ```
+    /// * `pack_id` - The pack to explode.
+    pub fn explode_pack(&mut self, pack_id: &PackId) -> Result<(), Error> {
+        let index = self.load_index(pack_id)?;
+        let entries = index
+            .object_checksums()
+            .map(|checksum| {
+                let object_metadata = index.object_metadata(checksum);
+                let path = self.loose_object_path(checksum);
+                FileEntry::new(
+                    path.into(),
+                    *checksum,
+                    *object_metadata,
+                    FileMetadata { mode: 0o644 },
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut opts = ExtractOptions::default();
+        opts.set_verify(false);
+        opts.set_num_workers(8);
+        self.extract_entries(pack_id, &entries, "exploded", opts)?;
+
+        Ok(())
+    }
+
     /// Deletes ALL loose snapshots and objects.
     pub fn remove_loose_all(&mut self) -> Result<(), Error> {
         let loose_dir = self.data_dir().join(LOOSE_DIR);

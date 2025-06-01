@@ -6,12 +6,13 @@ use super::{constants::*, fs::set_file_mode, pack::IdError};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io,
-    io::{Read, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::atomic::{AtomicBool, Ordering},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::SystemTime,
 };
 
@@ -172,15 +173,12 @@ impl Repository {
         P2: AsRef<Path>,
     {
         let path = path.as_ref().to_path_buf();
-        let data_dir = data_dir.as_ref().canonicalize()?;
+        let data_dir = data_dir.as_ref();
 
-        if !Path::exists(&data_dir) {
-            error!(
-                "The directory {:?} is not an elfshaker repository!",
-                data_dir.parent().unwrap_or_else(|| Path::new("/"))
-            );
-            return Err(Error::RepositoryNotFound);
+        if !Path::exists(data_dir) {
+            return Err(Error::RepositoryNotFound(data_dir.to_path_buf()));
         }
+        let data_dir = data_dir.canonicalize()?;
 
         let lock_file = match fs::File::create(data_dir.join("mutex")) {
             Ok(lock_file) => {

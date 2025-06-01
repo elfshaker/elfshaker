@@ -2,6 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 mod clone;
+mod explode;
 mod extract;
 mod find;
 mod gc;
@@ -45,6 +46,7 @@ fn main() {
 fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     match matches.subcommand() {
         (extract::SUBCOMMAND, Some(matches)) => extract::run(matches),
+        (explode::SUBCOMMAND, Some(matches)) => explode::run(matches),
         (store::SUBCOMMAND, Some(matches)) => store::run(matches),
         (list::SUBCOMMAND, Some(matches)) => list::run(matches),
         (list_packs::SUBCOMMAND, Some(matches)) => list_packs::run(matches),
@@ -77,6 +79,7 @@ fn get_app() -> App<'static, 'static> {
         .subcommand(gc::get_app())
         .subcommand(update::get_app())
         .subcommand(clone::get_app())
+        .subcommand(explode::get_app())
         .arg(
             Arg::with_name("verbose")
                 .long("verbose")

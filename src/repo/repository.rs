@@ -184,10 +184,10 @@ impl Repository {
 
         let lock_file = match fs::File::create(data_dir.join("mutex")) {
             Ok(lock_file) => {
-                if let Err(e) = lock_file.try_lock_shared() {
+                if let Err(e) = fs2::FileExt::try_lock_shared(&lock_file) {
                     if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                         warn!("Blocking until the repository mutex is unlocked...");
-                        lock_file.try_lock_shared()?;
+                        lock_file.lock_exclusive()?;
                     } else {
                         return Err(e.into());
                     }

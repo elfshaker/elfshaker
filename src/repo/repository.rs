@@ -532,7 +532,7 @@ impl Repository {
         P: AsRef<Path>,
     {
         if self.is_pack_loose(pack_id) {
-            self.copy_loose_entries(entries, path.as_ref(), opts.verify())
+            self.copy_loose_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
         } else if let Ok(pack) = self.open_pack(pack_id) {
             pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
         } else {
@@ -1056,30 +1056,35 @@ impl Repository {
         entries: &[FileEntry],
         path: &Path,
         verify: bool,
+        nthread: u32,
     ) -> Result<(), Error> {
-        let mut dest_paths = vec![];
-        let mut dest_path = PathBuf::new();
-        for entry in entries {
-            dest_path.clear();
-            dest_path.push(path);
-            dest_path.push(&entry.path);
-            dest_paths.push(dest_path.clone());
-            fs::create_dir_all(dest_path.parent().unwrap())?;
-            let object_path = self.loose_object_path(&entry.checksum);
-            fs::copy(&object_path, &dest_path).map_err(|e| {
-                io::Error::new(
-                    e.kind(),
-                    format!(
-                        "couldn't copy loose object {} to {}",
-                        object_path.display(),
-                        dest_path.display()
-                    ),
-                )
-            })?;
+        let dest_paths = run_in_parallel(
+            nthread as usize,
+            entries.iter(),
+            |entry| -> Result<_, Error> {
+                let mut dest_path = PathBuf::new();
+                dest_path.push(path);
+                dest_path.push(&entry.path);
+                fs::create_dir_all(dest_path.parent().unwrap())?;
+                let object_path = self.loose_object_path(&entry.checksum);
+                fs::copy(&object_path, &dest_path).map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!(
+                            "couldn't copy loose object {} to {}",
+                            object_path.display(),
+                            dest_path.display()
+                        ),
+                    )
+                })?;
 
-            let file_mode = FileMode(entry.file_metadata.mode);
-            set_file_mode(&dest_path, file_mode)?
-        }
+                let file_mode = FileMode(entry.file_metadata.mode);
+                set_file_mode(&dest_path, file_mode)?;
+                Ok(dest_path)
+            },
+        )
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
 
         if verify {
             let checksums = batch::compute_checksums(&dest_paths)?;

@@ -419,7 +419,7 @@ pub fn update_remote_pack_indexes(
 
     for pack in &remote.packs {
         let url = (pack.url.to_string() + ".idx").parse::<Url>().unwrap();
-        let pack_index_file_name = url.path_segments().unwrap().last().unwrap();
+        let pack_index_file_name = url.path_segments().unwrap().next_back().unwrap();
         let pack_index_path = base_dir.join(pack_index_file_name);
 
         if verify_checksum(&pack_index_path, &pack.index_checksum)? {

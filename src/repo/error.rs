@@ -2,6 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::{fmt::Display, io};
 
 use crate::packidx::PackError;
@@ -33,7 +34,7 @@ pub enum Error {
     /// The .pack file is not available in packs/
     PackNotFound(String),
     /// The directory is not a repository
-    RepositoryNotFound,
+    RepositoryNotFound(PathBuf),
     // The loose object is corrupt or is in the wrong path
     BadLooseObject(String),
     /// The .esi file is corrupted.
@@ -81,7 +82,23 @@ impl Display for Error {
                 f,
                 "The specified pack file '{p}' could not be found in the repository index!",
             ),
-            Self::RepositoryNotFound => write!(f, "The directory is not an elfshaker repository!"),
+            Self::RepositoryNotFound(p) => write!(
+                f,
+                "Missing data directory.\
+                 \n\nThe path {:?} is missing, so not in an elfshaker repository!\n\
+                 \n\
+                 To create a new repository:
+                   elfshaker store <snapshot name>\n\
+                 (This will create a new repo with a snapshot.)\n\
+                 \n\
+                 To clone an existing repository:
+                   elfshaker clone <url to esi> <directory>\n\
+                 \n\
+                 Alternatively, you can set the environment variable ELFSHAKER_DATA\n\
+                 to point to a repository, or supply --data-dir to specify the\n\
+                 repository location.",
+                p
+            ),
             Self::BadLooseObject(s) => write!(f, "Bad loose object: {s}"),
             Self::HttpError(e) => e.fmt(f),
             Self::BadRemoteIndexFormat(e) => e.fmt(f),

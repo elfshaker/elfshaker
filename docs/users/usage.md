@@ -102,6 +102,10 @@ elfshaker extract --help
 elfshaker pack <pack> [--frames N]
 ```
 
+The set of snapshots to be packed may be supplied with
+--snapshots-from=<file> or --snapshots0-from=<file> for null delimited
+lists. Otherwise all snapshots are packed.
+
 ### Example
 ```bash
 elfshaker pack my-pack --frames 8

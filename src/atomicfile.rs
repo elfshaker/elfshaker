@@ -261,7 +261,7 @@ mod tests {
             #[cfg(windows)]
             Err(e) if e.kind() == io::ErrorKind::PermissionDenied => -1,
             #[cfg(windows)]
-            Err(e) if e.raw_os_error.unwrap_or_default() == 33 => -1, // ERROR_LOCK_VIOLATION
+            Err(e) if e.raw_os_error().unwrap_or_default() == 33 => -1, // ERROR_LOCK_VIOLATION
             Err(e) => panic!("unexpected error: {:?}", e),
         })
         .sum();

@@ -608,8 +608,6 @@ impl Repository {
             let mut fd = match File::open(&file_path) {
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                     let md = fs::metadata(&file_path)?;
-                    // md.mode()
-                    // md.mode()
                     if md.len() != 0 {
                         return Err(e);
                     }

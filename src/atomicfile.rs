@@ -7,8 +7,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use std::os::unix::fs::MetadataExt;
-
 /// AtomicCreateFile provides an API for atomically creating a file, determining
 /// if it exists before proceeding to do potentially expensive work to fill it.
 /// The primitives should be used like this:
@@ -60,7 +58,10 @@ pub struct AtomicCreateFile<'l> {
 /// lock_name acquires a lock on the given `fd`, and ensures that the
 /// `fd` relates to the given Path. This protects against the case where
 /// a file can be locked, but unlinked.
+#[cfg(unix)]
 fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
     fd.try_lock_exclusive()?;
     // Lock acquired. Ensure that the name on the filesystem corresponds
     // to the lock now held.
@@ -85,10 +86,66 @@ fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
     Ok(())
 }
 
+// Would prefer to use  std::os::windows::fs::MetadataExt, but currently
+// unstable per https://github.com/rust-lang/rust/issues/63010
+#[cfg(windows)]
+fn get_file_id_and_serial(h: std::os::windows::io::RawHandle) -> std::io::Result<(u64, u32)> {
+    use std::mem::zeroed;
+    use winapi::um::fileapi::GetFileInformationByHandle;
+    use winapi::um::fileapi::BY_HANDLE_FILE_INFORMATION;
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = zeroed();
+        if GetFileInformationByHandle(h as *mut _, &mut info) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let file_index: u64 = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+        let volume_serial = info.dwVolumeSerialNumber;
+        Ok((file_index, volume_serial))
+    }
+}
+
+#[cfg(windows)]
+fn lock_name(path: &Path, fd: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    let fd2 = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("file lock for {path:?} acquired by a different process"),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+
+    let (id1, serial1) = get_file_id_and_serial(fd.as_raw_handle())?;
+    let (id2, serial2) = get_file_id_and_serial(fd2.as_raw_handle())?;
+
+    if id1 != id2 || serial1 != serial2 {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("file lock for {path:?} acquired by a different process"),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_file_share_write(options: &mut std::fs::OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+    use winapi::um::winnt::{FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE};
+    options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+}
+
+#[cfg(unix)]
+fn set_file_share_write(_: &mut std::fs::OpenOptions) {}
+
 impl<'l> AtomicCreateFile<'l> {
     pub fn new(dest: &'l Path) -> io::Result<Self> {
         let mut atomic_create_for_write = OpenOptions::new();
         atomic_create_for_write.write(true).create_new(true);
+        set_file_share_write(&mut atomic_create_for_write);
 
         let parent = dest.parent().unwrap_or_else(|| Path::new("/"));
         let file = match atomic_create_for_write.open(dest) {

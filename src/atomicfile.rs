@@ -65,7 +65,17 @@ fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
     // Lock acquired. Ensure that the name on the filesystem corresponds
     // to the lock now held.
     let i0 = fd.metadata()?.ino();
-    let i1 = fs::metadata(name)?.ino();
+    let name_metadata = match fs::metadata(name) {
+        Ok(md) => md,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("file lock for {name:?} acquired by a different process"),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+    let i1 = name_metadata.ino();
     if i0 != i1 {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,

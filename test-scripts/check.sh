@@ -236,6 +236,19 @@ test_extract_zero_length_noreadperm_works() {
   rm elfshaker_data/packs/p0.pack{,.idx}
 }
 
+test_extract_force_when_directories_gone() {
+  # Check that if the user modified the respository by deleting a
+  # directory, we're able to extract with --force.
+  "$elfshaker" --verbose store s-empty
+  mkdir a
+  touch a/a
+  "$elfshaker" --verbose store s-has-dir
+  "$elfshaker" --verbose extract s-empty
+  "$elfshaker" --verbose extract s-has-dir
+  rm -r a
+  "$elfshaker" --verbose extract --force s-empty
+}
+
 test_store_works() {
   "$elfshaker" --verbose extract --verify --reset "$pack":"$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"

@@ -161,13 +161,6 @@ pub fn create_empty<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<()> {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-const OS_ERROR_DIR_NOT_EMPTY: i32 = 39 /* ENOTEMPTY */;
-#[cfg(windows)]
-const OS_ERROR_DIR_NOT_EMPTY: i32 = 145 /* ERROR_DIR_NOT_EMPTY */;
-#[cfg(target_os = "macos")]
-const OS_ERROR_DIR_NOT_EMPTY: i32 = 66;
-
 /// Removes empty directories by starting at [`leaf_dir`] and bubbling up
 /// until `boundary_dir` is reached.
 ///
@@ -195,7 +188,14 @@ pub fn remove_empty_dirs<P1: AsRef<Path>, P2: AsRef<Path>>(
 
     let current_dir = leaf_dir.as_ref().to_path_buf();
     match fs::remove_dir(current_dir) {
-        Err(e) if matches!(e.raw_os_error(), Some(OS_ERROR_DIR_NOT_EMPTY)) => Ok(()),
+        // Directory still has some contents; the intent is to
+        // opportunistically delete directories that are throught to be
+        // empty after the current operation (e.g. migrating between
+        // snapshots). If they are not empty, leave them alone.
+        Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty => Ok(()),
+        // Directory has already gone. Perhaps the user deleted it
+        // already and we're in a --force.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Ok(()) => {
             let parent_dir = leaf_dir.as_ref().parent().unwrap();
             if parent_dir != boundary_dir.as_ref() {

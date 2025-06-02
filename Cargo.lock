@@ -184,6 +184,7 @@ dependencies = [
  "ureq",
  "url",
  "walkdir",
+ "winapi",
  "zstd",
 ]
 

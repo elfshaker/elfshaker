@@ -81,6 +81,10 @@ pub struct RemotePack {
     pub index_checksum: ObjectChecksum,
     pub pack_checksum: ObjectChecksum,
     pub url: String,
+    /// Optional size of the pack index file, in bytes (v2 indices only)
+    pub index_size: Option<u64>,
+    /// Optional size of the pack file, in bytes (v2 indices only)
+    pub pack_size: Option<u64>,
 }
 
 impl RemotePack {
@@ -180,24 +184,52 @@ impl RemoteIndex {
                 ))
             })?;
 
-            // Always provide the index URL as base URL. If the pack URL is
-            // absolute, the `join` will use it as-is.
-            let absolute_url = match base_url.join(relative_url) {
-                Ok(url) => url,
-                Err(_) => {
+            // Always provide the index URL as base URL. If the pack URL is absolute,
+            // the `join` will use it as-is.
+            let absolute_url = base_url.join(relative_url).map_err(|_| {
+                Error::BadRemoteIndexFormat(RemoteIndexFormatError::new(format!(
+                    "Expected a valid pack URL, found {relative_url} on line {line_no}"
+                )))
+            })?;
+
+            // Parse optional sizes for v2 (*.esi) entries: pack_size then index_size
+            let (pack_size, index_size) = if meta == "v2" {
+                let pack_sz_str = parts.next().ok_or_else(|| {
+                    RemoteIndexFormatError::new(format!(
+                        "Expected pack size, reached end of line {line_no}"
+                    ))
+                })?;
+                let idx_sz_str = parts.next().ok_or_else(|| {
+                    RemoteIndexFormatError::new(format!(
+                        "Expected index size, reached end of line {line_no}"
+                    ))
+                })?;
+                if parts.next().is_some() {
                     return Err(RemoteIndexFormatError::new(format!(
-                        "Expected a valid pack URL, found {url} on line {line_no}"
+                        "Too many values on line {line_no}"
                     ))
                     .into());
                 }
+                let pack_size = pack_sz_str.parse::<u64>().map_err(|_| {
+                    RemoteIndexFormatError::new(format!(
+                        "Invalid pack size '{pack_sz_str}' on line {line_no}"
+                    ))
+                })?;
+                let index_size = idx_sz_str.parse::<u64>().map_err(|_| {
+                    RemoteIndexFormatError::new(format!(
+                        "Invalid index size '{idx_sz_str}' on line {line_no}"
+                    ))
+                })?;
+                (Some(pack_size), Some(index_size))
+            } else {
+                if parts.next().is_some() {
+                    return Err(RemoteIndexFormatError::new(format!(
+                        "Too many values on line {line_no}"
+                    ))
+                    .into());
+                }
+                (None, None)
             };
-
-            if parts.next().is_some() {
-                return Err(RemoteIndexFormatError::new(format!(
-                    "Too many values on line {line_no}"
-                ))
-                .into());
-            }
 
             let index_checksum = hex::decode(index_checksum)
                 .map_err(|_| {
@@ -226,9 +258,11 @@ impl RemoteIndex {
                 })?;
 
             packs.push(RemotePack {
-                url: absolute_url.as_str().to_owned(),
+                url: absolute_url.into(),
                 index_checksum,
                 pack_checksum,
+                pack_size,
+                index_size,
             });
         }
 
@@ -588,7 +622,7 @@ fn format_http_date(t: SystemTime) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod remote_index_tests {
     use super::*;
 
     #[test]
@@ -660,6 +694,130 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
         );
         assert_eq!(r.packs.len(), 0);
 
+        Ok(())
+    }
+
+    use std::io::Cursor;
+
+    // Helper: create a 20-byte (40 hex chars) checksum string of repeated ch.
+    fn hex20(ch: char) -> String {
+        std::iter::repeat_n(ch, 40).collect()
+    }
+
+    #[test]
+    fn parse_v1_no_sizes() {
+        let idx = format!(
+            "meta v1\n\
+                 url\thttp://example.com/index.esi\n\
+                 {ic} {pc} pack1.pack\n",
+            ic = hex20('a'),
+            pc = hex20('b'),
+        );
+        let remote = RemoteIndex::read(Cursor::new(idx)).unwrap();
+        assert_eq!(remote.meta, "v1");
+        assert_eq!(remote.packs.len(), 1);
+        let p = &remote.packs[0];
+        // v1 should not set sizes
+        assert_eq!(p.index_size, None);
+        assert_eq!(p.pack_size, None);
+        // URL should join base path
+        assert_eq!(p.url, "http://example.com/pack1.pack");
+    }
+
+    #[test]
+    fn parse_v2_with_sizes() {
+        let idx = format!(
+            "meta v2\n\
+                 url http://example.org/path/index.esi\n\
+                 {ic}\t{pc}\t../p/pk.pack\t100\t200\n",
+            ic = hex20('c'),
+            pc = hex20('d'),
+        );
+        let remote = RemoteIndex::read(Cursor::new(idx)).unwrap();
+        assert_eq!(remote.meta, "v2");
+        assert_eq!(remote.packs.len(), 1);
+        let p = &remote.packs[0];
+        // sizes parsed correctly
+        assert_eq!(p.pack_size, Some(100));
+        assert_eq!(p.index_size, Some(200));
+        // relative URL should resolve correctly
+        assert_eq!(p.url, "http://example.org/p/pk.pack");
+    }
+
+    #[test]
+    fn parse_too_many_values_v2() {
+        let idx = format!(
+            "meta v2\nurl http://example.org/index.esi\n{ic} {pc} pack.pack 1 2 extra\n",
+            ic = hex20('e'),
+            pc = hex20('f'),
+        );
+        let err = RemoteIndex::read(Cursor::new(idx)).unwrap_err();
+        match err {
+            Error::BadRemoteIndexFormat(e) => {
+                // Expect message about too many values
+                assert!(e.message.contains("Too many values"));
+            }
+            other => panic!("Unexpected error variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_remote_index_v1_read_works() -> Result<(), Error> {
+        let input = concat!(
+            "meta\tv1\n",
+            "url\thttp://example.com/index.esi\n",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\t",
+            "http://example.com/A.pack\t",
+        );
+        let r = RemoteIndex::read(BufReader::new(input.as_bytes()))?;
+        // One pack entry parsed
+        assert_eq!(r.packs.len(), 1);
+        let p = &r.packs[0];
+        // Checksums
+        assert_eq!(
+            p.index_checksum.to_vec(),
+            hex::decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()
+        );
+        assert_eq!(
+            p.pack_checksum.to_vec(),
+            hex::decode("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap()
+        );
+        // URL
+        assert_eq!(p.url, "http://example.com/A.pack");
+        // Sizes
+        assert_eq!(p.pack_size, None);
+        assert_eq!(p.index_size, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_remote_index_v2_read_works() -> Result<(), Error> {
+        let input = concat!(
+            "meta\tv2\n",
+            "url\thttp://example.com/index.esi\n",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\t",
+            "http://example.com/A.pack\t",
+            "1234\t",
+            "567\n"
+        );
+        let r = RemoteIndex::read(BufReader::new(input.as_bytes()))?;
+        // One pack entry parsed
+        assert_eq!(r.packs.len(), 1);
+        let p = &r.packs[0];
+        // Checksums
+        assert_eq!(
+            p.index_checksum.to_vec(),
+            hex::decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()
+        );
+        assert_eq!(
+            p.pack_checksum.to_vec(),
+            hex::decode("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap()
+        );
+        // URL
+        assert_eq!(p.url, "http://example.com/A.pack");
+        // Sizes
+        assert_eq!(p.pack_size, Some(1234));
+        assert_eq!(p.index_size, Some(567));
         Ok(())
     }
 

@@ -497,7 +497,12 @@ impl Repository {
             path_buf.push(path);
             // Delete the file
             match fs::remove_file(&path_buf) {
+                // Nothing to remove.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                // It's a directory, delete recursively.
+                Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => {
+                    fs::remove_dir_all(&path_buf)
+                }
                 r => r,
             }?;
 

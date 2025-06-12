@@ -767,6 +767,38 @@ test_gc_objects() {
   fi
 }
 
+# Regression test for issue with `create_empty` when exploding a pack that
+# contains an empty object. After removing the loose object store, exploding
+# the pack should recreate the necessary directory hierarchy for zero-length
+# objects.
+test_explode_zero_length_creates_parents() {
+  umask 0022
+
+  # Create an empty file and store it in a snapshot
+  touch emptyfile
+  "$elfshaker" store s0
+
+  # Pack the snapshot
+  "$elfshaker" pack p0
+
+  # Remove the entire loose object store to force explode to recreate it
+  rm -rf ./elfshaker_data/loose
+
+  # Explode the pack back into loose objects; should succeed
+  if ! "$elfshaker" explode p0; then
+    echo 'elfshaker explode failed!' ;
+    exit 1
+  fi
+
+  # Verify that the empty object now exists in the loose store
+  empty_sha=$(sha1sum emptyfile | awk '{print $1}')
+  obj_path="./elfshaker_data/loose/${empty_sha:0:2}/${empty_sha:2:2}/${empty_sha:4}"
+  if [ ! -f "$obj_path" ]; then
+    echo 'Explode did not recreate empty object path!'
+    exit 1
+  fi
+}
+
 test_gc_objects_dry_run() {
   # Create loose snapshot with two objects
   touch foo bar
@@ -866,6 +898,7 @@ main() {
   run_test test_gc_objects
   run_test test_gc_objects_dry_run
   run_test test_read_only
+  run_test test_explode_zero_length_creates_parents
 }
 
 main "$@"

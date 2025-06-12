@@ -8,8 +8,8 @@
 set -euo pipefail
 shopt -s extglob
 
-if [[ $# != 2 ]]; then
-  echo "Usage: ./check.sh path/to/elfshaker path/to/file.pack"
+if [[ $# < 2 ]]; then
+  echo "Usage: ./check.sh path/to/elfshaker path/to/file.pack [tests]"
   exit 1
 fi
 
@@ -22,6 +22,8 @@ elfshaker=$(realpath "$1")
 input=$(realpath "$2")
 pack=$(basename -- "$input")
 pack="${pack%.*}"
+
+shift 2
 
 temp_dir=$(realpath ${TMP-${TMPDIR-/tmp}}/"test-T$(timestamp)")
 trap 'trap_exit' EXIT
@@ -818,6 +820,14 @@ main() {
   if [[ "$snapshot_a" == "$snapshot_b" ]]; then
     echo "Testing failed because the specified pack file contains only 1 snapshot. At least 2 snapshots are needed for a successful test!";
     exit 1
+  fi
+
+  if [[ $# != 0 ]];
+  then
+    for test in "$@"; do
+      run_test "$test"
+    done
+    return
   fi
 
   SKIP_BAD_WINDOWS_TESTS="${SKIP_BAD_WINDOWS_TESTS-}" # default empty; set to non-empty to skip failing tests on window.

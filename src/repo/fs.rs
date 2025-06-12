@@ -129,9 +129,36 @@ pub fn create_with_mode<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<File> 
 // create an empty file with no permissions, or overwrite one with no
 // permissions, in which case a File::create in situ may fail.
 pub fn create_empty<P: AsRef<Path>>(path: P, mode: u32) -> io::Result<()> {
-    let tmp = create_temp_path(path.as_ref().parent().unwrap());
-    create_with_mode(&tmp, mode)?;
-    fs::rename(tmp, path)
+    use std::io::ErrorKind;
+
+    let path = path.as_ref();
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            "cannot create file at repository root – no parent directory",
+        )
+    })?;
+
+    // Helper that actually writes the temporary file and renames it into place.
+    let try_create_and_rename = |make_parent_dirs: bool| -> io::Result<()> {
+        if make_parent_dirs {
+            fs::create_dir_all(parent)?;
+        }
+
+        let tmp = create_temp_path(parent);
+        create_with_mode(&tmp, mode).and_then(|_| fs::rename(&tmp, path))
+    };
+
+    match try_create_and_rename(false) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            // Either the parent directory was missing when we tried to create the
+            // temporary file or the destination directory was missing when we
+            // attempted the rename. Ensure the directory exists and retry once.
+            try_create_and_rename(true)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

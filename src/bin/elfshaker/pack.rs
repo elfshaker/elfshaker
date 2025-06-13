@@ -175,7 +175,7 @@ fn packs_from_list(
         .collect()
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     let compression_level_range = zstd::compression_level_range();
 
     App::new(SUBCOMMAND)
@@ -190,7 +190,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
         )
         .arg(
             Arg::with_name("threads")
-                .short("T")
+                .short('T')
                 .long("threads")
                 .takes_value(true)
                 .help("Use the specified number of worker threads for compression. \

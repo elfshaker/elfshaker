@@ -26,7 +26,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     App::new(SUBCOMMAND)
         .about("Explodes a pack into loose objects")
         .arg(

@@ -15,7 +15,7 @@ path = "src/bin/elfshaker/main.rs"
 zstd = { version = "0.13.3", features = ["zstdmt"] }
 crossbeam-utils = "0.8"
 walkdir = "2.5.0"
-clap = "2.34.0"
+clap = { version = "3", features = ["color", "env", "termcolor"] }
 rust-crypto = "0.2.36"
 hashbrown = "0.15.3"
 hex = "0.4.3"

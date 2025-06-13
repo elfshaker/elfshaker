@@ -72,7 +72,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     App::new(SUBCOMMAND)
         .about("Can be used to extract a snapshot.")
         .arg(
@@ -94,7 +94,7 @@ pub(crate) fn get_app() -> App<'static, 'static> {
                 .long("force")
                 .help("Disables certain runtime checks that aim to detect unexpected file modification and prevent data loss."))
         .arg(Arg::with_name("threads")
-                .short("T")
+                .short('T')
                 .long("threads")
                 .takes_value(true)
                 .help("Use the specified number of worker threads for decompression. \

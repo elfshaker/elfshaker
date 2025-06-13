@@ -15,7 +15,7 @@ mod store;
 mod update;
 mod utils;
 
-use clap::{crate_version, App, Arg, ArgMatches};
+use clap::{App, Arg, ArgMatches};
 use elfshaker::log::Logger;
 use log::error;
 use std::error::Error;
@@ -45,18 +45,18 @@ fn main() {
 
 fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     match matches.subcommand() {
-        (extract::SUBCOMMAND, Some(matches)) => extract::run(matches),
-        (explode::SUBCOMMAND, Some(matches)) => explode::run(matches),
-        (store::SUBCOMMAND, Some(matches)) => store::run(matches),
-        (list::SUBCOMMAND, Some(matches)) => list::run(matches),
-        (list_packs::SUBCOMMAND, Some(matches)) => list_packs::run(matches),
-        (list_files::SUBCOMMAND, Some(matches)) => list_files::run(matches),
-        (pack::SUBCOMMAND, Some(matches)) => pack::run(matches),
-        (show::SUBCOMMAND, Some(matches)) => show::run(matches),
-        (find::SUBCOMMAND, Some(matches)) => find::run(matches),
-        (gc::SUBCOMMAND, Some(matches)) => gc::run(matches),
-        (update::SUBCOMMAND, Some(matches)) => update::run(matches),
-        (clone::SUBCOMMAND, Some(matches)) => clone::run(matches),
+        Some((extract::SUBCOMMAND, matches)) => extract::run(matches),
+        Some((explode::SUBCOMMAND, matches)) => explode::run(matches),
+        Some((store::SUBCOMMAND, matches)) => store::run(matches),
+        Some((list::SUBCOMMAND, matches)) => list::run(matches),
+        Some((list_packs::SUBCOMMAND, matches)) => list_packs::run(matches),
+        Some((list_files::SUBCOMMAND, matches)) => list_files::run(matches),
+        Some((pack::SUBCOMMAND, matches)) => pack::run(matches),
+        Some((show::SUBCOMMAND, matches)) => show::run(matches),
+        Some((find::SUBCOMMAND, matches)) => find::run(matches),
+        Some((gc::SUBCOMMAND, matches)) => gc::run(matches),
+        Some((update::SUBCOMMAND, matches)) => update::run(matches),
+        Some((clone::SUBCOMMAND, matches)) => clone::run(matches),
         _ => {
             app.print_long_help()?;
             println!();
@@ -65,9 +65,9 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
     }
 }
 
-fn get_app() -> App<'static, 'static> {
+fn get_app() -> App<'static> {
     App::new("elfshaker")
-        .version(crate_version!())
+        // .version(crate_version!())
         .subcommand(extract::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())

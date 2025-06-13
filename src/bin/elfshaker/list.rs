@@ -28,7 +28,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     App::new(SUBCOMMAND)
         .about("Prints the list of snapshots available in the repository.")
         .arg(

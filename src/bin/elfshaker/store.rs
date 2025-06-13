@@ -49,7 +49,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     App::new(SUBCOMMAND)
         .about(
             "Stores the current state of the repository in a snapshot. The snapshots \

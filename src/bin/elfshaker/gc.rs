@@ -80,7 +80,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     App::new(SUBCOMMAND)
         .about(
             "Cleanup redundant snapshots and unreferenced objects. \
@@ -93,13 +93,13 @@ pub(crate) fn get_app() -> App<'static, 'static> {
         )
         .arg(
             Arg::with_name("loose_snapshots")
-                .short("s")
+                .short('s')
                 .long("loose-snapshots")
                 .help("Delete redundant loose snapshots which exist an a pack."),
         )
         .arg(
             Arg::with_name("loose_objects")
-                .short("o")
+                .short('o')
                 .long("loose-objects")
                 .help(
                     "Delete unreferenced loose objects (which are not needed \

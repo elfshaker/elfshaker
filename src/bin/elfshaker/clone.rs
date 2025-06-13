@@ -60,7 +60,7 @@ fn do_clone(work_dir: &Path, data_dir: &Path, origin_url: &str) -> Result<(), Bo
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static, 'static> {
+pub(crate) fn get_app() -> App<'static> {
     App::new(SUBCOMMAND)
         .about("Clones a remote repository into a new directory")
         .arg(

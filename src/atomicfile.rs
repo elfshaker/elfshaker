@@ -7,8 +7,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use std::os::unix::fs::MetadataExt;
-
 /// AtomicCreateFile provides an API for atomically creating a file, determining
 /// if it exists before proceeding to do potentially expensive work to fill it.
 /// The primitives should be used like this:
@@ -25,17 +23,14 @@ use std::os::unix::fs::MetadataExt;
 ///     // ... files are closed here ...
 /// ```
 ///
-/// 1. If the file already exists and has non-zero size, it is an error in
-///    ::new.
-/// 2. If the file exists and has an exclusive lock on it, another process is
+/// 1. If the file exists and has an exclusive lock on it, another process is
 ///    approaching commit_content(), and it is an 'already exists' error.
-/// 3. If the file exists, has size zero, and has no exclusive lock; the
-///    original process is assumed to have crashed. The stale file is deleted,
-///    and a new one is attempted to be made.
-/// 4. commit_content writes its content into a randomly named file in the same
+/// 2. If the file exists, has size zero, and has no exclusive lock; the
+///    original process is assumed to have crashed.
+/// 3. commit_content writes its content into a randomly named file in the same
 ///    directory as the destination_path, and then uses rename() to the
 ///    destination to achieve an atomic update.
-/// 5. As a convenience, if file creation fails because parent directories don't
+/// 4. As a convenience, if file creation fails because parent directories don't
 ///    exist, create them and proceed. This handily avoids the work of checking
 ///    if parent directories exist and creating them, saving on syscalls in the
 ///    success case.
@@ -47,10 +42,6 @@ use std::os::unix::fs::MetadataExt;
 /// as though it doesn't yet exist. Further, stale temporary files can be
 /// identified as files with the prefix .elfshakertmp_ which have no exclusive
 /// lock held.
-///
-/// Additionally, AtomicCreateFile::prune_stale_file(p) returns true if the
-/// given path `p` is an empty file with no lock held. In that case, the file is
-/// deleted with the lock held so the name can be reused.
 pub struct AtomicCreateFile<'l> {
     path: &'l Path,
     temp: (PathBuf, File),
@@ -60,12 +51,25 @@ pub struct AtomicCreateFile<'l> {
 /// lock_name acquires a lock on the given `fd`, and ensures that the
 /// `fd` relates to the given Path. This protects against the case where
 /// a file can be locked, but unlinked.
+#[cfg(unix)]
 fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
     fd.try_lock_exclusive()?;
     // Lock acquired. Ensure that the name on the filesystem corresponds
     // to the lock now held.
     let i0 = fd.metadata()?.ino();
-    let i1 = fs::metadata(name)?.ino();
+    let name_metadata = match fs::metadata(name) {
+        Ok(md) => md,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("file lock for {name:?} acquired by a different process"),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+    let i1 = name_metadata.ino();
     if i0 != i1 {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
@@ -75,81 +79,91 @@ fn lock_name(name: &Path, fd: &File) -> io::Result<()> {
     Ok(())
 }
 
+// Would prefer to use  std::os::windows::fs::MetadataExt, but currently
+// unstable per https://github.com/rust-lang/rust/issues/63010
+#[cfg(windows)]
+fn get_file_id_and_serial(h: std::os::windows::io::RawHandle) -> std::io::Result<(u64, u32)> {
+    use std::mem::zeroed;
+    use winapi::um::fileapi::GetFileInformationByHandle;
+    use winapi::um::fileapi::BY_HANDLE_FILE_INFORMATION;
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION = zeroed();
+        if GetFileInformationByHandle(h as *mut _, &mut info) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let file_index: u64 = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+        let volume_serial = info.dwVolumeSerialNumber;
+        Ok((file_index, volume_serial))
+    }
+}
+
+#[cfg(windows)]
+fn lock_name(path: &Path, fd: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    fd.try_lock_exclusive()?;
+    // Lock acquired. Ensure that the name on the filesystem corresponds
+    // to the lock now held.
+    let fd2 = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("file lock for {path:?} acquired by a different process"),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+
+    let (id1, serial1) = get_file_id_and_serial(fd.as_raw_handle())?;
+    let (id2, serial2) = get_file_id_and_serial(fd2.as_raw_handle())?;
+
+    if id1 != id2 || serial1 != serial2 {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("file lock for {path:?} acquired by a different process"),
+        ));
+    }
+
+    Ok(())
+}
+
 impl<'l> AtomicCreateFile<'l> {
     pub fn new(dest: &'l Path) -> io::Result<Self> {
         let mut atomic_create_for_write = OpenOptions::new();
-        atomic_create_for_write.write(true).create_new(true);
+        atomic_create_for_write.write(true).create(true);
 
         let parent = dest.parent().unwrap_or_else(|| Path::new("/"));
-        let file = match atomic_create_for_write.open(dest) {
+        match atomic_create_for_write.open(dest) {
             Ok(file) => {
                 // Grab a lock to indicate that the use is 'live' as opposed to
                 // stale. Failure to grab the lock here should be a rare race
                 // condition, but some other process will have the lock and
                 // proceed.
                 lock_name(dest, &file)?;
-                Ok(file)
+                if file.metadata()?.len() > 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} already exists and is non-empty", dest.display()),
+                    ));
+                }
+                // The file exists, is empty, and has a lock on it.
+                Ok(Self {
+                    path: dest,
+                    temp: Self::create_temp(parent)?,
+                    target: file,
+                })
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 // NotFound during creation indicates parent directories do not
                 // exist. Make them and try again.
                 fs::create_dir_all(parent)?;
-                atomic_create_for_write.open(dest).map_err(|e| {
-                    io::Error::new(
-                        e.kind(),
-                        format!("couldn't open {} for writing", dest.display()),
-                    )
-                })
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                if Self::prune_stale_file(dest) {
-                    // File was empty and had no lock. At this point it has been
-                    // deleted, so try again.
-                    return Self::new(dest);
-                }
-                Err(e)
+                Self::new(dest)
             }
             Err(e) => Err(io::Error::new(
                 e.kind(),
                 format!("couldn't open {} for writing", dest.display()),
             )),
-        }?;
-
-        // At this point on success the target file is a zero-byte file on disk
-        // with an exclusive lock held on it.
-
-        Ok(Self {
-            path: dest,
-            temp: Self::create_temp(parent)?,
-            target: file,
-        })
-    }
-
-    /// prune_stale_file returns true if the given file was deleted as stale.
-    /// This can occur if a crash happens: in that case, there is a 0-byte file
-    /// with no lock on it which can be safely deleted.
-    pub fn prune_stale_file<P: AsRef<Path>>(p: P) -> bool {
-        let p = p.as_ref();
-        // Attempt to open, lock, and delete the file. Return true on
-        // success, false otherwise.
-        OpenOptions::new()
-            .read(true)
-            .open(p)
-            .and_then(|file| {
-                let md = file.metadata()?;
-                if !md.is_file() || md.len() > 0 {
-                    // Files with non-zero length are not stale.
-                    return Ok(false);
-                }
-
-                if lock_name(p, &file).is_ok() {
-                    fs::remove_file(p)?;
-                    Ok(true)
-                } else {
-                    Ok(false) // Another process has the lock.
-                }
-            })
-            .unwrap_or(false)
+        }
     }
 
     /// create_temp makes a temporary file in the same directory as 'dest' with
@@ -187,9 +201,16 @@ impl<'l> AtomicCreateFile<'l> {
         );
         // Check that the data made it to disk before proceeding.
         self.temp.1.sync_data()?;
+
+        // Windows (wine, at least) does not allow renaming a file that is
+        // currently open, so we need to drop the lock on the target file
+        // before renaming it. This creates a short race window.
+        #[cfg(windows)]
+        drop(self.target);
         fs::rename(self.temp.0, self.path)?;
         // Silence field-not-read warning, and conceptually: release the lock
         // here.
+        #[cfg(not(windows))]
         drop(self.target);
         Ok(())
     }
@@ -236,6 +257,11 @@ mod tests {
             Ok(_) => 1,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => -1,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => -1,
+            // Can arise from rename.
+            #[cfg(windows)]
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => -1,
+            #[cfg(windows)]
+            Err(e) if e.raw_os_error().unwrap_or_default() == 33 => -1, // ERROR_LOCK_VIOLATION
             Err(e) => panic!("unexpected error: {:?}", e),
         })
         .sum();

@@ -22,7 +22,7 @@
         self.packages.${system}.rustToolchain
         pkgs.pkgsCross.aarch64-multiplatform-musl.stdenv.cc
         pkgs.pkgsCross.musl64.stdenv.cc
-      ] ++ lib.optionals pkgs.stdenv.hostPlatform.isx86 [ # Don't do windows cross-arch cross-compile for now.
+      # ] ++ lib.optionals pkgs.stdenv.hostPlatform.isx86 [ # Don't do windows cross-arch cross-compile for now.
         pkgs.pkgsCross.mingwW64.stdenv.cc
       ];
       CARGO_BUILD_TARGET = pkgs.stdenv.hostPlatform.config;
@@ -78,13 +78,13 @@
         # ];
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "x86_64-unknown-linux-musl-ld";
         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "cc";
-      } // lib.optionalAttrs isWindows {
         # (Not fully tested, build gets as far as programming errors
         # relating to our handling of file permissions which needs
         # fixing, but this may work.)
         CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc";
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.windows.mingw_w64_pthreads}/lib";
 
+      } // lib.optionalAttrs isWindows {
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc";
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeShellScript "wine-wrapper" ''
           export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all

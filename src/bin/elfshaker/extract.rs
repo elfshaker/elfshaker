@@ -3,7 +3,7 @@
 
 use std::error::Error;
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use log::{info, warn};
 
 use super::utils::{create_percentage_print_reporter, open_repo_from_cwd};
@@ -13,14 +13,14 @@ use elfshaker::repo::{Error as RepoError, ExtractOptions};
 pub(crate) const SUBCOMMAND: &str = "extract";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
-    let snapshot = matches.value_of("snapshot").unwrap();
-    let is_reset = matches.is_present("reset");
-    let is_verify = matches.is_present("verify");
-    let is_force = matches.is_present("force");
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
+    let snapshot = matches.get_one::<String>("snapshot").unwrap();
+    let is_reset = matches.get_flag("reset");
+    let is_verify = matches.get_flag("verify");
+    let is_force = matches.get_flag("force");
 
     // Parse --threads
-    let threads: u32 = match matches.value_of("threads").unwrap().parse()? {
+    let threads: u32 = match matches.get_one::<String>("threads").unwrap().parse()? {
         0 => {
             let phys_cores = num_cpus::get_physical();
             info!(
@@ -72,31 +72,34 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Can be used to extract a snapshot.")
         .arg(
-            Arg::with_name("snapshot")
+            Arg::new("snapshot")
                 .required(true)
                 .index(1)
                 .help("The tag of the snapshot to extract."),
         )
-        .arg(Arg::with_name("reset").long("reset").help(
+        .arg(Arg::new("reset").long("reset").help(
             "Specifying this ignores the current HEAD and extract all files from the snapshot. \
             When this flag is not specified, only an incremental file update is done.",
-        ))
+        ).action(ArgAction::SetTrue))
         .arg(
-            Arg::with_name("verify")
+            Arg::new("verify")
                 .long("verify")
-                .help("Enables SHA-1 verification of the extracted files. This has a small performance overhead."),
+                .help("Enables SHA-1 verification of the extracted files. This has a small performance overhead.")
+                .action(ArgAction::SetTrue)
         )
-        .arg(Arg::with_name("force")
+        .arg(Arg::new("force")
                 .long("force")
-                .help("Disables certain runtime checks that aim to detect unexpected file modification and prevent data loss."))
-        .arg(Arg::with_name("threads")
+                .help("Disables certain runtime checks that aim to detect unexpected file modification and prevent data loss.")
+                .action(ArgAction::SetTrue)
+            )
+        .arg(Arg::new("threads")
                 .short('T')
                 .long("threads")
-                .takes_value(true)
+                // .takes_value(true)
                 .help("Use the specified number of worker threads for decompression. \
                       The number of threads used is proportional to the memory needed for decompression.")
                 .default_value("0"))

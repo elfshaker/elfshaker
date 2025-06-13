@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use elfshaker::repo::run_in_parallel;
 use std::{error::Error, ops::ControlFlow};
 
@@ -11,39 +11,35 @@ use elfshaker::repo::{PackId, Repository};
 pub(crate) const SUBCOMMAND: &str = "list";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
-    let packs = matches.values_of_lossy("pack");
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
+    let packs = matches.get_many::<String>("pack");
     let format = matches
-        .value_of_lossy("format")
+        .get_one::<String>("format")
         .expect("<format> not provided");
 
     let repo = open_repo_from_cwd(data_dir)?;
 
     let packs = packs
-        .map(|packs| packs.iter().cloned().map(PackId::Pack).collect())
+        .map(|packs| packs.cloned().map(PackId::Pack).collect())
         .unwrap_or(repo.packs()?);
 
-    print_snapshots(&repo, &packs, &format)?;
+    print_snapshots(&repo, &packs, format)?;
 
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Prints the list of snapshots available in the repository.")
         .arg(
-            Arg::with_name("pack")
+            Arg::new("pack")
                 .index(1)
                 .required(false)
-                .multiple(true)
+                // .multiple(true)
                 .help("Prints the contents of the specified packs."),
         )
-        .arg(
-            Arg::with_name("format")
-                .long("format")
-                .default_value("%s")
-                .help(
-                    "Pretty-print each result in the given format, where \
+        .arg(Arg::new("format").long("format").default_value("%s").help(
+            "Pretty-print each result in the given format, where \
                     <format> is a string containing one or more of the \
                     following placeholders:\n\
                     \t%s - fully-qualified snapshot\n\
@@ -51,8 +47,7 @@ pub(crate) fn get_app() -> App<'static> {
                     \t%h - human-readable size\n\
                     \t%b - size in bytes\n\
                     \t%n - number of files\n",
-                ),
-        )
+        ))
 }
 
 fn format_snapshot_row(

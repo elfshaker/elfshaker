@@ -1,8 +1,9 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use rand::RngCore;
+use std::ffi::OsString;
 use std::{collections::HashMap, error::Error};
 
 use super::utils::open_repo_from_cwd;
@@ -12,9 +13,9 @@ use elfshaker::repo::ExtractOptions;
 pub(crate) const SUBCOMMAND: &str = "show";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
-    let snapshot = matches.value_of("snapshot").unwrap();
-    let paths: Vec<_> = matches.values_of_os("path").unwrap().collect();
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
+    let snapshot = matches.get_one::<String>("snapshot").unwrap().as_str();
+    let paths: Vec<_> = matches.get_many::<String>("path").unwrap().collect();
 
     let mut repo = open_repo_from_cwd(data_dir)?;
     let snapshot = repo.find_snapshot(snapshot)?;
@@ -34,7 +35,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Attempt to find all entries by the paths specified on the command line.
     let selected_entries: Option<Vec<_>> = paths
         .iter()
-        .map(|p| entries.get(p.to_owned()).cloned())
+        .map(|p| entries.get(OsString::from(p).as_os_str()).cloned())
         .collect();
     // And fail-fast if any are missing.
     let selected_entries = match selected_entries {
@@ -70,20 +71,19 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Shows the contents of the files in the snapshot.")
         .arg(
-            Arg::with_name("snapshot")
+            Arg::new("snapshot")
                 .required(true)
                 .index(1)
                 .help("The snapshot in which to to look for the files."),
         )
         .arg(
-            Arg::with_name("path")
-                .takes_value(true)
-                .multiple(true)
+            Arg::new("path")
                 .required(true)
+                .index(2)
                 .help("Specifies the path(s) to show."),
         )
 }

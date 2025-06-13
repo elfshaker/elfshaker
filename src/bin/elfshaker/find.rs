@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use std::error::Error;
 
 use super::utils::{open_repo_from_cwd, print_table};
@@ -9,8 +9,8 @@ use super::utils::{open_repo_from_cwd, print_table};
 pub(crate) const SUBCOMMAND: &str = "find";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
-    let term = matches.value_of("term").unwrap();
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
+    let term = matches.get_one::<String>("term").unwrap();
     let repo = open_repo_from_cwd(data_dir)?;
 
     let mut table = vec![];
@@ -41,11 +41,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Searches the repository index.")
         .arg(
-            Arg::with_name("term")
+            Arg::new("term")
                 .required(true)
                 .index(1)
                 .default_value("")

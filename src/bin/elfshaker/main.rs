@@ -15,7 +15,7 @@ mod store;
 mod update;
 mod utils;
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use elfshaker::log::Logger;
 use log::error;
 use std::error::Error;
@@ -30,7 +30,7 @@ fn main() {
 
     let mut app = get_app();
     let matches = app.clone().get_matches();
-    let is_verbose = matches.is_present("verbose");
+    let is_verbose = matches.get_flag("verbose");
     Logger::init(if is_verbose {
         log::Level::Info
     } else {
@@ -43,7 +43,7 @@ fn main() {
     }
 }
 
-fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Error>> {
+fn run_subcommand(app: &mut Command, matches: ArgMatches) -> Result<(), Box<dyn Error>> {
     match matches.subcommand() {
         Some((extract::SUBCOMMAND, matches)) => extract::run(matches),
         Some((explode::SUBCOMMAND, matches)) => explode::run(matches),
@@ -65,8 +65,9 @@ fn run_subcommand(app: &mut App, matches: ArgMatches) -> Result<(), Box<dyn Erro
     }
 }
 
-fn get_app() -> App<'static> {
-    App::new("elfshaker")
+fn get_app() -> Command {
+    Command::new("elfshaker")
+        .override_usage("elfshaker [GLOBAL-OPTS] <SUBCOMMAND> [SUBCOMMAND-OPTS]")
         // .version(crate_version!())
         .subcommand(extract::get_app())
         .subcommand(store::get_app())
@@ -81,13 +82,14 @@ fn get_app() -> App<'static> {
         .subcommand(clone::get_app())
         .subcommand(explode::get_app())
         .arg(
-            Arg::with_name("verbose")
+            Arg::new("verbose")
                 .long("verbose")
                 .help("Enables verbose description of the execution process.")
-                .global(true),
+                .global(true)
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::with_name("data_dir")
+            Arg::new("data_dir")
                 .long("data-dir")
                 .env("ELFSHAKER_DATA")
                 .hide_env_values(true)

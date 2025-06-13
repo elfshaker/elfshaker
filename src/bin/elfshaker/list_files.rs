@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use std::{error::Error, ffi::OsStr};
 
 use super::utils::{format_size, open_repo_from_cwd};
@@ -11,34 +11,34 @@ use elfshaker::repo::{Repository, SnapshotId};
 pub(crate) const SUBCOMMAND: &str = "list-files";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
     let snapshot = matches
-        .value_of_lossy("snapshot")
+        .get_one::<String>("snapshot")
         .expect("expected snapshot");
     let format = matches
-        .value_of_lossy("format")
+        .get_one::<String>("format")
         .expect("<format> not provided");
 
     let repo = open_repo_from_cwd(data_dir)?;
 
-    let snapshot_id = repo.find_snapshot(&snapshot)?;
+    let snapshot_id = repo.find_snapshot(snapshot)?;
 
-    print_files(&repo, &snapshot_id, &format)?;
+    print_files(&repo, &snapshot_id, format)?;
 
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Prints the list of files available in the snapshot.")
         .arg(
-            Arg::with_name("snapshot")
+            Arg::new("snapshot")
                 .index(1)
                 .required(true)
                 .help("Prints the contents of the specified snapshot."),
         )
         .arg(
-            Arg::with_name("format")
+            Arg::new("format")
                 .long("format")
                 .default_value("%o %b %f")
                 .help(

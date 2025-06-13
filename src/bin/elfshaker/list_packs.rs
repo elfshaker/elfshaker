@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use std::error::Error;
 
 use super::utils::{format_size, open_repo_from_cwd};
@@ -10,35 +10,30 @@ use elfshaker::repo::{PackId, Repository};
 pub(crate) const SUBCOMMAND: &str = "list-packs";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
     let format = matches
-        .value_of_lossy("format")
+        .get_one::<String>("format")
         .expect("<format> not provided");
 
     let repo = open_repo_from_cwd(data_dir)?;
 
-    print_packs(&repo, &format)?;
+    print_packs(&repo, format)?;
 
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Prints the list of packs available in the repository.")
-        .arg(
-            Arg::with_name("format")
-                .long("format")
-                .default_value("%p")
-                .help(
-                    "Pretty-print each result in the given format, where \
+        .arg(Arg::new("format").long("format").default_value("%p").help(
+            "Pretty-print each result in the given format, where \
                     <format> is a string containing one or more of the \
                     following placeholders:\n\
                     \t%p - pack\n\
                     \t%h - human-readable size\n\
                     \t%b - size in bytes\n\
                     \t%c - number of snapshots\n",
-                ),
-        )
+        ))
 }
 
 fn format_pack_row(fmt: &str, pack_id: &PackId, snapshot_count: usize, size: u64) -> String {

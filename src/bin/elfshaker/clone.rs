@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2022 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use rand::RngCore;
 use std::error::Error;
 use std::{
@@ -15,9 +15,9 @@ use elfshaker::repo::Repository;
 pub(crate) const SUBCOMMAND: &str = "clone";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
-    let origin_url = matches.value_of("repository").unwrap();
-    let directory = matches.value_of("directory").unwrap();
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
+    let origin_url = matches.get_one::<String>("repository").unwrap();
+    let directory = matches.get_one::<String>("directory").unwrap();
 
     let original_cwd = std::env::current_dir()?;
     if Path::new(directory).exists() {
@@ -60,17 +60,17 @@ fn do_clone(work_dir: &Path, data_dir: &Path, origin_url: &str) -> Result<(), Bo
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about("Clones a remote repository into a new directory")
         .arg(
-            Arg::with_name("repository")
+            Arg::new("repository")
                 .required(true)
                 .index(1)
                 .help("The URL of the remote repository index (.esi) to clone."),
         )
         .arg(
-            Arg::with_name("directory")
+            Arg::new("directory")
                 .required(true)
                 .index(2)
                 .help("The name of a new directory to clone into."),

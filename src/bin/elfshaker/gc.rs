@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::{Arg, ArgMatches, Command};
 use log::{error, info};
 use std::error::Error;
 
@@ -17,10 +17,10 @@ pub(crate) const SUBCOMMAND: &str = "gc";
 /// We GC the loose snapshots first and then use the remaining loose snapshots
 /// as the roots in the "object graph" for reachability analysis.
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
-    let dry_run = matches.is_present("dry_run");
-    let loose_snapshots = matches.is_present("loose_snapshots");
-    let loose_objects = matches.is_present("loose_objects");
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
+    let dry_run = matches.get_flag("dry_run");
+    let loose_snapshots = matches.get_flag("loose_snapshots");
+    let loose_objects = matches.get_flag("loose_objects");
 
     if !loose_snapshots && !loose_objects {
         error!(
@@ -80,30 +80,33 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn get_app() -> App<'static> {
-    App::new(SUBCOMMAND)
+pub(crate) fn get_app() -> Command {
+    Command::new(SUBCOMMAND)
         .about(
             "Cleanup redundant snapshots and unreferenced objects. \
             This frees up disk space after creating a pack.",
         )
         .arg(
-            Arg::with_name("dry_run")
+            Arg::new("dry_run")
                 .long("dry-run")
-                .help("Do not actually delete anything."),
+                .help("Do not actually delete anything.")
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::with_name("loose_snapshots")
+            Arg::new("loose_snapshots")
                 .short('s')
                 .long("loose-snapshots")
-                .help("Delete redundant loose snapshots which exist an a pack."),
+                .help("Delete redundant loose snapshots which exist an a pack.")
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::with_name("loose_objects")
+            Arg::new("loose_objects")
                 .short('o')
                 .long("loose-objects")
                 .help(
                     "Delete unreferenced loose objects (which are not needed \
                     by any snapshot).",
-                ),
+                )
+                .action(clap::ArgAction::SetTrue),
         )
 }

@@ -1,7 +1,8 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{App, Arg, ArgMatches};
+use clap::Command;
+use clap::{Arg, ArgMatches};
 use log::error;
 use log::info;
 use std::{error::Error, fs, io, ops::ControlFlow, str::FromStr};
@@ -21,23 +22,27 @@ pub(crate) const SUBCOMMAND: &str = "pack";
 const DEFAULT_COMPRESSION_WINDOW_LOG: u32 = 28;
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    let data_dir = std::path::Path::new(matches.value_of("data_dir").unwrap());
+    let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
     // Parse pack name
-    let pack = matches.value_of("pack").unwrap();
-    let snapshots_from = matches.value_of("snapshots-from");
-    let snapshots0_from = matches.value_of("snapshots0-from");
+    let pack = matches.get_one::<String>("pack").unwrap();
+    let snapshots_from = matches.get_one::<String>("snapshots-from");
+    let snapshots0_from = matches.get_one::<String>("snapshots0-from");
     let pack = PackId::from_str(pack)?;
     let indexes = matches
-        .values_of("indexes")
+        .get_many::<String>("indexes")
         .map(|opts| {
             opts.into_iter()
+                .map(|s| s.as_str())
                 .map(PackId::from_str)
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
 
     // Parse --compression-level
-    let compression_level: i32 = matches.value_of("compression-level").unwrap().parse()?;
+    let compression_level: i32 = matches
+        .get_one::<String>("compression-level")
+        .unwrap()
+        .parse()?;
     let compression_level_range = zstd::compression_level_range();
     if !compression_level_range.contains(&compression_level) {
         return Err(format!(
@@ -50,7 +55,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     }
 
     // Parse --threads
-    let threads: u32 = match matches.value_of("threads").unwrap().parse()? {
+    let threads: u32 = match matches.get_one::<String>("threads").unwrap().parse()? {
         0 => {
             let phys_cores = num_cpus::get_physical();
             info!(
@@ -106,7 +111,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     }
 
     // Parse --frames
-    let frames: u32 = match matches.value_of("frames").unwrap().parse()? {
+    let frames: u32 = match matches.get_one::<String>("frames").unwrap().parse()? {
         0 => {
             let loose_size = new_index.object_size_total();
             let frames = get_frame_size_hint(loose_size);
@@ -175,31 +180,28 @@ fn packs_from_list(
         .collect()
 }
 
-pub(crate) fn get_app() -> App<'static> {
+pub(crate) fn get_app() -> Command {
     let compression_level_range = zstd::compression_level_range();
 
-    App::new(SUBCOMMAND)
+    Command::new(SUBCOMMAND)
         .about("Packs the given snapshots into a pack file.")
         .arg(
-            Arg::with_name("pack")
-                .takes_value(true)
+            Arg::new("pack")
                 .required(true)
                 .index(1)
                 .value_name("name")
                 .help("Specifies the name of the pack to create."),
         )
         .arg(
-            Arg::with_name("threads")
+            Arg::new("threads")
                 .short('T')
                 .long("threads")
-                .takes_value(true)
                 .help("Use the specified number of worker threads for compression. \
                       The number of threads used is proportional to the memory needed for compression.")
                 .default_value("0"),
         )
         .arg(
-            Arg::with_name("compression-level")
-                .takes_value(true)
+            Arg::new("compression-level")
                 .long("compression-level")
                 .help(leak_static_str(format!("The ZStandard compression level to use (up to {}). Negative values enable fast compression.",
                     compression_level_range.end())))
@@ -207,8 +209,7 @@ pub(crate) fn get_app() -> App<'static> {
                 .allow_hyphen_values(true)
         )
         .arg(
-            Arg::with_name("frames")
-                .takes_value(true)
+            Arg::new("frames")
                 .long("frames")
                 .help(
                     "The number of frames to emit in the pack file. \
@@ -219,23 +220,20 @@ pub(crate) fn get_app() -> App<'static> {
                 .default_value("0")
         )
         .arg(
-            Arg::with_name("snapshots-from")
-                .takes_value(true)
+            Arg::new("snapshots-from")
                 .long("snapshots-from")
                 .value_name("file")
                 .help("Reads the list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
         )
         .arg(
-            Arg::with_name("snapshots0-from")
-                .takes_value(true)
+            Arg::new("snapshots0-from")
                 .long("snapshots0-from")
                 .value_name("file")
                 .help("Reads the NUL-separated (ASCII \\0) list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
         )
         .arg(
-            Arg::with_name("indexes")
+            Arg::new("indexes")
             .index(2)
-                .multiple(true)
                 .help("Specify the indexes of packs to include.")
         )
 }

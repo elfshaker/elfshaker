@@ -28,9 +28,11 @@ commits_for_month() {
 
     # Consider only commits touching these directories of interest.
     INTERESTING_PATHS=(
-        llvm
         clang
+        clang-tools-extra
         cmake
+        llvm
+        third-party
     )
     git-list-between origin/main "${FROM_INCL}" "${TO_EXCL}" -- "${INTERESTING_PATHS[@]}"
 }
@@ -112,7 +114,7 @@ _manyclangs_build_part() {
         # efficient.
         (cd .. &&
          git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
-             {llvm,clang,clang-tools-extra} :^{llvm,clang,clang-tools-extra}/test "${EXTRA[@]}"
+             {llvm,clang,clang-tools-extra,third-party} :^{llvm,clang,clang-tools-extra}/test "${EXTRA[@]}"
         )
 
         echo "$COMMIT_SHA" > COMMIT_SHA

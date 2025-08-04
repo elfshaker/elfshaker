@@ -43,7 +43,8 @@ var (
 	argMaxQueueTime      = flag.Duration("max-time-in-q", 5*time.Second, "maximum time a client can wait before sending retryAfter")
 	argPackMode          = flag.String("pack-project", "clang", "project type to pack [currently only clang is supported, affects tarball creation]")
 	argRetryAfter        = flag.String("retry-after", "5", "value for retry-after header to send to clients in case of too many requests in flight")
-	argSnapshotsFilename = flag.String("snapshots-filename", "snapshots.txt", "path to list of snapshots, one per line")
+	argSnapshotsFilename = flag.String("snapshots-filename", "snapshots.txt", "path to list of snapshots, one per line (elfshaker list > snapshots.txt)")
+	argCommitsFilename   = flag.String("commits-filename", "commits.txt", "path to list of commits (TZ=UTC GIT_DIR=path/to/llvm-project/.git git log --date=iso-strict-local --format='%h %cd %an | %s' > commits.txt)")
 	argEncoderLevel      = flag.Int("zstd-encoder-level", 1, "zstd compression level for tarballs")
 	argServeWellKnown    = flag.String("well-known", "", "path to .well-knwon directory, if specified")
 )
@@ -109,6 +110,7 @@ type Handler struct {
 	// snapshots is a btree of snapshots ordered on commit sha.
 	// This is used for lookup of matching commits by any-length prefix of a sha.
 	snapshots *btree.BTreeG[snapshot]
+	commits Commits // List of all commits, mapped onto snapshots.
 
 	s3Client        *s3.Client
 	s3UploadMgr     *manager.Uploader
@@ -123,9 +125,15 @@ func NewHandler() (h *Handler, err error) {
 		requestSemaphore: make(chan struct{}, *argMaxInFlight),
 	}
 
-	h.snapshots, err = loadBTree(*argSnapshotsFilename)
+	var snapshotCommits []string
+	h.snapshots, snapshotCommits, err = loadBTree(*argSnapshotsFilename)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to load btree: %w", err)
+	}
+
+	h.commits, err = loadCommits(*argCommitsFilename, snapshotCommits)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to load commits: %w", err)
 	}
 
 	err = h.configureAWS()
@@ -356,22 +364,26 @@ func getCommitBinary(uri string) (commit string, binary string, ok bool) {
 	return strings.Cut(uri, "/")
 }
 
-// Read the btree in from list.txt.
-func loadBTree(snapshotListFilename string) (*btree.BTreeG[snapshot], error) {
+// Read the btree in from snapshots.txt.
+func loadBTree(snapshotListFilename string) (*btree.BTreeG[snapshot], []string, error) {
 	bt := btree.NewG(2, snapshot{}.Less)
 	fd, err := os.Open(snapshotListFilename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load btree: %w", err)
+		return nil, nil, fmt.Errorf("failed to load btree: %w", err)
 	}
+	snapshotCommits := make([]string, 0, 200000)
+
 	scanner := bufio.NewScanner(fd)
 	for scanner.Scan() {
 		commit := rightOfLastDash(scanner.Text())
 		bt.ReplaceOrInsert(snapshot{commit, scanner.Text()})
+		snapshotCommits = append(snapshotCommits, commit)
 	}
 	if err = scanner.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return bt, nil
+	log.Println("Loaded", len(snapshotCommits), "snapshots from", snapshotListFilename)
+	return bt, snapshotCommits, nil
 }
 
 func rightOfLastDash(s string) string {

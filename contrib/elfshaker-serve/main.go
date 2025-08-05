@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,6 +61,7 @@ func main() {
 	}
 
 	http.HandleFunc("/c/", h.handleCommit)
+	http.HandleFunc("/search/", h.handleSearch)
 
 	if *argServeWellKnown != "" {
 		http.Handle("/.well-known/", http.StripPrefix("/.well-known/", http.FileServerFS(os.DirFS(*argServeWellKnown))))
@@ -111,6 +114,7 @@ type Handler struct {
 	// This is used for lookup of matching commits by any-length prefix of a sha.
 	snapshots *btree.BTreeG[snapshot]
 	commits Commits // List of all commits, mapped onto snapshots.
+	commitText []string // List of commit text used for fuzzy search.
 
 	s3Client        *s3.Client
 	s3UploadMgr     *manager.Uploader
@@ -136,6 +140,11 @@ func NewHandler() (h *Handler, err error) {
 		return nil, fmt.Errorf("Failed to load commits: %w", err)
 	}
 
+	h.commitText = make([]string, 0, len(h.commits))
+	for _, commit := range h.commits {
+		h.commitText = append(h.commitText, commit.Text)
+	}
+
 	err = h.configureAWS()
 	if err != nil {
 		return nil, err
@@ -152,6 +161,54 @@ func (h *Handler) configureAWS() error {
 	h.s3UploadMgr = manager.NewUploader(h.s3Client)
 	h.s3PresignClient = s3.NewPresignClient(h.s3Client)
 	return nil
+}
+
+func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
+	queryString := strings.TrimPrefix(r.URL.Path, "/search/")
+	if queryString == "" {
+		http.Error(w, "No search query provided", http.StatusBadRequest)
+		return
+	}
+	start := time.Now()
+	defer func() {
+		log.Printf("Search for %q took %v", queryString, time.Since(start).Truncate(1*time.Millisecond))
+	}()
+	
+	queryFields := strings.Fields(queryString)
+
+	results := make([]int, 0, 10)
+
+	outer:
+	for id, commit := range slices.Backward(h.commits) {
+		for _, field := range queryFields {
+			if strings.Contains(commit.Text, field) {
+				results = append(results, id)
+				if len(results) >= 10 {
+					break outer // Limit to 10 results.
+				}
+				break // No need to check other fields for this commit.
+			}
+		}
+	}
+
+	// Send back commits as json
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	resultsJSON := make([]*Commit, 0, len(results))
+	for _, id := range results {
+		if id < 0 || id >= len(h.commits) {
+			http.Error(w, fmt.Sprintf("Invalid commit ID: %d", id), http.StatusInternalServerError)
+			log.Printf("Invalid commit ID: %d", id)
+			return
+		}
+		resultsJSON = append(resultsJSON, &h.commits[id])
+	}
+
+	if err := enc.Encode(resultsJSON); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode results: %v", err), http.StatusInternalServerError)
+		log.Printf("Failed to encode search results: %v", err)
+		return
+	}
 }
 
 // handleCommit is the HTTP handler for commits: it sends the binaries back to the client.

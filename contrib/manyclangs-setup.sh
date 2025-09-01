@@ -58,6 +58,7 @@ install_system_dependencies() {
         command -v cc &&
         command -v clang-${MANYCLANGS_CLANG_VERSION} &&
         command -v curl &&
+        command -v gawk &&
         command -v git &&
         command -v go &&
         command -v jq &&
@@ -74,6 +75,7 @@ install_system_dependencies() {
     PKGS=(
         clang-${MANYCLANGS_CLANG_VERSION}
         curl
+        gawk
         g++
         gcc
         git

@@ -5,8 +5,7 @@
 use crate::packidx::ObjectChecksum;
 use crate::progress::ProgressReporter;
 use crate::repo::run_in_parallel;
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+use sha1::{Digest, Sha1};
 use std::{
     fs,
     io::{self, Read, Write},
@@ -22,11 +21,9 @@ where
 {
     run_in_parallel(num_cpus::get(), paths.iter(), |path| {
         let buf = fs::read(path)?;
-        let checksum_buf = &mut [0u8; 20];
         let mut hasher = Sha1::new();
-        hasher.input(&buf);
-        hasher.result(checksum_buf);
-        Ok(*checksum_buf)
+        hasher.update(&buf);
+        Ok(hasher.finalize().into())
     })
     .into_iter()
     .collect::<io::Result<Vec<_>>>()

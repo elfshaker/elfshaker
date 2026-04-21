@@ -9,8 +9,7 @@ use crate::repo::{
     partition_by_u64,
 };
 
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+use sha1::{Digest, Sha1};
 use serde::de::{SeqAccess, Visitor};
 use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
@@ -558,15 +557,13 @@ impl PackIndex {
         // Map FileHandle to FileEntry, which contains path and checksum
         let mut entries = self.entry_refs_from_handles(handles.iter()).ok()?;
         entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(b.path)));
-        let mut hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
-            hasher.input(&os_str_as_bytes(entry.path));
-            hasher.input(entry.checksum);
-            hasher.input(&entry.file_metadata.mode.to_be_bytes());
+        let hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
+            hasher.update(os_str_as_bytes(entry.path));
+            hasher.update(entry.checksum);
+            hasher.update(entry.file_metadata.mode.to_be_bytes());
             hasher
         });
-        let mut checksum: ObjectChecksum = [0; 20];
-        hasher.result(&mut checksum);
-        Some(checksum)
+        Some(hasher.finalize().into())
     }
 }
 

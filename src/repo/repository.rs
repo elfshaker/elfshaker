@@ -16,8 +16,6 @@ use std::{
     time::SystemTime,
 };
 
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
 use fs2::FileExt;
 use log::{error, info, warn};
 use walkdir::WalkDir;
@@ -40,6 +38,7 @@ use crate::{
     packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex},
     repo::fs::create_empty,
 };
+use sha1::{Digest, Sha1};
 
 /// A struct specifying the the extract options.
 #[derive(Clone, Debug)]
@@ -634,10 +633,9 @@ impl Repository {
                 let mode = fd.metadata()?.file_mode();
                 (buf, mode)
             };
-            let mut checksum = [0u8; 20];
             let mut hasher = Sha1::new();
-            hasher.input(&buf);
-            hasher.result(&mut checksum);
+            hasher.update(&buf);
+            let checksum: [u8; 20] = hasher.finalize().into();
             self.write_loose_object(&*buf, &temp_dir, &checksum)?;
 
             Ok(FileEntry::new(

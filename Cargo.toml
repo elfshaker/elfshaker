@@ -16,7 +16,7 @@ zstd = { version = "0.9.0", features = ["zstdmt"] }
 crossbeam-utils = "0.8"
 walkdir = "2.3.2"
 clap = "2.33.0"
-rust-crypto = "0.2.36"
+sha1 = "0.10"
 hex = "0.4.3"
 serde = { version = "1.0.126", features = ["derive", "rc"] }
 rmp-serde = "0.15.5"

@@ -12,8 +12,7 @@ use std::{
 };
 use std::{fmt::Display, str::FromStr};
 
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+use sha1::{Digest, Sha1};
 
 use log::info;
 
@@ -483,10 +482,9 @@ impl Pack {
 /// Verifies that the object has the expected checksum.
 fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error> {
     // Verify checksum
-    let mut checksum = [0u8; 20];
     let mut hasher = Sha1::new();
-    hasher.input(buf);
-    hasher.result(&mut checksum);
+    hasher.update(buf);
+    let checksum: [u8; 20] = hasher.finalize().into();
     if &checksum != exp_checksum {
         return Err(PackError::ChecksumMismatch(*exp_checksum, checksum).into());
     }

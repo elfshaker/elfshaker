@@ -8,8 +8,7 @@ use std::{
 };
 
 use chrono::{offset::Utc, DateTime};
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+use sha1::{Digest, Sha1};
 use ureq::Agent;
 use url::Url;
 
@@ -392,10 +391,9 @@ pub fn update_remote_pack(
         let mut writer = ProgressWriter::with_known_size(&mut data, reporter, content_length);
         io::copy(&mut reader, &mut writer)?;
 
-        let mut checksum = [0u8; 20];
         let mut hasher = Sha1::new();
-        hasher.input(&data);
-        hasher.result(&mut checksum);
+        hasher.update(&data);
+        let checksum: [u8; 20] = hasher.finalize().into();
 
         if checksum == remote_pack.pack_checksum {
             create_file(pack_path, None)?.write_all(&data)?;
@@ -540,14 +538,11 @@ fn compute_checksum(path: &Path) -> io::Result<ObjectChecksum> {
         if len == 0 {
             break;
         }
-        sha1.input(buf);
+        sha1.update(buf);
         reader.consume(len);
     }
 
-    let mut checksum = [0u8; 20];
-    sha1.result(&mut checksum);
-
-    Ok(checksum)
+    Ok(sha1.finalize().into())
 }
 
 /// Formats a [`SystemTime`] as an HTTP date string. HTTP dates are always in

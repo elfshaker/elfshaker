@@ -9,9 +9,9 @@ use crate::repo::{
     partition_by_u64,
 };
 
-use sha1::{Digest, Sha1};
 use serde::de::{SeqAccess, Visitor};
 use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
+use sha1::{Digest, Sha1};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};

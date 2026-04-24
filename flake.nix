@@ -2,6 +2,7 @@
   inputs = {
     naersk.url = "github:nix-community/naersk";
     naersk.inputs.nixpkgs.follows = "nixpkgs";
+    naersk.inputs.fenix.follows = "fenix";
     # Note: the flake.lock revision of this package determines the rust
     # version used.
     fenix.url = "github:nix-community/fenix";

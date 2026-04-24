@@ -568,7 +568,7 @@ impl PackIndex {
 }
 
 #[cfg(unix)]
-fn os_str_as_bytes(os_str: &OsStr) -> Cow<[u8]> {
+fn os_str_as_bytes(os_str: &OsStr) -> Cow<'_, [u8]> {
     Cow::Borrowed(std::os::unix::ffi::OsStrExt::as_bytes(os_str))
 }
 

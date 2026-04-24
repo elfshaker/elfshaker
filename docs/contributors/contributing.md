@@ -4,6 +4,8 @@ Contributions are welcome and appreciated. Any work you submit is considered to 
 
 Please make sure to go through the following steps before you open a pull request that edits the source code.
 
+Release preparation is covered in the [releasing guide](releasing.md).
+
 ## Building
 
 *See how to build from source in our [Installation guide](../users/installing.md#building-from-source).*

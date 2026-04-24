@@ -68,7 +68,7 @@ fn run_subcommand(app: &mut Command, matches: ArgMatches) -> Result<(), Box<dyn 
 fn get_app() -> Command {
     Command::new("elfshaker")
         .override_usage("elfshaker [GLOBAL-OPTS] <SUBCOMMAND> [SUBCOMMAND-OPTS]")
-        // .version(crate_version!())
+        .version(env!("CARGO_PKG_VERSION"))
         .subcommand(extract::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())

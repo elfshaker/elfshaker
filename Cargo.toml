@@ -6,6 +6,13 @@ name = "elfshaker"
 version = "1.0.0-rc1"
 authors = ["Veselin Karaganev <veselin.karaganev@arm.com>", "Peter Waller <peter.waller@arm.com>"]
 edition = "2018"
+description = "A low-footprint, high-performance version control system fine-tuned for binaries"
+license = "Apache-2.0"
+repository = "https://github.com/elfshaker/elfshaker"
+homepage = "https://github.com/elfshaker/elfshaker"
+readme = "README.md"
+keywords = ["binary", "compression", "deduplication", "vcs"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "elfshaker"

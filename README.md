@@ -48,7 +48,8 @@ For more detail, take a look at our [workflow documentation](https://github.com/
 
 The following platforms are used for our CI tests:
 
-- Ubuntu 20.04 LTS
+- Ubuntu 22.04 LTS
+- macOS 15 on Intel and Apple Silicon
 
 But we aim to support all popular Linux platforms, macOS and Windows in production.
 
@@ -58,7 +59,7 @@ We officially support the following architectures:
 
 ## Current Status
 
-The file format and directory structure is stable. We intend that pack files created with the current elfshaker version will remain compatible with future versions. Please kick the tyres and do your own validation, and file bugs if you find any. We have done a fair amount of validation for our use cases but there may be things we haven't needed yet, so please start a discussion and file issues/patches.
+The file format and directory structure are stable. We intend that pack files created with elfshaker 1.0 and later will remain compatible with future versions. Please kick the tyres and do your own validation, and file bugs if you find any. We have done a fair amount of validation for our use cases but there may be things we haven't needed yet, so please start a discussion and file issues/patches.
 
 
 ## Contributing

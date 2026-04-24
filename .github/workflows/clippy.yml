@@ -2,6 +2,9 @@ on: [push, pull_request]
 
 name: Clippy check
 
+permissions:
+  contents: read
+
 jobs:
   clippy_check:
     runs-on: ubuntu-latest
@@ -9,7 +12,4 @@ jobs:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
       - run: cargo fmt --all -- --check
       - run: rustup component add clippy
-      - uses: actions-rs/clippy-check@b5b5f21f4797c02da247df37026fcd0a5024aa4d # v1.0.7
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
+      - run: cargo clippy --all-features -- -D warnings

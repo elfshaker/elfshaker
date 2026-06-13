@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT="$SCRIPT_DIR/manyclangs-build-month"
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/test-manyclangs-build-month.XXXXXX")
+trap 'rm -r "$TEST_ROOT"' EXIT
+
+fail() {
+    echo "test-manyclangs-build-month: $*" >&2
+    exit 1
+}
+
+REPOSITORY="$TEST_ROOT/llvm-project"
+mkdir -p "$REPOSITORY"
+git -C "$REPOSITORY" init -q
+git -C "$REPOSITORY" config user.email test@example.com
+git -C "$REPOSITORY" config user.name Test
+for DIRECTORY in llvm clang clang-tools-extra cmake libc third-party
+do
+    mkdir -p "$REPOSITORY/$DIRECTORY"
+    echo "$DIRECTORY" > "$REPOSITORY/$DIRECTORY/sentinel"
+done
+git -C "$REPOSITORY" add .
+git -C "$REPOSITORY" commit -qm "fixture"
+COMMIT_SHA=$(git -C "$REPOSITORY" rev-parse HEAD)
+SNAPSHOT_NAME=20260501-00001T000000-"${COMMIT_SHA:0:15}"
+
+BIN="$TEST_ROOT/bin"
+mkdir -p "$BIN"
+for COMMAND in jobserver jq compdb2line ninja ninja-jobclient cmake clang-12 clang++-12
+do
+    ln -s "$(type -P true)" "$BIN/$COMMAND"
+done
+
+cat > "$BIN/manyclangs-build" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+test -f ../libc/sentinel
+printf 'object\n' > fixture.o
+printf 'ninja\n' > build.ninja
+EOF
+chmod +x "$BIN/manyclangs-build"
+
+cat > "$BIN/elfshaker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+COMMAND=$1
+shift
+case "$COMMAND" in
+    store)
+        SNAPSHOT_NAME=${!#}
+        mkdir -p "$ELFSHAKER_DATA/packs/loose"
+        cat >/dev/null
+        printf 'stored\n' > "$ELFSHAKER_DATA/packs/loose/$SNAPSHOT_NAME.pack.idx"
+        printf 'store %s\n' "$SNAPSHOT_NAME" >> "$ELFSHAKER_TEST_EVENTS"
+        ;;
+    pack)
+        PACK_NAME=$1
+        mkdir -p "$ELFSHAKER_DATA/packs"
+        printf 'pack\n' > "$ELFSHAKER_DATA/packs/$PACK_NAME.pack"
+        printf 'index\n' > "$ELFSHAKER_DATA/packs/$PACK_NAME.pack.idx"
+        printf 'pack %s\n' "$PACK_NAME" >> "$ELFSHAKER_TEST_EVENTS"
+        ;;
+    *)
+        echo "unexpected elfshaker command: $COMMAND" >&2
+        exit 1
+        ;;
+esac
+EOF
+chmod +x "$BIN/elfshaker"
+
+COMMIT_LIST="$TEST_ROOT/repair-commits.txt"
+printf '%s %s\n' "$COMMIT_SHA" "$SNAPSHOT_NAME" > "$COMMIT_LIST"
+
+ELFSHAKER_DATA="$TEST_ROOT/elfshaker_data"
+EVENTS="$TEST_ROOT/events"
+mkdir -p "$ELFSHAKER_DATA/packs/loose"
+printf 'old failure\n' > "$ELFSHAKER_DATA/packs/loose/$SNAPSHOT_NAME.pack.idx"
+
+RUN="$TEST_ROOT/run"
+mkdir -p "$RUN"
+(
+    cd "$RUN"
+    PATH="$BIN:$SCRIPT_DIR:$PATH" \
+    GIT_DIR="$REPOSITORY/.git" \
+    ELFSHAKER_DATA="$ELFSHAKER_DATA" \
+    ELFSHAKER_TEST_EVENTS="$EVENTS" \
+    MANYCLANGS_COMMIT_LIST_FILE="$COMMIT_LIST" \
+    MANYCLANGS_REBUILD_EXISTING=1 \
+    MANYCLANGS_PACK_NAME=aarch64-ubuntu2004-manyclangs-202605-libc-repair1 \
+    MANYCLANGS_NPARALLEL=1 \
+    MANYCLANGS_NODELETE=1 \
+    "$SCRIPT" 2026 05 </dev/null
+)
+
+grep -Fx "store $SNAPSHOT_NAME" "$EVENTS" >/dev/null ||
+    fail "existing snapshot was not rebuilt"
+grep -Fx "pack aarch64-ubuntu2004-manyclangs-202605-libc-repair1" "$EVENTS" >/dev/null ||
+    fail "requested pack name was not used"
+test -f "$RUN/mc-build-202605-part00/libc/sentinel" ||
+    fail "libc was not restored"
+
+SKIP_EVENTS="$TEST_ROOT/skip-events"
+SKIP_RUN="$TEST_ROOT/skip-run"
+mkdir -p "$SKIP_RUN"
+(
+    cd "$SKIP_RUN"
+    PATH="$BIN:$SCRIPT_DIR:$PATH" \
+    GIT_DIR="$REPOSITORY/.git" \
+    ELFSHAKER_DATA="$ELFSHAKER_DATA" \
+    ELFSHAKER_TEST_EVENTS="$SKIP_EVENTS" \
+    MANYCLANGS_COMMIT_LIST_FILE="$COMMIT_LIST" \
+    MANYCLANGS_PACK_NAME=aarch64-ubuntu2004-manyclangs-202605-skip-test \
+    MANYCLANGS_NPARALLEL=1 \
+    MANYCLANGS_NODELETE=1 \
+    "$SCRIPT" 2026 05 </dev/null
+)
+if grep -q '^store ' "$SKIP_EVENTS"
+then
+    fail "existing snapshot was rebuilt without MANYCLANGS_REBUILD_EXISTING"
+fi
+
+SELECTION_ARGS="$TEST_ROOT/selection-args"
+git-list-between() {
+    printf '%s\n' "$*" > "$SELECTION_ARGS"
+    printf '%s %s\n' "$COMMIT_SHA" "$SNAPSHOT_NAME"
+}
+export -f git-list-between
+# shellcheck source=contrib/manyclangs-build-month
+source "$SCRIPT"
+commits_for_month 2026 05 >/dev/null
+grep -qw libc "$SELECTION_ARGS" ||
+    fail "libc was not included in monthly commit selection"
+
+BAD_LIST="$TEST_ROOT/bad-list.txt"
+printf '%s %s extra\n' "$COMMIT_SHA" "$SNAPSHOT_NAME" > "$BAD_LIST"
+if validate_commit_list "$BAD_LIST" 2026 05
+then
+    fail "malformed commit list was accepted"
+fi
+if validate_pack_name ..
+then
+    fail "unsafe pack name was accepted"
+fi
+
+echo "test-manyclangs-build-month: ok"

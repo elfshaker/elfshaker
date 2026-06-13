@@ -10,6 +10,11 @@ print_help() {
     echo ''
     echo 'manyclangs-build-month is a "set it and forget it" script that builds'
     echo 'the specified month and produces a .pack file.'
+    echo ''
+    echo 'Repair controls:'
+    echo '  MANYCLANGS_COMMIT_LIST_FILE  use an exact SHA/snapshot input list'
+    echo '  MANYCLANGS_REBUILD_EXISTING  rebuild snapshots with existing loose indexes'
+    echo '  MANYCLANGS_PACK_NAME         choose the output pack name'
 }
 
 commits_for_month() {
@@ -31,10 +36,66 @@ commits_for_month() {
         clang
         clang-tools-extra
         cmake
+        libc
         llvm
         third-party
     )
     git-list-between origin/main "${FROM_INCL}" "${TO_EXCL}" -- "${INTERESTING_PATHS[@]}"
+}
+
+validate_commit_list() {
+    local COMMIT_LIST=$1
+    local YEAR=$2
+    local MONTH=$3
+    local LINE_NUMBER=0
+    local COMMIT_SHA
+    local SNAPSHOT_NAME
+    local EXTRA
+    declare -A SEEN_SNAPSHOTS=()
+
+    while IFS= read -r LINE || [[ -n "$LINE" ]]
+    do
+        ((LINE_NUMBER+=1))
+        read -r COMMIT_SHA SNAPSHOT_NAME EXTRA <<< "$LINE"
+        if [[ -z "${COMMIT_SHA-}" || -z "${SNAPSHOT_NAME-}" || -n "${EXTRA-}" ]]
+        then
+            echo "manyclangs-build-month: ${COMMIT_LIST}:${LINE_NUMBER}: expected COMMIT_SHA SNAPSHOT_NAME" >&2
+            return 1
+        fi
+        if [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+           ! git cat-file -e "${COMMIT_SHA}^{commit}" 2>/dev/null
+        then
+            echo "manyclangs-build-month: ${COMMIT_LIST}:${LINE_NUMBER}: invalid commit $COMMIT_SHA" >&2
+            return 1
+        fi
+        if [[ ! "$SNAPSHOT_NAME" =~ ^${YEAR}${MONTH}[0-9]{2}- ]]
+        then
+            echo "manyclangs-build-month: ${COMMIT_LIST}:${LINE_NUMBER}: snapshot $SNAPSHOT_NAME is outside $YEAR$MONTH" >&2
+            return 1
+        fi
+        if [[ -n "${SEEN_SNAPSHOTS[$SNAPSHOT_NAME]-}" ]]
+        then
+            echo "manyclangs-build-month: ${COMMIT_LIST}:${LINE_NUMBER}: duplicate snapshot $SNAPSHOT_NAME" >&2
+            return 1
+        fi
+        SEEN_SNAPSHOTS[$SNAPSHOT_NAME]=1
+    done < "$COMMIT_LIST"
+
+    if [[ "$LINE_NUMBER" -eq 0 ]]
+    then
+        echo "manyclangs-build-month: commit list is empty: $COMMIT_LIST" >&2
+        return 1
+    fi
+}
+
+validate_pack_name() {
+    local PACK_NAME=$1
+    if [[ ! "$PACK_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+       [[ "$PACK_NAME" == loose ]]
+    then
+        echo "manyclangs-build-month: unsafe pack name: $PACK_NAME" >&2
+        return 1
+    fi
 }
 
 _manyclangs_list_files0_to_pack() {
@@ -93,28 +154,35 @@ _manyclangs_build_part() {
 
     while read -r COMMIT_SHA SNAPSHOT_NAME
     do
-        if [ -e "elfshaker_data/packs/loose/${SNAPSHOT_NAME}.pack.idx" ]
+        if [[ -z "${MANYCLANGS_REBUILD_EXISTING-}" ]] &&
+           [ -e "elfshaker_data/packs/loose/${SNAPSHOT_NAME}.pack.idx" ]
         then
             echo "manyclangs-build-month: Skip already built commit $SNAPSHOT_NAME"
             echo "Skipped $SNAPSHOT_NAME @ $(date "+%Y/%m/%d %H:%M:%S")" 1>&30 # for progress output.
             continue
         fi
         echo "manyclangs-build-month: Building commit $SNAPSHOT_NAME"
+        rm -f "${HASHES_DIR}/${SNAPSHOT_NAME}.txt"
 
-        EXTRA=()
+        RESTORE_PATHS=(llvm clang clang-tools-extra third-party)
         # Detect the cmake top-level directory introduced Jan 2022.
         if git ls-tree "$COMMIT_SHA":cmake &> /dev/null;
         then
-            EXTRA+=(cmake)
+            RESTORE_PATHS+=(cmake)
+        fi
+        if git ls-tree "$COMMIT_SHA":libc &> /dev/null;
+        then
+            RESTORE_PATHS+=(libc)
         fi
 
-        # Handy comand which sets the sources in ./llvm ./clang to the right
+        # Handy command which sets the source directories to the right
         # contents efficiently (including removing files which have gone). It
         # makes use of the $GIT_INDEX_FILE to keep track of the old state so is
         # efficient.
         (cd .. &&
          git restore --no-progress --staged --worktree --source="$COMMIT_SHA" -- \
-             {llvm,clang,clang-tools-extra,third-party} :^{llvm,clang,clang-tools-extra}/test "${EXTRA[@]}"
+             "${RESTORE_PATHS[@]}" \
+             :^llvm/test :^clang/test :^clang-tools-extra/test
         )
 
         echo "$COMMIT_SHA" > COMMIT_SHA
@@ -207,13 +275,24 @@ main() {
 
     YEAR="$1"
     MONTH="$2"
-    MANYCLANGS_PACK_NAME="$(uname -m)-${MANYCLANGS_PACK_TYPE-ubuntu2004}-manyclangs-$YEAR$MONTH"
+    ELFSHAKER_DATA=${ELFSHAKER_DATA-$PWD/elfshaker_data}
+    export ELFSHAKER_DATA
+    MANYCLANGS_PACK_NAME=${MANYCLANGS_PACK_NAME:-"$(uname -m)-${MANYCLANGS_PACK_TYPE-ubuntu2004}-manyclangs-$YEAR$MONTH"}
 
     date -d "$YEAR/$MONTH/01" 1>/dev/null || { print_help; exit 1; }
+    validate_pack_name "$MANYCLANGS_PACK_NAME"
 
-    commits_for_month "$YEAR" "$MONTH"  > manyclangs-commit-list.txt
-    apply_limit < manyclangs-commit-list.txt | apply_subset > manyclangs-commit-list.txt.subset
-    mv manyclangs-commit-list.txt.subset manyclangs-commit-list.txt
+    if [[ -n "${MANYCLANGS_COMMIT_LIST_FILE-}" ]]
+    then
+        cat "$MANYCLANGS_COMMIT_LIST_FILE" > manyclangs-commit-list.txt.input
+        validate_commit_list manyclangs-commit-list.txt.input "$YEAR" "$MONTH"
+        mv manyclangs-commit-list.txt.input manyclangs-commit-list.txt
+    else
+        commits_for_month "$YEAR" "$MONTH" > manyclangs-commit-list.txt
+        apply_limit < manyclangs-commit-list.txt | apply_subset > manyclangs-commit-list.txt.subset
+        mv manyclangs-commit-list.txt.subset manyclangs-commit-list.txt
+        validate_commit_list manyclangs-commit-list.txt "$YEAR" "$MONTH"
+    fi
     COMMIT_COUNT=$(wc -l manyclangs-commit-list.txt | awk '{print $1}')
 
     NPARALLEL=${MANYCLANGS_NPARALLEL-5} # Number of parts to run in parallel.
@@ -286,29 +365,37 @@ Sleeping 5 seconds, CTRL-C to abort, or wait to continue.
             | { if [ "${INTERACTIVE}" ]; then progress_bar "$COMMIT_COUNT"; else cat; fi; }
     fi
 
-    # Globs are already sorted.
-    SNAPSHOTS_SORTED=(elfshaker_data/packs/loose/${YEAR}${MONTH}*)
-    SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]%.pack.idx}")
-    SNAPSHOTS_SORTED=("${SNAPSHOTS_SORTED[@]#elfshaker_data/packs/}")
+    mapfile -t SNAPSHOTS_SORTED < <(
+        find "$ELFSHAKER_DATA/packs/loose" \
+            -maxdepth 1 \
+            -type f \
+            -name "${YEAR}${MONTH}*.pack.idx" \
+            -printf 'loose/%f\n' |
+            sed 's/\.pack\.idx$//' |
+            sort
+    )
 
     time elfshaker pack "$MANYCLANGS_PACK_NAME" "${SNAPSHOTS_SORTED[@]}"
     echo
     echo
     echo "manyclangs-build-month $YEAR $MONTH all done, here are the resulting files:"
     echo
-    du -sch elfshaker_data/packs/"${MANYCLANGS_PACK_NAME}".pack{,.idx}
+    du -sch "$ELFSHAKER_DATA"/packs/"${MANYCLANGS_PACK_NAME}".pack{,.idx}
     echo
     echo "(A typical 1 month upstream pack takes 100MiB storage)"
     echo
 }
 
-case "${1:--h}" in
-    -h | --help)
-        print_help
-        [ $# -ne 0 ]
-        exit $?
-        ;;
-    *)
-        main "$@"
-        ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]
+then
+    case "${1:--h}" in
+        -h | --help)
+            print_help
+            [ $# -ne 0 ]
+            exit $?
+            ;;
+        *)
+            main "$@"
+            ;;
+    esac
+fi

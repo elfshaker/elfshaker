@@ -13,9 +13,9 @@ jobs:
       matrix:
         target: [aarch64-pc-windows-msvc, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin]
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
       - name: Compile and release
-        uses: rust-build/rust-build.action@latest
+        uses: rust-build/rust-build.action@6febf1b0ed6499a46610b58ef9d810398e75f3c2 # v1.4.5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUSTTARGET: ${{ matrix.target }}

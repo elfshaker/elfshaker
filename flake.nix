@@ -32,24 +32,26 @@
     packages = forAllSystems (system: let
       pkgs = import nixpkgs { inherit system; };
 
-      rustToolchain = with fenix.packages.${system};
-        combine [
-          stable.cargo
-          stable.clippy
-          rust-analyzer
-          stable.rust-src
-          stable.rustc
-          stable.rustfmt
-          targets.aarch64-unknown-linux-gnu.stable.rust-std
-          targets.aarch64-unknown-linux-musl.stable.rust-std
-          targets.aarch64-unknown-linux-musl.stable.rust-std
-          targets.x86_64-unknown-linux-musl.stable.rust-std
-          targets.x86_64-pc-windows-gnu.stable.rust-std
-        ];
+      fenixPackages = fenix.packages.${system};
+      rustBuildComponents = with fenixPackages; [
+        stable.cargo
+        stable.rustc
+        targets.aarch64-unknown-linux-gnu.stable.rust-std
+        targets.aarch64-unknown-linux-musl.stable.rust-std
+        targets.x86_64-unknown-linux-musl.stable.rust-std
+        targets.x86_64-pc-windows-gnu.stable.rust-std
+      ];
+      rustBuildToolchain = fenixPackages.combine rustBuildComponents;
+      rustToolchain = fenixPackages.combine (rustBuildComponents ++ (with fenixPackages; [
+        stable.clippy
+        rust-analyzer
+        stable.rust-src
+        stable.rustfmt
+      ]));
 
       naersk' = naersk.lib.${system}.override {
-        cargo = rustToolchain;
-        rustc = rustToolchain;
+        cargo = rustBuildToolchain;
+        rustc = rustBuildToolchain;
       };
 
       naerskBuildPackage = isWindows: target: args:

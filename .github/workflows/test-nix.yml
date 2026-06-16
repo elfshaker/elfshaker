@@ -9,43 +9,40 @@ on:
 jobs:
   build-linux:
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v3
-      - uses: nixbuild/nix-quick-install-action@master
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - uses: nixbuild/nix-quick-install-action@v34
       - uses: nix-community/cache-nix-action@main
         with:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
-      - uses: docker/setup-qemu-action@v2
-      - name: Build
-        run: nix build --log-lines 1000 .#release
-      - name: ls
-        run: ls -la result/
-
-  build-macos-x86_64:
-    runs-on: macos-13 # 13 runner is x86.
-    steps:
-      - uses: actions/checkout@v3
-      - uses: nixbuild/nix-quick-install-action@master
-      - uses: nix-community/cache-nix-action@main
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
         with:
-          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
-      - name: Build
-        run: nix build --log-lines 1000 .#release
+          image: docker.io/tonistiigi/binfmt@sha256:d3b963f787999e6c0219a48dba02978769286ff61a5f4d26245cb6a6e5567ea3
+          platforms: arm64
+      - name: Build aarch64 musl
+        run: timeout --signal=TERM --kill-after=30s 25m nix build -L --max-jobs 1 --cores 2 --no-link .#elfshaker-aarch64-musl
+      - name: Build x86_64 musl
+        run: timeout --signal=TERM --kill-after=30s 25m nix build -L --max-jobs 1 --cores 2 --no-link .#elfshaker-x86_64-musl
+      - name: Build x86_64 Windows
+        run: timeout --signal=TERM --kill-after=30s 25m nix build -L --max-jobs 1 --cores 2 --no-link .#elfshaker-x86_64-windows
+      - name: Build release archive
+        run: timeout --signal=TERM --kill-after=30s 5m nix build -L --max-jobs 1 --cores 2 .#release
       - name: ls
         run: ls -la result/
 
   build-macos-arm64:
     runs-on: macos-14 # 14 runner is aarch64.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v3
-      - uses: nixbuild/nix-quick-install-action@master
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - uses: nixbuild/nix-quick-install-action@v34
       - uses: nix-community/cache-nix-action@main
         with:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
       - name: Build
-        run: nix build --log-lines 1000 .#release
+        run: nix build -L .#release
       - name: ls
         run: ls -la result/

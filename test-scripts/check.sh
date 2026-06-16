@@ -35,9 +35,12 @@ cleanup() {
 trap_exit() {
   exit_code=$?
   if [[ $exit_code != 0 ]]; then
-    echo "Script exited with error, tempfiles preserved in $temp_dir"
-    read -n 1 -s -r -p "Press any key to continue with cleanup."
-    echo
+    echo "Script exited with error"
+    if [[ -t 0 ]]; then
+      echo "Tempfiles preserved in $temp_dir until cleanup is confirmed"
+      read -n 1 -s -r -p "Press any key to continue with cleanup."
+      echo
+    fi
   fi
   cleanup
   exit $exit_code

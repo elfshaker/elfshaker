@@ -69,7 +69,9 @@ naerskBuildPackage isWindows target {
       ${buildPackages.tree}/bin/tree $out
       echo "Testing elfshaker binary with check.sh"
       export ELFSHAKER_BIN=$out/bin/elfshaker
-      ${maybeWindows} "$SHELL" ${./.}/test-scripts/check.sh ${elfshakerBinRunner} ${./.}/test-scripts/artifacts/${packName}
+      ${maybeWindows} ${buildPackages.coreutils}/bin/timeout \
+        --signal=TERM --kill-after=30s 10m \
+        "$SHELL" ${./.}/test-scripts/check.sh ${elfshakerBinRunner} ${./.}/test-scripts/artifacts/${packName}
     '';
   };
 }

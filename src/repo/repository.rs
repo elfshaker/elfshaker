@@ -230,7 +230,11 @@ impl Repository {
         })
     }
 
-    fn lock_exclusive(&self) -> io::Result<()> {
+    /// Acquires an exclusive lock for the remaining lifetime of this repository.
+    ///
+    /// Multi-step mutations must acquire this lock before reading any repository
+    /// state used to decide what to modify.
+    pub fn lock_exclusive(&self) -> io::Result<()> {
         let mut is_locked_exclusively = self
             .is_locked_exclusively
             .lock()

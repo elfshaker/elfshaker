@@ -31,6 +31,9 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     }
 
     let repo = open_repo_from_cwd(data_dir)?;
+    if !dry_run {
+        repo.lock_exclusive()?;
+    }
     let mut remaining_roots = repo.loose_packs()?;
 
     let mut freed_bytes = 0;

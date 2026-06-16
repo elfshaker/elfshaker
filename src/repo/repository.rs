@@ -9,10 +9,7 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::SystemTime,
 };
 
@@ -144,7 +141,7 @@ pub struct Repository {
     /// when the repository instance is created/destroyed.
     /// None represents read-only repository.
     lock_file: Option<fs::File>,
-    is_locked_exclusively: AtomicBool,
+    is_locked_exclusively: Mutex<bool>,
 }
 
 impl Repository {
@@ -190,7 +187,7 @@ impl Repository {
                 if let Err(e) = fs2::FileExt::try_lock_shared(&lock_file) {
                     if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                         warn!("Blocking until the repository mutex is unlocked...");
-                        lock_file.lock_exclusive()?;
+                        FileExt::lock_shared(&lock_file)?;
                     } else {
                         return Err(e.into());
                     }
@@ -209,27 +206,36 @@ impl Repository {
             data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
             lock_file,
-            is_locked_exclusively: AtomicBool::new(false),
+            is_locked_exclusively: Mutex::new(false),
         })
     }
 
     fn lock_exclusive(&self) -> io::Result<()> {
-        if self.is_locked_exclusively.load(Ordering::Acquire) {
+        let mut is_locked_exclusively = self
+            .is_locked_exclusively
+            .lock()
+            .map_err(|_| io::Error::other("repository lock state poisoned"))?;
+        if *is_locked_exclusively {
             return Ok(());
         }
-        if let Some(lock_file) = &self.lock_file {
-            if let Err(e) = lock_file.try_lock_exclusive() {
-                if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
-                    warn!("Blocking until the repository mutex is unlocked...");
-                    lock_file.lock_exclusive()?;
-                } else {
-                    return Err(e);
-                }
-            }
-        } else {
+        let Some(lock_file) = &self.lock_file else {
             error!("Modifying readonly repository is not allowed.");
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "modifying readonly repository is not allowed",
+            ));
+        };
+
+        FileExt::unlock(lock_file)?;
+        if let Err(e) = FileExt::try_lock_exclusive(lock_file) {
+            if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
+                warn!("Blocking until the repository mutex is unlocked...");
+                FileExt::lock_exclusive(lock_file)?;
+            } else {
+                return Err(e);
+            }
         }
-        self.is_locked_exclusively.store(true, Ordering::Release);
+        *is_locked_exclusively = true;
         Ok(())
     }
 
@@ -1460,6 +1466,30 @@ mod tests {
     };
 
     #[test]
+    fn repository_lock_upgrades_to_exclusive() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+
+        let repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        repo.lock_exclusive()?;
+
+        let competing_lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(data_dir.join("mutex"))?;
+        let error = FileExt::try_lock_shared(&competing_lock).unwrap_err();
+        assert_eq!(
+            error.raw_os_error(),
+            fs2::lock_contended_error().raw_os_error()
+        );
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn building_loose_object_paths_works() {
         let checksum = [
             0xFA, 0xF0, 0xDE, 0xAD, 0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0, 0xFA, 0xF0, 0xDE, 0xAD,
@@ -1471,7 +1501,7 @@ mod tests {
             data_dir: "/repo/elfshaker_data".into(),
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
             lock_file: Some(fs::File::create(&test_lock).unwrap()),
-            is_locked_exclusively: AtomicBool::new(false),
+            is_locked_exclusively: Mutex::new(false),
         };
         fs::remove_file(&test_lock).unwrap();
         let path = repo.loose_object_path(&checksum);
@@ -1532,7 +1562,7 @@ mod tests {
             data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
             lock_file: None,
-            is_locked_exclusively: AtomicBool::new(false),
+            is_locked_exclusively: Mutex::new(false),
         };
 
         let checksum: [u8; 20] = Sha1::digest(b"same contents").into();

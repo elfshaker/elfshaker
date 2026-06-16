@@ -47,9 +47,13 @@ trap_exit() {
 }
 
 all_pwd_sha1sums() {
-  find . \( -name elfshaker_data -prune \) -o -type f -printf '%P\n' | \
-    xargs sha1sum | \
-    awk '{print $1" "$2}' | sort -k2,2
+  local path checksum
+  while IFS= read -r -d '' path; do
+    checksum=$(sha1sum < "$path")
+    printf '%s %s\n' "${checksum%% *}" "$path"
+  done < <(
+    find . \( -name elfshaker_data -prune \) -o -type f -printf '%P\0'
+  ) | sort -k2,2
 }
 
 elfshaker_sha1sums() {
@@ -126,6 +130,10 @@ serve_file_http() {
 }
 
 # TESTS
+
+test_empty_worktree_sha1sums() {
+  [[ -z "$(all_pwd_sha1sums)" ]]
+}
 
 test_list_works() {
   before_test
@@ -911,6 +919,7 @@ main() {
 
   SKIP_BAD_WINDOWS_TESTS="${SKIP_BAD_WINDOWS_TESTS-}" # default empty; set to non-empty to skip failing tests on window.
 
+  run_test test_empty_worktree_sha1sums
   run_test test_list_works
   run_test test_extract_reset_on_empty_works
   run_test test_extract_again_works

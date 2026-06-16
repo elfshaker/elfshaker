@@ -144,6 +144,26 @@ pub struct Repository {
     is_locked_exclusively: Mutex<bool>,
 }
 
+fn restore_shared_lock_on_error(
+    lock_file: &fs::File,
+    lock_result: io::Result<()>,
+) -> io::Result<()> {
+    let Err(lock_error) = lock_result else {
+        return Ok(());
+    };
+
+    FileExt::lock_shared(lock_file).map_err(|restore_error| {
+        io::Error::new(
+            restore_error.kind(),
+            format!(
+                "failed to acquire exclusive repository lock ({lock_error}); \
+                 failed to restore shared repository lock ({restore_error})"
+            ),
+        )
+    })?;
+    Err(lock_error)
+}
+
 impl Repository {
     /// Opens the specified repository.
     ///
@@ -227,14 +247,17 @@ impl Repository {
         };
 
         FileExt::unlock(lock_file)?;
-        if let Err(e) = FileExt::try_lock_exclusive(lock_file) {
+        let lock_result = if let Err(e) = FileExt::try_lock_exclusive(lock_file) {
             if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                 warn!("Blocking until the repository mutex is unlocked...");
-                FileExt::lock_exclusive(lock_file)?;
+                FileExt::lock_exclusive(lock_file)
             } else {
-                return Err(e);
+                Err(e)
             }
-        }
+        } else {
+            Ok(())
+        };
+        restore_shared_lock_on_error(lock_file, lock_result)?;
         *is_locked_exclusively = true;
         Ok(())
     }
@@ -1479,6 +1502,38 @@ mod tests {
             .write(true)
             .open(data_dir.join("mutex"))?;
         let error = FileExt::try_lock_shared(&competing_lock).unwrap_err();
+        assert_eq!(
+            error.raw_os_error(),
+            fs2::lock_contended_error().raw_os_error()
+        );
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_repository_lock_upgrade_restores_shared_lock() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+
+        let repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        let lock_file = repo.lock_file.as_ref().unwrap();
+        FileExt::unlock(lock_file)?;
+
+        let error = restore_shared_lock_on_error(
+            lock_file,
+            Err(io::Error::other("injected exclusive lock failure")),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "injected exclusive lock failure");
+
+        let competing_lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(data_dir.join("mutex"))?;
+        let error = FileExt::try_lock_exclusive(&competing_lock).unwrap_err();
         assert_eq!(
             error.raw_os_error(),
             fs2::lock_contended_error().raw_os_error()

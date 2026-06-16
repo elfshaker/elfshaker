@@ -270,11 +270,11 @@ impl EmptyDirectoryCleanupQueue {
             Some(x) => x,
         };
 
-        if *last_boundary == boundary_dir.as_ref() && last_leaf.starts_with(&leaf_dir) {
-            // When scheduling a directory that is a subdirectory of the
-            // last seen directory, we can simply overwrite the
-            // value. remove_empty_dirs will consider the previous
-            // directory for deletion when it recurses up the hierarchy.
+        if *last_boundary == boundary_dir.as_ref() && leaf_dir.as_ref().starts_with(&*last_leaf) {
+            // When scheduling a directory that is a subdirectory of the last
+            // seen directory, we can simply overwrite the value.
+            // remove_empty_dirs will consider the previous directory for
+            // deletion when it recurses up the hierarchy.
             *last_leaf = leaf_dir.into();
             Ok(())
         } else {
@@ -469,6 +469,33 @@ mod tests {
             "The directory should have been emptied!"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_cleanup_queue_processes_leaf_before_ancestor() -> io::Result<()> {
+        let temp_dir = TempDir::new("test_cleanup_queue_processes_leaf_before_ancestor")?;
+        let boundary_dir = temp_dir.0.join("test_root");
+        let parent_dir = boundary_dir.join("1");
+        let leaf_dir = parent_dir.join("41");
+        let leaf_file = leaf_dir.join("1c");
+        let sibling_file = parent_dir.join("43");
+
+        fs::create_dir_all(&leaf_dir)?;
+        fs::write(&leaf_file, [])?;
+        fs::write(&sibling_file, [])?;
+
+        let mut q = EmptyDirectoryCleanupQueue::new();
+        fs::remove_file(&leaf_file)?;
+        q.enqueue(&leaf_dir, &boundary_dir)?;
+        fs::remove_file(&sibling_file)?;
+        q.enqueue(&parent_dir, &boundary_dir)?;
+        q.process()?;
+
+        assert!(
+            !leaf_dir.exists(),
+            "the abandoned leaf directory should be removed"
+        );
         Ok(())
     }
 }

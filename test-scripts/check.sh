@@ -193,6 +193,21 @@ test_extract_filetype_change_works_with_contents() {
   "$elfshaker" --verbose extract s0
 }
 
+test_extract_directory_to_file_with_removed_sibling_works() {
+  mkdir 1
+  echo target > 1/41
+  "$elfshaker" --verbose store s0
+
+  rm 1/41
+  mkdir 1/41
+  echo child > 1/41/1c
+  echo sibling > 1/43
+  "$elfshaker" --verbose store s1
+
+  "$elfshaker" --verbose extract s0
+  verify_snapshot loose/s0:s0
+}
+
 test_extract_file_modes_preserved() {
   umask 0002
   touch foobar
@@ -899,6 +914,7 @@ main() {
   run_test test_extract_different_works
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_filetype_change_works
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_filetype_change_works_with_contents
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_directory_to_file_with_removed_sibling_works
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_file_modes_preserved
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_extract_zero_length_noreadperm_works
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && test_extract_multiple_file_removal_same_dir

@@ -38,6 +38,33 @@ pub fn ensure_dir(path: &Path) -> io::Result<()> {
 ///
 /// NOTE: [`temp_dir`] and [`dest`] must be on the same filesystem!
 pub fn write_file_atomic(mut r: impl Read, temp_dir: &Path, dest: &Path) -> io::Result<()> {
+    let (temp_path, _temp_file) = prepare_atomic_write(&mut r, temp_dir)?;
+    fs::rename(temp_path, dest)
+}
+
+/// Atomically writes a file, or succeeds if another writer publishes the destination first.
+pub fn write_file_atomic_or_existing(
+    mut r: impl Read,
+    temp_dir: &Path,
+    dest: &Path,
+) -> io::Result<()> {
+    if dest.is_file() {
+        return Ok(());
+    }
+
+    let (temp_path, temp_file) = prepare_atomic_write(&mut r, temp_dir)?;
+    match fs::rename(&temp_path, dest) {
+        Ok(()) => Ok(()),
+        Err(_) if dest.is_file() => {
+            drop(temp_file);
+            let _ = fs::remove_file(temp_path);
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn prepare_atomic_write(mut r: impl Read, temp_dir: &Path) -> io::Result<(PathBuf, File)> {
     let temp_path = create_temp_path(temp_dir);
     let mut temp_file = create_file(&temp_path, None)?;
     // The presence of a lock on the file indicates that this tempfile is in
@@ -46,7 +73,7 @@ pub fn write_file_atomic(mut r: impl Read, temp_dir: &Path, dest: &Path) -> io::
     temp_file.try_lock_exclusive()?;
     io::copy(&mut r, &mut temp_file)?;
     temp_file.sync_data()?;
-    fs::rename(temp_path, dest)
+    Ok((temp_path, temp_file))
 }
 
 /// Returns a unique path suitable for a temporary file.

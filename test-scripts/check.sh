@@ -753,20 +753,22 @@ test_gc_snapshots_dry_run() {
 
 test_gc_objects() {
   # Create loose snapshot with two objects
-  touch foo bar
+  printf '%s' foo > foo
+  printf '%s' bar > bar
   "$elfshaker" store two_objects
   two_objects_pack_path="./elfshaker_data/packs/loose/two_objects.pack.idx"
 
-    # Create loose snapshot with two *more* objects
-  touch baz blar
+  # Create loose snapshot with two *more* objects
+  printf '%s' baz > baz
+  printf '%s' blar > blar
   "$elfshaker" store four_objects
   four_objects_pack_path="./elfshaker_data/packs/loose/four_objects.pack.idx"
 
   # Delete the second loose snapshot
-  rm $four_objects_pack_path
+  rm "$four_objects_pack_path"
 
   objects_before_gc=$(find elfshaker_data/loose -type f | wc -l)
-  if [ objects_before_gc -ne 4 ]; then
+  if [ "$objects_before_gc" -ne 4 ]; then
     echo 'Expected 4 loose objects'
     exit 1
   fi
@@ -774,8 +776,21 @@ test_gc_objects() {
   "$elfshaker" gc -o --verbose
 
   objects_after_gc=$(find elfshaker_data/loose -type f | wc -l)
-  if [ objects_after_gc -ne 2 ]; then
+  if [ "$objects_after_gc" -ne 2 ]; then
     echo 'Expected 2 loose objects after GC'
+    exit 1
+  fi
+}
+
+test_store_duplicate_content_works() {
+  printf '%s' duplicate > foo
+  cp foo bar
+
+  "$elfshaker" store duplicate_objects
+
+  object_count=$(find elfshaker_data/loose -type f | wc -l)
+  if [ "$object_count" -ne 1 ]; then
+    echo 'Expected duplicate files to share one loose object'
     exit 1
   fi
 }
@@ -814,15 +829,16 @@ test_explode_zero_length_creates_parents() {
 
 test_gc_objects_dry_run() {
   # Create loose snapshot with two objects
-  touch foo bar
+  printf '%s' foo > foo
+  printf '%s' bar > bar
   "$elfshaker" store two_objects
   two_objects_pack_path="./elfshaker_data/packs/loose/two_objects.pack.idx"
 
   # Delete the loose snapshot
-  rm $two_objects_pack_path
+  rm "$two_objects_pack_path"
 
   objects_before_gc=$(find elfshaker_data/loose -type f | wc -l)
-  if [ objects_before_gc -ne 2 ]; then
+  if [ "$objects_before_gc" -ne 2 ]; then
     echo 'Expected 2 loose objects'
     exit 1
   fi
@@ -830,7 +846,7 @@ test_gc_objects_dry_run() {
   "$elfshaker" gc -o --dry-run --verbose
 
   objects_after_gc=$(find elfshaker_data/loose -type f | wc -l)
-  if [ objects_after_gc -ne 2 ]; then
+  if [ "$objects_after_gc" -ne 2 ]; then
     echo 'Expected 2 loose objects after GC'
     exit 1
   fi
@@ -908,10 +924,9 @@ main() {
   run_test test_clone_fetches_indexes
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots_dry_run
+  run_test test_store_duplicate_content_works
   run_test test_gc_objects
-  # Skipped because "*FATAL*: Access denied. (os error 5) (PermissionDenied)"
-  # observed in CI on windows.
-  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_objects_dry_run
+  run_test test_gc_objects_dry_run
   run_test test_read_only
   run_test test_explode_zero_length_creates_parents
 }

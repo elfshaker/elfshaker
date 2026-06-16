@@ -25,7 +25,7 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
     create_file, create_temp_path, ensure_dir, get_last_modified, open_file, write_file_atomic,
-    EmptyDirectoryCleanupQueue, FileMode, MetadataFileModeExt,
+    write_file_atomic_or_existing, EmptyDirectoryCleanupQueue, FileMode, MetadataFileModeExt,
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
@@ -1289,16 +1289,8 @@ impl Repository {
         checksum: &ObjectChecksum,
     ) -> io::Result<()> {
         let obj_path = self.loose_object_path(checksum);
-        if obj_path.exists() {
-            // No need to do anything. Object writes are atomic, so if an object
-            // with the same checksum already exists, there is no need to do anything.
-            return Ok(());
-        }
-
-        // Write to disk
         fs::create_dir_all(obj_path.parent().unwrap())?;
-        write_file_atomic(&mut reader, temp_dir, &obj_path)?;
-        Ok(())
+        write_file_atomic_or_existing(&mut reader, temp_dir, &obj_path)
     }
 
     pub fn loose_object_checksum(&self, path: &Path) -> Result<ObjectChecksum, Error> {
@@ -1491,6 +1483,76 @@ mod tests {
                 .join("deadbeefbadc0de0faf0deadbeefbadc0de0"),
             path,
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loose_object_write_accepts_competing_writer() -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        struct CompetingReader {
+            contents: &'static [u8],
+            destination: PathBuf,
+            destination_dir: PathBuf,
+            offset: usize,
+        }
+
+        impl Read for CompetingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.offset == 0 {
+                    fs::write(&self.destination, self.contents)?;
+                    fs::set_permissions(&self.destination_dir, fs::Permissions::from_mode(0o555))?;
+                }
+
+                let remaining = &self.contents[self.offset..];
+                let len = remaining.len().min(buf.len());
+                buf[..len].copy_from_slice(&remaining[..len]);
+                self.offset += len;
+                Ok(len)
+            }
+        }
+
+        struct Cleanup(PathBuf);
+
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let root = create_temp_path(&std::env::temp_dir());
+        fs::create_dir(&root)?;
+        let _cleanup = Cleanup(root.clone());
+        let data_dir = root.join(REPO_DIR);
+        let temp_dir = data_dir.join(TEMP_DIR);
+        fs::create_dir_all(&temp_dir)?;
+
+        let repo = Repository {
+            path: root,
+            data_dir,
+            progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
+            lock_file: None,
+            is_locked_exclusively: AtomicBool::new(false),
+        };
+
+        let checksum: [u8; 20] = Sha1::digest(b"same contents").into();
+        let destination = repo.loose_object_path(&checksum);
+        let destination_dir = destination.parent().unwrap().to_path_buf();
+        fs::create_dir_all(&destination_dir)?;
+
+        let mut reader = CompetingReader {
+            contents: b"same contents",
+            destination: destination.clone(),
+            destination_dir: destination_dir.clone(),
+            offset: 0,
+        };
+        let result = repo.write_loose_object(&mut reader, &temp_dir, &checksum);
+
+        fs::set_permissions(&destination_dir, fs::Permissions::from_mode(0o755))?;
+        result?;
+        assert_eq!(b"same contents", fs::read(destination)?.as_slice());
+        assert!(temp_dir.read_dir()?.next().is_none());
+        Ok(())
     }
 
     #[test]

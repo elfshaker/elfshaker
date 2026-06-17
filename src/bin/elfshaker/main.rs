@@ -137,4 +137,21 @@ mod tests {
 
         assert_eq!(indexes, ["first", "second"]);
     }
+
+    #[test]
+    fn store_rejects_multiple_file_list_sources() {
+        let error = super::get_app()
+            .try_get_matches_from([
+                "elfshaker",
+                "store",
+                "snapshot",
+                "--files-from",
+                "files",
+                "--files0-from",
+                "files0",
+            ])
+            .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 }

@@ -84,6 +84,7 @@ pub(crate) fn get_app() -> Command {
             Arg::new("path")
                 .required(true)
                 .index(2)
+                .num_args(1..)
                 .help("Specifies the path(s) to show."),
         )
 }

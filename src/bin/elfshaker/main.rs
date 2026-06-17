@@ -98,3 +98,17 @@ fn get_app() -> Command {
                 .global(true),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn show_accepts_multiple_paths() {
+        let matches = super::get_app()
+            .try_get_matches_from(["elfshaker", "show", "snapshot", "first", "second"])
+            .unwrap();
+        let (_, show) = matches.subcommand().unwrap();
+        let paths: Vec<_> = show.get_many::<String>("path").unwrap().cloned().collect();
+
+        assert_eq!(paths, ["first", "second"]);
+    }
+}

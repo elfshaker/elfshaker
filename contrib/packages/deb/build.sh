@@ -15,6 +15,8 @@ Usage:
 
 Options:
   --binary PATH      Package an existing elfshaker binary instead of building.
+  --architecture A   Package architecture (default: current host).
+  --preserve-binary  Do not strip the packaged executable.
   --output-dir DIR   Write the package to DIR (default: target/packages).
   --release VALUE    Debian packaging revision (default: 1).
   -h, --help         Show this help.
@@ -29,6 +31,8 @@ EOF
 }
 
 binary=
+package_architecture=
+preserve_binary=false
 output_dir="$repo_root/target/packages"
 package_release=${PACKAGE_RELEASE:-1}
 
@@ -38,6 +42,15 @@ while (($# > 0)); do
             (($# >= 2)) || die "--binary requires a path"
             binary=$2
             shift 2
+            ;;
+        --architecture)
+            (($# >= 2)) || die "--architecture requires a value"
+            package_architecture=$2
+            shift 2
+            ;;
+        --preserve-binary)
+            preserve_binary=true
+            shift
             ;;
         --output-dir)
             (($# >= 2)) || die "--output-dir requires a directory"
@@ -65,23 +78,39 @@ done
 require_command dpkg
 require_command dpkg-deb
 require_command dpkg-shlibdeps
-require_command strip
 
 version=${PACKAGE_VERSION:-$(cargo_package_version)}
 [[ -n "$version" ]] || die "could not read package version from Cargo.toml"
 debian_version=${version/-/\~}-$package_release
-architecture=$(dpkg --print-architecture)
+host_architecture=$(dpkg --print-architecture)
+architecture=${package_architecture:-"$host_architecture"}
 maintainer=${PACKAGE_MAINTAINER:-"Peter Waller <peter.waller@arm.com>"}
 output_dir=$(absolute_path "$output_dir")
 
-elfshaker_binary=$(build_elfshaker "$binary")
+foreign_architecture=false
+run_binary=true
+if [[ "$architecture" != "$host_architecture" ]]; then
+    [[ -n "$binary" ]] ||
+        die "a foreign --architecture requires --binary"
+    foreign_architecture=true
+    run_binary=false
+fi
+
+elfshaker_binary=$(build_elfshaker "$binary" "$run_binary")
+if [[ "$foreign_architecture" == true ]]; then
+    verify_static_elf_architecture "$elfshaker_binary" "$architecture"
+fi
+
 work_dir=$(make_work_dir)
 trap 'remove_work_dir "$work_dir"' EXIT
 
 package_root="$work_dir/root"
 mkdir -p "$package_root/DEBIAN"
 install_program_and_manpages "$elfshaker_binary" "$package_root"
-strip --strip-unneeded "$package_root/usr/bin/elfshaker"
+if [[ "$foreign_architecture" == false && "$preserve_binary" == false ]]; then
+    require_command strip
+    strip --strip-unneeded "$package_root/usr/bin/elfshaker"
+fi
 
 install -Dm0644 \
     "$repo_root/LICENSE" \
@@ -113,14 +142,17 @@ Description: low-footprint version control system for binaries
  deduplicating similar binary files into compact pack files.
 EOF
 
-dependency_output=$(
-    cd "$work_dir"
-    dpkg-shlibdeps -O "$package_root/usr/bin/elfshaker"
-)
-dependencies=$(
-    printf '%s\n' "$dependency_output" |
-        sed -n 's/^shlibs:Depends=//p'
-)
+dependencies=
+if ! is_static_elf "$package_root/usr/bin/elfshaker"; then
+    dependency_output=$(
+        cd "$work_dir"
+        dpkg-shlibdeps -O "$package_root/usr/bin/elfshaker"
+    )
+    dependencies=$(
+        printf '%s\n' "$dependency_output" |
+            sed -n 's/^shlibs:Depends=//p'
+    )
+fi
 
 installed_size=$(du -sk "$package_root/usr" | awk '{print $1}')
 {

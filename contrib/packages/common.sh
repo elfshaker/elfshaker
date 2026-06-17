@@ -51,6 +51,7 @@ cargo_package_version() {
 
 build_elfshaker() {
     local supplied_binary=$1
+    local run_binary=${2:-true}
     local cargo_command=${CARGO:-cargo}
     local target_dir
     local binary
@@ -75,8 +76,54 @@ build_elfshaker() {
 
     [[ -f "$binary" ]] || die "elfshaker binary not found: $binary"
     [[ -x "$binary" ]] || die "elfshaker binary is not executable: $binary"
-    "$binary" --version >/dev/null
+    if [[ "$run_binary" == true ]]; then
+        "$binary" --version >/dev/null
+    fi
     printf '%s\n' "$binary"
+}
+
+verify_static_elf_architecture() {
+    local binary=$1
+    local architecture=$2
+    local expected_machine
+    local actual_machine
+
+    require_command readelf
+
+    case "$architecture" in
+        amd64 | x86_64)
+            expected_machine="Advanced Micro Devices X86-64"
+            ;;
+        arm64 | aarch64)
+            expected_machine="AArch64"
+            ;;
+        *)
+            die "unsupported foreign package architecture: $architecture"
+            ;;
+    esac
+
+    actual_machine=$(
+        readelf -h "$binary" |
+            awk -F: '/^[[:space:]]*Machine:/ {
+                sub(/^[[:space:]]*/, "", $2)
+                print $2
+                exit
+            }'
+    )
+    [[ "$actual_machine" == "$expected_machine" ]] ||
+        die "binary architecture is '$actual_machine', expected '$expected_machine'"
+
+    if ! is_static_elf "$binary"; then
+        die "foreign package binaries must be statically linked"
+    fi
+}
+
+is_static_elf() {
+    local binary=$1
+
+    require_command readelf
+    readelf -h "$binary" >/dev/null 2>&1 || return 1
+    ! readelf -l "$binary" | grep -Fq 'Requesting program interpreter'
 }
 
 install_program_and_manpages() {

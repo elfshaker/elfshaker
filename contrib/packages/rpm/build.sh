@@ -15,6 +15,8 @@ Usage:
 
 Options:
   --binary PATH      Package an existing elfshaker binary instead of building.
+  --architecture A   Package architecture (default: current host).
+  --preserve-binary  Do not strip the packaged executable.
   --output-dir DIR   Write the package to DIR (default: target/packages).
   --release VALUE    RPM packaging revision (default: 1).
   -h, --help         Show this help.
@@ -32,6 +34,8 @@ sanitize_rpm_component() {
 }
 
 binary=
+package_architecture=
+preserve_binary=false
 output_dir="$repo_root/target/packages"
 package_release=${PACKAGE_RELEASE:-1}
 
@@ -41,6 +45,15 @@ while (($# > 0)); do
             (($# >= 2)) || die "--binary requires a path"
             binary=$2
             shift 2
+            ;;
+        --architecture)
+            (($# >= 2)) || die "--architecture requires a value"
+            package_architecture=$2
+            shift 2
+            ;;
+        --preserve-binary)
+            preserve_binary=true
+            shift
             ;;
         --output-dir)
             (($# >= 2)) || die "--output-dir requires a directory"
@@ -92,10 +105,15 @@ if [[ -n "$build_metadata" ]]; then
     rpm_release="$rpm_release.$(sanitize_rpm_component "$build_metadata")"
 fi
 
-architecture=$(rpm --eval '%{_arch}')
-[[ -n "$architecture" && "$architecture" != '%{_arch}' ]] ||
+host_architecture=$(rpm --eval '%{_arch}')
+[[ -n "$host_architecture" && "$host_architecture" != '%{_arch}' ]] ||
     die "could not determine RPM architecture"
+architecture=${package_architecture:-"$host_architecture"}
 output_dir=$(absolute_path "$output_dir")
+
+if [[ "$architecture" != "$host_architecture" ]]; then
+    die "RPM packages must be built under their target architecture"
+fi
 
 elfshaker_binary=$(build_elfshaker "$binary")
 work_dir=$(make_work_dir)
@@ -103,6 +121,10 @@ trap 'remove_work_dir "$work_dir"' EXIT
 
 package_root="$work_dir/root"
 install_program_and_manpages "$elfshaker_binary" "$package_root"
+if [[ "$preserve_binary" == false ]]; then
+    require_command strip
+    strip --strip-unneeded "$package_root/usr/bin/elfshaker"
+fi
 install -Dm0644 \
     "$repo_root/LICENSE" \
     "$package_root/usr/share/licenses/elfshaker/LICENSE"
@@ -133,10 +155,11 @@ cat >"$spec" <<EOF
 %global debug_package %{nil}
 %global _build_id_links none
 %global source_date_epoch_from_changelog 0
+%global __os_install_post %{nil}
 
 Name:           elfshaker
 Version:        $rpm_version
-Release:        $rpm_release%{?dist}
+Release:        $rpm_release
 Summary:        Low-footprint version control system for binaries
 License:        Apache-2.0
 URL:            https://github.com/elfshaker/elfshaker

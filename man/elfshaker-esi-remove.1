@@ -4,7 +4,7 @@
 .SH NAME
 elfshaker\-esi\-remove \- Removes pack URLs from one or more ESI indexes
 .SH SYNOPSIS
-\fBelfshaker esi remove\fR [\fB\-\-force\fR] [\fB\-\-no\-backup\fR] [\fB\-\-also\fR] [\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIesi_file\fR> <\fIpack_url\fR>... 
+\fBelfshaker esi remove\fR [OPTIONS] <ESI_FILE> <PACK_URL>...
 .SH DESCRIPTION
 Removes pack URLs from one or more ESI indexes
 .SH OPTIONS
@@ -24,8 +24,8 @@ Show informational progress and diagnostic messages.
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIesi_file\fR>
+<\fIESI_FILE\fR>
 Primary ESI file to edit.
 .TP
-<\fIpack_url\fR>...
+<\fIPACK_URL\fR>...
 Stored pack URLs to remove.

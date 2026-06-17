@@ -111,4 +111,15 @@ mod tests {
 
         assert_eq!(paths, ["first", "second"]);
     }
+
+    #[test]
+    fn list_accepts_multiple_packs() {
+        let matches = super::get_app()
+            .try_get_matches_from(["elfshaker", "list", "first", "second"])
+            .unwrap();
+        let (_, list) = matches.subcommand().unwrap();
+        let packs: Vec<_> = list.get_many::<String>("pack").unwrap().cloned().collect();
+
+        assert_eq!(packs, ["first", "second"]);
+    }
 }

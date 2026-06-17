@@ -23,3 +23,20 @@ URL of the remote .esi index.
 .TP
 <\fIDIRECTORY\fR>
 New working directory to create.
+.SH EXAMPLES
+Clone the public manyclangs remote, which provides snapshots of prebuilt LLVM versions:
+.PP
+.nf
+\fBelfshaker clone \\\fR
+.br
+\fB  https://github.com/elfshaker/manyclangs/releases/download/v0.9.0/aarch64\-ubuntu2004.esi \\\fR
+.br
+\fB  manyclangs\fR
+.fi
+.PP
+This creates a working directory named manyclangs and downloads its pack indexes. Pack data is fetched when a snapshot is needed.
+.SH "SEE ALSO"
+manyclangs project:
+.UR https://github.com/elfshaker/manyclangs
+https://github.com/elfshaker/manyclangs
+.UE

@@ -35,7 +35,7 @@ pub(crate) fn get_app() -> Command {
             Arg::new("pack")
                 .index(1)
                 .required(false)
-                // .multiple(true)
+                .num_args(0..)
                 .help("Prints the contents of the specified packs."),
         )
         .arg(Arg::new("format").long("format").default_value("%s").help(

@@ -4,6 +4,9 @@ An ESI file describes the packs published by a remote elfshaker repository.
 The `meta` field versions the ESI wire format. Elfshaker release versions and
 ESI format versions are independent.
 
+The [ESI test plan](esi-test-plan.md) defines the required unit, integration,
+and old-client compatibility coverage.
+
 ## Versioned endpoints
 
 The unversioned `index.esi` endpoint remains the compatibility endpoint for

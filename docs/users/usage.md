@@ -1,164 +1,136 @@
 # elfshaker — Usage guide
 
-## Table of contents
-- [Core concepts](#core-concepts)
-- [Workflow](#workflow)
-- [Create snapshot](#create-snapshot)
-- [Extract snapshot](#extract-snapshot)
-- [List packs, snapshots, files](#extract-snapshot)
-- [Write files to stdout](#write-files-to-stdout)
+This guide covers the basic local snapshot workflow. Use `man elfshaker` or
+`elfshaker --help` for the complete command reference.
 
-**Important: Make sure you understand the following.**
+## Before you start
 
-- Remember there is **no warranty**, per the license on this software!
-- Do your own validation before using it in any situation where **data loss** would be a problem.
-- We recommend working in an **isolated directory** which does not contain important files (you may want to copy files in).
-- elfshaker excels at storing lots of very **similar files**.
+- Work in an isolated directory that contains no irreplaceable files.
+- Validate the workflow before relying on it where data loss would matter.
+- Expect the best compression when snapshots contain many similar files.
 
 ## Core concepts
 
-**Important: Understanding of the following concepts is critical to working with the tool.**
+- The **working directory** contains the files that elfshaker stores and
+  restores.
+- The **data directory** contains packs, indexes, loose objects, remotes, and
+  `HEAD`. It defaults to `./elfshaker_data` and can be selected with
+  `--data-dir` or `ELFSHAKER_DATA`.
+- A **repository** is a working directory and its associated data directory.
+- A **snapshot** records a set of files from the working directory.
+- A **loose snapshot** has not yet been combined into a compressed pack.
+- A **pack** stores one or more snapshots as `<name>.pack` with an accompanying
+  `<name>.pack.idx` index.
 
-- Snapshot
-    - Stores a directory state (a set of files)
-    - Created by `elfshaker store`
-    - Can be packed into a pack file by `elfshaker pack` (otherwise called a loose snapshot)
-- Repository
-    - The parent directory of the directory `elfshaker_data`
-    - The directory from which snapshots are created and into which they are extracted
-- Packs
-    - Store a set of snapshots
-    - Represented by `[packname].pack` + `[packname].pack.idx`
-    - Must reside under `./elfshaker_data/packs/`
-    - Created by `elfshaker pack`
-- elfshaker_data
-    - Contains loose snapshots and pack files
-    - Put the `.pack` + `.pack.idx` files under `./elfshaker_data/packs`
-    - Created automatically by `elfshaker store` on its first run
-    - Can be created manually (if you plan to use existing packs; for example from [manyclangs](https://github.com/elfshaker/manyclangs))
+## Store snapshots
 
-## Workflow
+Start in the working directory:
 
-A basic workflow in elfshaker is to:
-1) Add some files
-2) Store them in a snapshot
-3) Make some changes to the files
-4) Store them again
-5) Repeat 2) and 3) a number of times
-6) Then, when you have lots of snapshots, they can be stored efficiently in pack, but will still be quickly accessible
-
-## Create snapshot
 ```bash
-elfshaker store <snapshot> [--files-from <file>] [--files0-from <file>]
+elfshaker store build-001
 ```
 
-### Example
+Make changes, then store another snapshot:
+
 ```bash
-elfshaker store my-snapshot
+elfshaker store build-002
 ```
 
-### Description
-Creates the snapshot `my-snapshot` containing all files in the elfshaker repository.
+Without a file-list option, `store` recursively selects files from the working
+directory. To select explicit paths, pass a newline-delimited file:
 
-*For full command usage, use the `--help` option.*
 ```bash
-elfshaker store --help
+elfshaker store build-003 --files-from paths.txt
 ```
 
-### Implementation
-1. Compute the checksums for all input file names.
-2. Compare these checksums against the set of all loose objects (objects stored as part of a loose snapshot; not in a pack).
-3. Store any new files as objects in the loose object store.
-4. Create a loose pack index `<snapshot>.pack.idx` representing the snapshot in `./elfshaker_data/packs/loose`.
-5. Sets the current snapshot reference `elfshaker_data/HEAD` to the string `loose/<snapshot>:<snapshot>`.
-
-## Extract snapshot
-```bash
-elfshaker extract [<pack>:]<snapshot> [--reset] [--verify]
-```
-
-### Example
-```bash
-elfshaker extract my-pack:my-snapshot --verify
-```
-
-### Description
-Extracts the snapshot `my-snapshot` from the pack `my-pack` (interpreted as `elfshaker_data/packs/my-pack.pack`) into the repository directory and verifies the files checksums during the extraction process.
-
-*For full command usage, use the `--help` option.*
-```bash
-elfshaker extract --help
-```
-
-### Implementation
-1. Look-up the set of packs in `elfshaker_data/packs` to see which packs contain the specified snapshot (skipped if specified as `my-pack:my-snapshot`).
-2. Read the corresponding pack index and find the set of files in the snapshot.
-3. Extract the files to the repository directory.
-    a. If `--reset` is NOT specified, do perform an incremental update of the repository directory by comparing the set of files against the last extracted snapshot (`elfshaker_data/HEAD`).
-    b. If `--reset` is specified, ignore `elfshaker_data/HEAD` and extract everything, overwriting if file names clash.
+Use `--files0-from` for a NUL-delimited list. Pass `-` as the filename to read
+the list from standard input.
 
 ## Pack loose snapshots
+
+Combine all loose snapshots into a compressed pack:
+
 ```bash
-elfshaker pack <pack> [--frames N]
+elfshaker pack builds
 ```
 
-The set of snapshots to be packed may be supplied with
---snapshots-from=<file> or --snapshots0-from=<file> for null delimited
-lists. Otherwise all snapshots are packed.
+This creates `elfshaker_data/packs/builds.pack` and
+`elfshaker_data/packs/builds.pack.idx`. The loose source data remains until it
+is removed with `gc`.
 
-### Example
+To pack selected snapshots, provide their names in a file:
+
 ```bash
-elfshaker pack my-pack --frames 8
+elfshaker pack selected-builds --snapshots-from snapshots.txt
 ```
 
-### Description
-Creates the pack `my-pack` (file is `elfshaker_data/packs/my-pack.idx`) by packing all loose snapshots.
+## List stored data
 
-### Implementation
-1. Enumerate all loose object files (belonging to loose snapshot) in `elfshaker_data/loose`.
-2. Preprocess, sort and compress the objects, producing a .pack file with 8 frames.
+List known packs:
 
-    🛈 Our experiments indicate that 1 frame per 512 MiB is optimal for packing builds of LLVM and that is what omitting `--frames` does.
-
-3. Combine all snapshots into a `<pack>.pack.idx`.
-
-## List packs, snapshots, files
 ```bash
-(1) elfshaker list-packs
-(2) elfshaker list <pack>...
-(3) elfshaker list-files <snapshot>
+elfshaker list-packs
 ```
 
-### Description
-(1) - Lists the names of all available packs AND loose snapshots (identified by prefix `loose/`).
+List snapshots from all packs, or from selected packs:
 
-(2) - Lists all snapshots available in `<pack>`.
-
-(3) - Lists all files stored in `<snapshot>`.
-
-## Write files to stdout
 ```bash
-elfshaker show [<pack>:]<snapshot> <path>...
+elfshaker list
+elfshaker list builds another-pack
 ```
 
-### Example
+List files in a snapshot:
+
 ```bash
-elfshaker show my-pack:my-snapshot my-file some-dir/my-file-2
+elfshaker list-files builds:build-002
 ```
 
-### Description
-Writes the contents of the files specified by the given paths in the snapshot to stdout.
+## Extract a snapshot
 
-## Cleanup loose snapshots and objects after creating a pack
+Restore a snapshot into the working directory:
+
 ```bash
-(1) elfshaker gc -s
-(2) elfshaker gc -o
-(3) elfshaker gc -so
+elfshaker extract builds:build-002 --verify
 ```
 
-### Description
-(1) - Cleanup redundant loose snapshots.
+A plain snapshot tag also works when elfshaker can resolve it unambiguously:
 
-(2) - Cleanup unreferenced loose objects.
+```bash
+elfshaker extract build-002
+```
 
-(3) - Cleanup snapshots and objects.
+Extraction normally transitions incrementally from `HEAD`. It may delete files
+that belonged to the previous snapshot but not the new one. Untracked files are
+left alone.
+
+Use `--reset` to ignore `HEAD` and write every file in the selected snapshot.
+It does not remove unrelated paths. Use `--force` only when you intend to
+bypass checks for unexpected working-directory modifications.
+
+## Write snapshot files to standard output
+
+Write one file:
+
+```bash
+elfshaker show builds:build-002 bin/compiler > compiler
+```
+
+When multiple paths are supplied, `show` concatenates their contents without
+separators.
+
+## Remove redundant loose data
+
+Inspect what garbage collection would remove:
+
+```bash
+elfshaker gc --dry-run --loose-snapshots --loose-objects
+```
+
+After checking the output, remove redundant loose snapshot indexes and
+unreferenced loose objects:
+
+```bash
+elfshaker gc --loose-snapshots --loose-objects
+```
+
+Packed data is not removed.

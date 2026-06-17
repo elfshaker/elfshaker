@@ -3,6 +3,16 @@ name: Release
 on:
   release:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Platforms to build for a non-publishing test run
+        required: true
+        default: linux
+        type: choice
+        options:
+          - linux
+          - all
 
 permissions:
   contents: write
@@ -14,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-15]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.scope == 'linux' && '["ubuntu-22.04"]' || '["ubuntu-22.04","macos-15"]') }}
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
       - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
@@ -26,7 +36,105 @@ jobs:
         if: runner.os == 'Linux'
       - name: Build release artifacts
         run: nix build --log-lines 1000 .#release
+      - name: Install Linux package tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends dpkg-dev
+      - name: Build DEB and RPM release artifacts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-binaries release-packages
+
+          prepare_release_binary() {
+            local archive_arch=$1
+            local target=$2
+            local archives
+
+            mkdir -p "release-binaries/$archive_arch"
+            archives=(result/elfshaker_*_"$target".tar.gz)
+            test "${#archives[@]}" -eq 1
+            tar -xzf "${archives[0]}" \
+              -C "release-binaries/$archive_arch" \
+              --strip-components=1 \
+              elfshaker/elfshaker
+          }
+
+          package_deb() {
+            local archive_arch=$1
+            local deb_arch=$2
+
+            contrib/packages/deb/build.sh \
+              --binary "release-binaries/$archive_arch/elfshaker" \
+              --architecture "$deb_arch" \
+              --preserve-binary \
+              --output-dir release-packages
+          }
+
+          package_and_test_rpm() {
+            local archive_arch=$1
+            local container_arch=$2
+            local rpm_arch=$3
+
+            docker run --rm \
+              --platform "linux/$container_arch" \
+              --volume "$PWD:/workspace" \
+              --workdir /workspace \
+              rockylinux:9 \
+              bash -euxo pipefail -c "
+                dnf install --assumeyes \
+                  --setopt=install_weak_deps=False \
+                  diffutils rpm-build
+                contrib/packages/rpm/build.sh \
+                  --binary release-binaries/$archive_arch/elfshaker \
+                  --architecture $rpm_arch \
+                  --preserve-binary \
+                  --output-dir release-packages
+                package=\$(find release-packages \
+                  -name 'elfshaker-*.$rpm_arch.rpm' -print -quit)
+                test -n \"\$package\"
+                rpm -ivh \"\$package\"
+                elfshaker --version
+                test -r /usr/share/man/man1/elfshaker.1.gz
+                cmp /usr/bin/elfshaker \
+                  release-binaries/$archive_arch/elfshaker
+                rpm -V elfshaker
+              "
+          }
+
+          prepare_release_binary x86_64 x86_64-unknown-linux-musl
+          prepare_release_binary aarch64 aarch64-unknown-linux-musl
+          package_deb x86_64 amd64
+          package_deb aarch64 arm64
+          package_and_test_rpm x86_64 amd64 x86_64
+          package_and_test_rpm aarch64 arm64 aarch64
+
+          packages=(release-packages/*.deb release-packages/*.rpm)
+          test "${#packages[@]}" -eq 4
+          for package in "${packages[@]}"; do
+            sha256sum "$package" >"$package.sha256sum"
+          done
+      - name: Collect workflow artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p workflow-artifacts
+          cp result/* workflow-artifacts/
+          if [[ "${{ runner.os }}" == Linux ]]; then
+            cp release-packages/* workflow-artifacts/
+          fi
+      - name: Retain workflow artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.os }}
+          path: workflow-artifacts/
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload release artifacts
+        if: github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" result/* --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" workflow-artifacts/* --clobber

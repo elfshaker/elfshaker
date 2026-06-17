@@ -56,8 +56,16 @@ Native dynamically linked binaries inherit the compatibility baseline of the
 system where they are built. Build on each target distribution release, or on
 the oldest supported release in a compatible family. A static Linux release
 binary can instead be supplied with `--binary` when one artifact must run
-across distribution families. The builders package the current host
-architecture and do not cross-compile.
+across distribution families.
+
+The DEB builder accepts `--architecture` with a prebuilt static binary. It
+verifies the foreign ELF architecture and leaves the executable unchanged.
+RPM packages are built under their target architecture because `rpmbuild`
+rejects incompatible host architectures; use a native or emulated container
+for each RPM architecture.
+
+`--preserve-binary` prevents stripping so a package can contain the exact
+verified release executable supplied with `--binary`.
 
 Use `--output-dir`, `--release`, and the environment variables listed by each
 script's `--help` output to integrate the builders into release automation.

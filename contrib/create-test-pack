@@ -66,7 +66,10 @@ main() {
             (create_rand_file $APPROX_FILE_SIZE)
         done
         # Delete some files.
-        find \( -name elfshaker_data -prune \) -o -type f -print | sort -R | head -n $(rand_int_inclusive 0 $NUM_FILES) | xargs rm -f
+        delete_count="$(rand_int_inclusive 0 "$NUM_FILES")"
+        find \( -name elfshaker_data -prune \) -o -type f -print |
+            shuf -n "$delete_count" |
+            xargs rm -f
         "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --verbose
     done
 

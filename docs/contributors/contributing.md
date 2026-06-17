@@ -25,7 +25,8 @@ cargo test
 2. Run the system tests twice: once with the verification pack and once with a fresh pack.
 ```bash
 ./test-scripts/check.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack
-./test-scripts/check.sh ./target/release/elfshaker $(contrib/create-test-pack ./target/release/elfshaker 5 64)
+pack=$(contrib/create-test-pack ./target/release/elfshaker 5 64)
+./test-scripts/check.sh ./target/release/elfshaker "$pack"
 ```
 
 **Some tests may fail to run if you are running on a non-standard Linux environment (like if you don't have `/dev/shm`).**

@@ -24,8 +24,8 @@ jobs:
     steps:
     - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
       with:
-        # Include both parents of GitHub's PR merge commit to read the head message.
-        fetch-depth: 2
+        # Include PR parents and the pinned pre-v2 history needed below.
+        fetch-depth: 0
     - name: Decide whether to run Nix
       id: nix-policy
       shell: bash
@@ -49,6 +49,12 @@ jobs:
       run: cargo test --verbose
     - name: Run check
       run: ./test-scripts/check.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack
+    - name: Build pre-v2 elfshaker
+      run: |
+        git worktree add /tmp/elfshaker-pre-v2 9c18314b72b0a64544b96932fa10d64f82798328
+        cargo build --release --manifest-path /tmp/elfshaker-pre-v2/Cargo.toml --target-dir /tmp/elfshaker-pre-v2-target
+    - name: Run ESI compatibility checks
+      run: ./test-scripts/check-esi.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack /tmp/elfshaker-pre-v2-target/release/elfshaker
     - name: Generate random pack
       run: |
         pack=$(contrib/create-test-pack ./target/release/elfshaker 5 64)

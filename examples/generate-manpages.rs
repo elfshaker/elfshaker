@@ -7,6 +7,8 @@
 mod cli;
 #[path = "../src/bin/elfshaker/clone.rs"]
 mod clone;
+#[path = "../src/bin/elfshaker/esi.rs"]
+mod esi;
 #[path = "../src/bin/elfshaker/explode.rs"]
 mod explode;
 #[path = "../src/bin/elfshaker/extract.rs"]

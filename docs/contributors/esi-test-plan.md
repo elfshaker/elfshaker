@@ -33,7 +33,7 @@ Unit tests cover the document model without starting a process or server:
 
 - Parse v1 and v2 entries, including relative and absolute pack URLs.
 - Reject unknown meta versions, missing fields, invalid checksums, invalid
-  sizes, and extra fields.
+  sizes, extra fields, and literal whitespace in URL fields.
 - Read and write an unchanged ESI byte-for-byte, including tabs, spaces, blank
   lines, LF or CRLF endings, and a missing final newline.
 - Add a v1 entry with three fields and a v2 entry with pack and index sizes.
@@ -45,6 +45,8 @@ Unit tests cover the document model without starting a process or server:
   versioned URLs unchanged.
 - Stage every target before committing a multi-index edit. An injected failure
   during the second replacement restores the first target.
+- Reject target and backup aliases before filtering unchanged documents.
+- Read remote bodies without reserving an untrusted HTTP `Content-Length`.
 
 Checksum tests use small fixed files with known SHA-1 values. The production
 checksum path reads through a bounded buffer rather than loading a pack into
@@ -60,6 +62,7 @@ checks:
 2. `esi add` computes the expected checksums and sizes.
 3. Options work before the positional ESI and pack arguments.
 4. Adding several packs preserves argument order.
+   Default pack filenames are encoded as relative URL path segments.
 5. A duplicate fails without changing the ESI or backup.
 6. `--force` replaces the matching line and leaves unrelated bytes untouched.
 7. `esi remove` and forced removal follow the documented missing-entry rules.
@@ -70,6 +73,7 @@ checks:
 10. Missing pack or `.pack.idx`, an invalid target, or a failed secondary
     target leaves every ESI unchanged.
 11. `esi list` reports the stored URL, checksums, and v2 sizes.
+12. Target and backup aliases fail even when one named target is unchanged.
 
 The tests compare complete files where practical. They use focused diffs only
 to verify that an add, replacement, or removal changes the intended line.

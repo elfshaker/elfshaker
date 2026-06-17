@@ -3,6 +3,7 @@
 
 mod cli;
 mod clone;
+mod esi;
 mod explode;
 mod extract;
 mod find;
@@ -60,6 +61,7 @@ fn run_subcommand(app: &mut Command, matches: ArgMatches) -> Result<(), Box<dyn 
         Some((gc::SUBCOMMAND, matches)) => gc::run(matches),
         Some((update::SUBCOMMAND, matches)) => update::run(matches),
         Some((clone::SUBCOMMAND, matches)) => clone::run(matches),
+        Some((esi::SUBCOMMAND, matches)) => esi::run(matches),
         _ => {
             app.print_long_help()?;
             println!();

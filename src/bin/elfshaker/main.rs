@@ -139,6 +139,11 @@ mod tests {
             String::from_utf8(source_pages[Path::new("elfshaker-extract.1")].clone()).unwrap();
         assert!(!extract.contains(".SH TERMINOLOGY\n"));
 
+        let store =
+            String::from_utf8(source_pages[Path::new("elfshaker-store.1")].clone()).unwrap();
+        assert!(store.contains("one or more slash\\-separated components"));
+        assert!(store.contains("Pack snapshots before moving"));
+
         let clone =
             String::from_utf8(source_pages[Path::new("elfshaker-clone.1")].clone()).unwrap();
         assert!(clone.contains(".SH EXAMPLES\n"));

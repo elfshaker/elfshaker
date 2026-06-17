@@ -3,7 +3,7 @@
 
 use clap::{Arg, ArgMatches, Command};
 use elfshaker::repo::run_in_parallel;
-use std::{error::Error, ops::ControlFlow};
+use std::{error::Error, ops::ControlFlow, str::FromStr};
 
 use super::utils::{format_size, open_repo_from_cwd};
 use elfshaker::repo::{PackId, Repository};
@@ -20,7 +20,12 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let repo = open_repo_from_cwd(data_dir)?;
 
     let packs = packs
-        .map(|packs| packs.cloned().map(PackId::Pack).collect())
+        .map(|packs| {
+            packs
+                .map(|pack| PackId::from_str(pack))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
         .unwrap_or(repo.packs()?);
 
     print_snapshots(&repo, &packs, format)?;

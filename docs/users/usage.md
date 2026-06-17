@@ -46,6 +46,17 @@ elfshaker store build-003 --files-from paths.txt
 Use `--files0-from` for a NUL-delimited list. Pass `-` as the filename to read
 the list from standard input.
 
+Snapshot tags consist of one or more `/`-separated components. Dots, visible
+Unicode characters, punctuation, and internal ASCII spaces are accepted.
+Components cannot be empty, `.` or `..`, begin or end with a space, or end with
+a period. Quote tags containing spaces or shell punctuation.
+
+Loose snapshot index paths mirror their tags beneath
+`elfshaker_data/packs/loose`. Filesystem case handling, Unicode normalization,
+and path-length limits therefore apply. A loose data directory that relies on
+case or normalization distinctions may not copy safely to another filesystem.
+Pack snapshots before sharing them between systems.
+
 ## Pack loose snapshots
 
 Combine all loose snapshots into a compressed pack:

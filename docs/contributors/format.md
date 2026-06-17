@@ -37,3 +37,7 @@ The pack index contains essential metadata needed to extract anything from the p
 - The list of files stored in each snapshot
 - The corresponding objects for these files
 - The SHA-1 checksum, size and offset of these objects in the `.pack`
+
+Snapshot-tag validation and the mapping from loose tags to index paths are
+specified in [Snapshot tags](snapshot-tags.md). These rules do not change the
+pack-index serialization format.

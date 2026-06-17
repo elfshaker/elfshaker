@@ -9,6 +9,10 @@ elfshaker\-store \- Store files from the working directory as a loose snapshot.
 Creates a loose snapshot from files in the working directory and updates HEAD to refer to it. Without a file\-list option, elfshaker recursively selects files from the working directory and excludes the data directory.
 .PP
 Use elfshaker pack to combine loose snapshots into a compressed pack.
+.PP
+A snapshot tag is one or more slash\-separated components. Components may contain visible Unicode characters and internal ASCII spaces. They must not be empty, \*(Aq.\*(Aq, \*(Aq..\*(Aq, start or end with a space, or end with a period. The characters :, \\, <, >, ", |, ?, and * are reserved. Dotted Windows device names and invisible Unicode characters are also rejected.
+.PP
+Loose snapshot indexes mirror the tag beneath the data directory. Case, Unicode normalization, and path\-length behavior therefore depend on the filesystem. Pack snapshots before moving them between systems.
 .SH OPTIONS
 .TP
 \fB\-\-files\-from\fR \fI<FILE>\fR

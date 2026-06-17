@@ -29,6 +29,12 @@ pub enum Error {
     CorruptPack,
     /// Multiple or none snapshots match the specified description
     AmbiguousSnapshotMatch(String, Vec<PackId>),
+    /// A loose snapshot path is already occupied by a different exact tag.
+    LooseSnapshotPathCollision {
+        path: PathBuf,
+        requested: String,
+        existing: String,
+    },
     /// The working directory contains unexpected files
     DirtyWorkDir,
     /// The .pack file is not available in packs/
@@ -73,6 +79,15 @@ impl Display for Error {
                     "The requested snapshot {snapshot} lives in multiple packs: {packs:?}"
                 )
             }
+            Self::LooseSnapshotPathCollision {
+                path,
+                requested,
+                existing,
+            } => write!(
+                f,
+                "Cannot store snapshot '{requested}' at '{}': the path contains snapshot '{existing}'",
+                path.display()
+            ),
             Self::DirtyWorkDir => write!(
                 f,
                 "Some files in the repository have been removed or modified unexpectedly! \

@@ -21,10 +21,13 @@ use super::algo::run_in_parallel;
 use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
-    create_file, create_temp_path, ensure_dir, get_last_modified, open_file, write_file_atomic,
-    write_file_atomic_or_existing, EmptyDirectoryCleanupQueue, FileMode, MetadataFileModeExt,
+    create_file, create_temp_path, ensure_dir, get_last_modified, open_file, remove_empty_dirs,
+    write_file_atomic, write_file_atomic_or_existing, EmptyDirectoryCleanupQueue, FileMode,
+    MetadataFileModeExt,
 };
-use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
+use super::pack::{
+    append_path_suffix, write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId,
+};
 use super::remote;
 use crate::progress::ProgressReporter;
 use crate::{
@@ -36,6 +39,19 @@ use crate::{
     repo::fs::create_empty,
 };
 use sha1::{Digest, Sha1};
+
+fn logical_pack_id_path(path: &Path) -> Result<String, Error> {
+    path.components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_owned()
+                .into_string()
+                .map_err(Error::Utf8Error)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|components| components.join("/"))
+}
 
 /// A struct specifying the the extract options.
 #[derive(Clone, Debug)]
@@ -281,6 +297,8 @@ impl Repository {
                 file.read_to_end(&mut buf)?;
 
                 let text = std::str::from_utf8(&buf).map_err(|_| Error::CorruptHead)?;
+                let text = text.strip_suffix('\n').unwrap_or(text);
+                let text = text.strip_suffix('\r').unwrap_or(text);
                 let snapshot = SnapshotId::from_str(text).map_err(|_| Error::CorruptHead)?;
                 (Some(snapshot), time)
             }
@@ -310,24 +328,33 @@ impl Repository {
     pub fn packs(&self) -> Result<Vec<PackId>, Error> {
         let root = self.data_dir().join(PACKS_DIR);
         fs::create_dir_all(&root)?;
-        let mut result = WalkDir::new(&root)
-            .into_iter()
-            .filter_map(|dirent| {
-                dirent
-                    .map_err(Error::WalkDirError)
-                    .and_then(|e| {
-                        e.into_path()
-                            .strip_prefix(&root)
-                            .unwrap() // has prefix by construction.
-                            .as_os_str()
-                            .to_owned()
-                            .into_string()
-                            .map_err(Error::Utf8Error)
-                            .map(PackId::from_index_path)
-                    })
-                    .transpose()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut result = vec![];
+        for entry in WalkDir::new(&root) {
+            let entry = entry.map_err(Error::WalkDirError)?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.into_path();
+            let relative = logical_pack_id_path(
+                path.strip_prefix(&root)
+                    .expect("walked paths remain under their root"),
+            )?;
+            let Some(discovered) = PackId::from_index_path(relative) else {
+                continue;
+            };
+
+            let pack_id = match &discovered {
+                PackId::Pack(name) if name.starts_with(&(LOOSE_DIR.to_owned() + "/")) => {
+                    match PackIndex::load_only_snapshots(&path)?.as_slice() {
+                        [tag] => PackId::for_loose_snapshot(tag)?,
+                        _ => return Err(Error::CorruptPackIndex),
+                    }
+                }
+                _ => discovered,
+            };
+            result.push(pack_id);
+        }
         result.sort();
         Ok(result)
     }
@@ -391,48 +418,43 @@ impl Repository {
     }
 
     pub fn is_pack(&self, pack_id: &str) -> Result<Option<PackId>, IdError> {
-        let pack_index_path = self
-            .data_dir()
-            .join(PACKS_DIR)
-            .join(pack_id)
-            .with_extension(PACK_INDEX_EXTENSION);
-        pack_index_path
-            .exists()
-            .then(|| PackId::from_str(pack_id))
-            .transpose()
+        let pack_id = PackId::from_str(pack_id)?;
+        let pack_index_path = append_path_suffix(
+            self.data_dir().join(PACKS_DIR).join(pack_id.to_string()),
+            DOT_PACK_INDEX_EXTENSION,
+        );
+        Ok(pack_index_path.exists().then_some(pack_id))
     }
 
     pub fn is_pack_loose(&self, pack_id: &PackId) -> bool {
+        if pack_id.validate().is_err() {
+            return false;
+        }
         let PackId::Pack(pack_name) = pack_id;
 
         // The pack is loose if the .pack.idx is in the loose packs directory
-        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + std::path::MAIN_SEPARATOR_STR)) {
+        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + "/")) {
             return false;
         }
 
-        let pack_index_path = self
-            .data_dir()
-            .join(PACKS_DIR)
-            .join(pack_name)
-            .with_extension(PACK_INDEX_EXTENSION);
+        let pack_index_path = append_path_suffix(
+            self.data_dir().join(PACKS_DIR).join(pack_name),
+            DOT_PACK_INDEX_EXTENSION,
+        );
 
         pack_index_path.exists()
     }
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
+        pack_id.validate()?;
         let pack_index_path = self.get_pack_index_path(pack_id);
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Ok(PackIndex::load(pack_index_path)?)
     }
 
     pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
-        let pack_index_path = match pack_id {
-            PackId::Pack(name) => self
-                .data_dir()
-                .join(PACKS_DIR)
-                .join(name)
-                .with_extension(PACK_INDEX_EXTENSION),
-        };
+        pack_id.validate()?;
+        let pack_index_path = self.get_pack_index_path(pack_id);
         Ok(PackIndex::load_only_snapshots(pack_index_path)?)
     }
 
@@ -687,14 +709,28 @@ impl Repository {
         let mut index = PackIndex::new();
         index.push_snapshot(snapshot.tag().to_owned(), pack_entries)?;
 
+        self.lock_exclusive()?;
         let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
-        ensure_dir(&loose_path)?;
+        let index_path =
+            append_path_suffix(loose_path.join(snapshot.tag()), DOT_PACK_INDEX_EXTENSION);
+        ensure_dir(index_path.parent().unwrap())?;
 
-        index.save(
-            loose_path
-                .join(snapshot.tag())
-                .with_extension(PACK_INDEX_EXTENSION),
-        )?;
+        if index_path.exists() {
+            let existing_tags = PackIndex::load_only_snapshots(&index_path)?;
+            match existing_tags.as_slice() {
+                [existing] if existing == snapshot.tag() => {}
+                [existing] => {
+                    return Err(Error::LooseSnapshotPathCollision {
+                        path: index_path,
+                        requested: snapshot.tag().to_owned(),
+                        existing: existing.to_owned(),
+                    });
+                }
+                _ => return Err(Error::CorruptPackIndex),
+            }
+        }
+
+        index.save(index_path)?;
 
         self.update_head(snapshot)?;
 
@@ -715,6 +751,7 @@ impl Repository {
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {
+        pack.validate_regular()?;
         let PackId::Pack(pack_name) = pack;
 
         // Construct output file path.
@@ -815,7 +852,7 @@ impl Repository {
         pack_writer.flush()?;
         drop(pack_writer);
 
-        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
+        let index_path = append_path_suffix(pack_path.clone(), ".idx");
         info!("Write index: {}", index_path.display());
         index.save(index_path)?;
 
@@ -1069,6 +1106,9 @@ impl Repository {
     /// Deletes the files related to the pack on disk. Deleting a non-existent pack is an error.
     pub fn delete_pack(&self, pack_id: &PackId) -> io::Result<()> {
         self.lock_exclusive()?;
+        pack_id
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
 
         let pack_path = self.get_pack_path(pack_id);
         let pack_idx_path = self.get_pack_index_path(pack_id);
@@ -1089,6 +1129,8 @@ impl Repository {
         fs::remove_file(&pack_idx_path)?;
         if !is_loose {
             fs::remove_file(&pack_path)?;
+        } else if let Some(parent) = pack_idx_path.parent() {
+            remove_empty_dirs(parent, self.data_dir().join(PACKS_DIR).join(LOOSE_DIR))?;
         }
 
         info!("Deleted pack index {:?}", pack_idx_path);
@@ -1114,12 +1156,17 @@ impl Repository {
     }
 
     pub fn get_pack_disk_stats(&self, pack_id: &PackId) -> io::Result<PackDiskStats> {
-        let mut pack_path = self.get_pack_index_path(pack_id);
-        let pack_len = fs::metadata(&pack_path).map(|x| x.len()).unwrap_or(0);
-        pack_path.set_extension("");
-        pack_path.set_extension(PACK_INDEX_EXTENSION);
-        println!("{pack_path:?}");
-        let pack_idx_stats = fs::metadata(&pack_path)?;
+        pack_id
+            .validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        let pack_idx_stats = fs::metadata(self.get_pack_index_path(pack_id))?;
+        let pack_len = if self.is_pack_loose(pack_id) {
+            0
+        } else {
+            fs::metadata(self.get_pack_path(pack_id))
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+        };
 
         Ok(PackDiskStats {
             len: pack_len + pack_idx_stats.len(),
@@ -1223,21 +1270,19 @@ impl Repository {
 
     fn get_pack_path(&self, pack_id: &PackId) -> PathBuf {
         match pack_id {
-            PackId::Pack(name) => self
-                .data_dir()
-                .join(PACKS_DIR)
-                .join(name)
-                .with_extension(PACK_EXTENSION),
+            PackId::Pack(name) => append_path_suffix(
+                self.data_dir().join(PACKS_DIR).join(name),
+                &format!(".{PACK_EXTENSION}"),
+            ),
         }
     }
 
     fn get_pack_index_path(&self, pack_id: &PackId) -> PathBuf {
         match pack_id {
-            PackId::Pack(name) => self
-                .data_dir()
-                .join(PACKS_DIR)
-                .join(name)
-                .with_extension(PACK_INDEX_EXTENSION),
+            PackId::Pack(name) => append_path_suffix(
+                self.data_dir().join(PACKS_DIR).join(name),
+                DOT_PACK_INDEX_EXTENSION,
+            ),
         }
     }
 
@@ -1572,6 +1617,173 @@ mod tests {
                 .join("deadbeefbadc0de0faf0deadbeefbadc0de0"),
             path,
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_ascii_device_name_snapshot_remains_readable() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        let loose = data_dir.join(PACKS_DIR).join(LOOSE_DIR);
+        fs::create_dir_all(&loose)?;
+        let mut index = PackIndex::new();
+        index.push_snapshot("CON".to_owned(), std::iter::empty::<FileEntry>())?;
+        index.save(loose.join("CON.pack.idx"))?;
+        fs::write(data_dir.join(HEAD_FILE), "loose/CON:CON\n")?;
+
+        let repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        assert_eq!(repo.packs()?, vec![PackId::Pack("loose/CON".into())]);
+        let snapshot = repo.find_snapshot("CON")?;
+        assert_eq!(snapshot.tag(), "CON");
+        assert_eq!(repo.read_head()?.0, Some(snapshot));
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn create_snapshot_preserves_dotted_hierarchical_tag_on_disk() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+
+        let mut repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        let snapshot =
+            SnapshotId::new(PackId::for_loose_snapshot("release/v1.2")?, "release/v1.2")?;
+        repo.create_snapshot(&snapshot, std::iter::empty::<PathBuf>())?;
+
+        assert!(data_dir
+            .join(PACKS_DIR)
+            .join(LOOSE_DIR)
+            .join("release")
+            .join("v1.2.pack.idx")
+            .is_file());
+        assert_eq!(
+            fs::read_to_string(data_dir.join(HEAD_FILE))?,
+            "loose/release/v1.2:release/v1.2\n"
+        );
+        assert!(repo
+            .load_index(snapshot.pack())?
+            .has_snapshot(snapshot.tag()));
+        assert_eq!(repo.read_head()?.0, Some(snapshot));
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn physical_pack_paths_use_logical_id_separators() -> Result<(), Error> {
+        let path = Path::new("remote").join("pack.pack.idx");
+
+        assert_eq!(logical_pack_id_path(&path)?, "remote/pack.pack.idx");
+        Ok(())
+    }
+
+    #[test]
+    fn create_snapshot_does_not_overwrite_a_colliding_tag() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        let index_path = data_dir
+            .join(PACKS_DIR)
+            .join(LOOSE_DIR)
+            .join("release")
+            .join("v1.2.pack.idx");
+        fs::create_dir_all(index_path.parent().unwrap())?;
+
+        let mut existing = PackIndex::new();
+        existing.push_snapshot("different-tag".to_owned(), std::iter::empty::<FileEntry>())?;
+        existing.save(&index_path)?;
+        let original = fs::read(&index_path)?;
+
+        let mut repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        let requested =
+            SnapshotId::new(PackId::for_loose_snapshot("release/v1.2")?, "release/v1.2")?;
+        let error = repo
+            .create_snapshot(&requested, std::iter::empty::<PathBuf>())
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::LooseSnapshotPathCollision {
+                requested,
+                existing,
+                ..
+            } if requested == "release/v1.2" && existing == "different-tag"
+        ));
+        assert_eq!(fs::read(&index_path)?, original);
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn packs_reconstructs_loose_id_from_the_stored_tag() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        let index_path = data_dir
+            .join(PACKS_DIR)
+            .join(LOOSE_DIR)
+            .join("filesystem-spelling.pack.idx");
+        fs::create_dir_all(index_path.parent().unwrap())?;
+
+        let mut index = PackIndex::new();
+        index.push_snapshot(
+            "logical/spelling".to_owned(),
+            std::iter::empty::<FileEntry>(),
+        )?;
+        index.save(index_path)?;
+
+        let repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        assert_eq!(
+            repo.packs()?,
+            vec![PackId::for_loose_snapshot("logical/spelling")?]
+        );
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_nested_loose_snapshot_prunes_empty_tag_directories() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+
+        let mut repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        let snapshot =
+            SnapshotId::new(PackId::for_loose_snapshot("release/v1.2")?, "release/v1.2")?;
+        repo.create_snapshot(&snapshot, std::iter::empty::<PathBuf>())?;
+        repo.delete_pack(snapshot.pack())?;
+
+        let loose_dir = data_dir.join(PACKS_DIR).join(LOOSE_DIR);
+        assert!(loose_dir.is_dir());
+        assert!(!loose_dir.join("release").exists());
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn repository_rejects_unchecked_traversing_pack_id() -> Result<(), Error> {
+        let root = create_temp_path(&std::env::temp_dir());
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+
+        let repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        let error = match repo.load_index(&PackId::Pack("../outside".to_owned())) {
+            Ok(_) => panic!("traversing PackId unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Invalid pack identifier"));
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[cfg(unix)]

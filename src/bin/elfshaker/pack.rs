@@ -233,7 +233,8 @@ pub(crate) fn get_app() -> Command {
         )
         .arg(
             Arg::new("indexes")
-            .index(2)
+                .index(2)
+                .num_args(0..)
                 .help("Specify the indexes of packs to include.")
         )
 }

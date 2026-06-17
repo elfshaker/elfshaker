@@ -281,4 +281,45 @@ mod tests {
             clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
         );
     }
+
+    #[test]
+    fn esi_rejects_data_dir() {
+        for args in [
+            [
+                "elfshaker",
+                "--data-dir",
+                "ignored",
+                "esi",
+                "list",
+                "index.esi",
+            ],
+            [
+                "elfshaker",
+                "esi",
+                "--data-dir",
+                "ignored",
+                "list",
+                "index.esi",
+            ],
+        ] {
+            let matches = super::cli::get_app().try_get_matches_from(args).unwrap();
+            let (_, esi) = matches.subcommand().unwrap();
+            let error = super::esi::run(esi).unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                "--data-dir does not apply to ESI file operations"
+            );
+        }
+    }
+
+    #[test]
+    fn esi_help_omits_data_dir() {
+        let mut command = super::cli::get_app();
+        command.build();
+        let esi = command.find_subcommand_mut(super::esi::SUBCOMMAND).unwrap();
+        let help = esi.render_long_help().to_string();
+
+        assert!(!help.contains("--data-dir"));
+    }
 }

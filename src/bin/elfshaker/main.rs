@@ -154,4 +154,30 @@ mod tests {
 
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
+
+    #[test]
+    fn pack_rejects_multiple_snapshot_sources() {
+        let conflicting_arguments = [
+            [
+                "--snapshots-from",
+                "snapshots",
+                "--snapshots0-from",
+                "snapshots0",
+            ],
+            ["--snapshots-from", "snapshots", "loose/first", ""],
+            ["--snapshots0-from", "snapshots0", "loose/first", ""],
+        ];
+
+        for arguments in conflicting_arguments {
+            let args = ["elfshaker", "pack", "combined"].iter().copied().chain(
+                arguments
+                    .iter()
+                    .copied()
+                    .filter(|argument| !argument.is_empty()),
+            );
+            let error = super::get_app().try_get_matches_from(args).unwrap_err();
+
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+    }
 }

@@ -1,6 +1,6 @@
 //! Commands for creating and editing elfshaker remote indexes.
 
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{parser::ValueSource, Arg, ArgAction, ArgMatches, Command};
 use elfshaker::esi::{
     commit_documents, digest_file, validate_document_writes, Document, DocumentWrite, Entry,
     MetaVersion,
@@ -16,6 +16,10 @@ use std::{
 pub(crate) const SUBCOMMAND: &str = "esi";
 
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
+    if matches.value_source("data_dir") == Some(ValueSource::CommandLine) {
+        return Err("--data-dir does not apply to ESI file operations".into());
+    }
+
     match matches.subcommand() {
         Some(("create", matches)) => create(matches),
         Some(("list", matches)) => list(matches),
@@ -223,6 +227,12 @@ pub(crate) fn get_app() -> Command {
         .subcommand_required(true)
         .arg_required_else_help(true)
         .about("Creates and edits elfshaker remote indexes")
+        .arg(
+            Arg::new("data_dir")
+                .long("data-dir")
+                .value_name("PATH")
+                .hide(true),
+        )
         .subcommand(
             Command::new("create")
                 .about("Creates an empty ESI index")

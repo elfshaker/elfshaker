@@ -4,7 +4,7 @@
 .SH NAME
 elfshaker\-esi\-add \- Adds packs to one or more ESI indexes
 .SH SYNOPSIS
-\fBelfshaker esi add\fR [\fB\-\-force\fR] [\fB\-\-no\-backup\fR] [\fB\-\-also\fR] [\fB\-\-pack\-url\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIesi_file\fR> <\fIpack\fR>... 
+\fBelfshaker esi add\fR [\fB\-\-force\fR] [\fB\-\-no\-backup\fR] [\fB\-\-also\fR] [\fB\-\-pack\-url\fR] [\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIesi_file\fR> <\fIpack\fR>... 
 .SH DESCRIPTION
 Adds packs to one or more ESI indexes
 .SH OPTIONS
@@ -24,11 +24,8 @@ Stored URL for a single pack; defaults to its filename.
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
-Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
-.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help
 .TP
 <\fIesi_file\fR>
 Primary ESI file to edit.

@@ -269,4 +269,16 @@ mod tests {
             assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         }
     }
+
+    #[test]
+    fn esi_requires_a_subcommand() {
+        let error = super::cli::get_app()
+            .try_get_matches_from(["elfshaker", "esi"])
+            .unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+    }
 }

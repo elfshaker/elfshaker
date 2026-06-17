@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-gc 1  "gc " 
+.SH NAME
+elfshaker\-gc \- Cleanup redundant snapshots and unreferenced objects. This frees up disk space after creating a pack.
+.SH SYNOPSIS
+\fBelfshaker gc\fR [\fB\-\-dry\-run\fR] [\fB\-s\fR|\fB\-\-loose\-snapshots\fR] [\fB\-o\fR|\fB\-\-loose\-objects\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Cleanup redundant snapshots and unreferenced objects. This frees up disk space after creating a pack.
+.SH OPTIONS
+.TP
+\fB\-\-dry\-run\fR
+Do not actually delete anything.
+.TP
+\fB\-s\fR, \fB\-\-loose\-snapshots\fR
+Delete redundant loose snapshots which exist an a pack.
+.TP
+\fB\-o\fR, \fB\-\-loose\-objects\fR
+Delete unreferenced loose objects (which are not needed by any snapshot).
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

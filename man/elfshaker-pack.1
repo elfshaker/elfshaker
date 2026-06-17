@@ -1,0 +1,40 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-pack 1  "pack " 
+.SH NAME
+elfshaker\-pack \- Packs the given snapshots into a pack file.
+.SH SYNOPSIS
+\fBelfshaker pack\fR [\fB\-T\fR|\fB\-\-threads\fR] [\fB\-\-compression\-level\fR] [\fB\-\-frames\fR] [\fB\-\-snapshots\-from\fR] [\fB\-\-snapshots0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIname\fR> [\fIindexes\fR] 
+.SH DESCRIPTION
+Packs the given snapshots into a pack file.
+.SH OPTIONS
+.TP
+\fB\-T\fR, \fB\-\-threads\fR [default: 0]
+Use the specified number of worker threads for compression. The number of threads used is proportional to the memory needed for compression.
+.TP
+\fB\-\-compression\-level\fR [default: 10]
+The ZStandard compression level to use (up to 22). Negative values enable fast compression.
+.TP
+\fB\-\-frames\fR [default: 0]
+The number of frames to emit in the pack file. A lower number of frames limits the number of decompression processes that can run concurrently. A higher number of frames can result in poorer compression. Specify 0 to auto\-detect the appropriate number of frames to emit.
+.TP
+\fB\-\-snapshots\-from\fR \fI<file>\fR
+Reads the list of snapshots to include in the pack from the specified file. \*(Aq\-\*(Aq is taken to mean stdin.
+.TP
+\fB\-\-snapshots0\-from\fR \fI<file>\fR
+Reads the NUL\-separated (ASCII \\0) list of snapshots to include in the pack from the specified file. \*(Aq\-\*(Aq is taken to mean stdin.
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIname\fR>
+Specifies the name of the pack to create.
+.TP
+[\fIindexes\fR]
+Specify the indexes of packs to include.

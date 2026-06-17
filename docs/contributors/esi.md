@@ -91,21 +91,8 @@ index size.
 
 ## Publishing workflow
 
-A publisher creates the legacy and current indexes separately:
-
-```sh
-elfshaker esi create --meta v1 --url https://example.test/index.esi index.esi
-elfshaker esi create --meta v2 --url https://example.test/index.v2.esi index.v2.esi
-```
-
-New packs are then added to both indexes in one pass:
-
-```sh
-elfshaker esi add \
-  --also index.esi \
-  index.v2.esi \
-  aarch64-ubuntu2004-manyclangs-202605.pack
-```
-
-The command edits local files. Uploading or otherwise publishing those files
-remains the responsibility of the surrounding release workflow.
+The user-facing [pack publishing guide](../users/publishing.md) owns the
+operational procedure. The design requires publishers to keep the unversioned
+v1 compatibility index and the v2 sibling in step. The `--also` option applies
+one add or remove operation to both local files before the surrounding release
+workflow publishes them.

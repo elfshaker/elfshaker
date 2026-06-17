@@ -116,6 +116,28 @@ mod tests {
             assert!(contents.contains(marker), "{} is missing {}", page, marker);
         }
 
+        let top_level = String::from_utf8(source_pages[Path::new("elfshaker.1")].clone()).unwrap();
+        assert!(top_level.contains(".SH TERMINOLOGY\n"));
+        for term in [
+            "Working directory",
+            "Data directory",
+            "Repository",
+            "Snapshot",
+            "Snapshot tag",
+            "Loose snapshot",
+            "Pack",
+            "HEAD",
+        ] {
+            assert!(
+                top_level.contains(&format!("\\fB{term}\\fR")),
+                "elfshaker.1 is missing the {} definition",
+                term
+            );
+        }
+        let extract =
+            String::from_utf8(source_pages[Path::new("elfshaker-extract.1")].clone()).unwrap();
+        assert!(!extract.contains(".SH TERMINOLOGY\n"));
+
         fs::remove_dir_all(generated_dir).unwrap();
     }
 

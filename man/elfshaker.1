@@ -9,6 +9,31 @@ elfshaker \- Store and restore deduplicated snapshots of a working directory.
 elfshaker stores snapshots of the current working directory in a separate data directory. Snapshots may remain loose or be combined into compressed packs.
 .PP
 Commands that restore files write to the working directory. \-\-data\-dir only selects the data directory.
+.SH TERMINOLOGY
+.TP
+\fBWorking directory\fR
+The directory containing the files that elfshaker stores and restores. It is normally the directory from which you run elfshaker.
+.TP
+\fBData directory\fR
+The directory where elfshaker keeps snapshots and its other state, including packs, indexes, loose objects, remotes, and HEAD. It defaults to elfshaker_data and can be selected with \-\-data\-dir.
+.TP
+\fBRepository\fR
+A working directory together with its associated data directory.
+.TP
+\fBSnapshot\fR
+A record of selected files from the working directory at a point in time.
+.TP
+\fBSnapshot tag\fR
+The name of a snapshot. You choose the tag when you store a snapshot and use it later to list, inspect, or restore that snapshot. PACK:SNAPSHOT identifies a snapshot in a specific pack.
+.TP
+\fBLoose snapshot\fR
+A snapshot stored as a loose index and loose objects in the data directory. The store command creates this form. The pack command can combine loose snapshots into a pack.
+.TP
+\fBPack\fR
+A compressed file containing the data used by one or more snapshots. A companion pack index records the snapshots and files available from the pack.
+.TP
+\fBHEAD\fR
+The snapshot elfshaker uses as the starting point for the next incremental extraction. The store and extract commands update HEAD.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR

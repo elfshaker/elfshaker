@@ -2,8 +2,54 @@
 //! Copyright (C) 2026 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::Command;
+use clap_mangen::roff::{bold, roman, Roff};
 use std::path::Path;
 use std::{fs, io};
+
+const TERMINOLOGY: &[(&str, &str)] = &[
+    (
+        "Working directory",
+        "The directory containing the files that elfshaker stores and restores. \
+         It is normally the directory from which you run elfshaker.",
+    ),
+    (
+        "Data directory",
+        "The directory where elfshaker keeps snapshots and its other state, \
+         including packs, indexes, loose objects, remotes, and HEAD. It defaults \
+         to elfshaker_data and can be selected with --data-dir.",
+    ),
+    (
+        "Repository",
+        "A working directory together with its associated data directory.",
+    ),
+    (
+        "Snapshot",
+        "A record of selected files from the working directory at a point in time.",
+    ),
+    (
+        "Snapshot tag",
+        "The name of a snapshot. You choose the tag when you store a snapshot and \
+         use it later to list, inspect, or restore that snapshot. PACK:SNAPSHOT \
+         identifies a snapshot in a specific pack.",
+    ),
+    (
+        "Loose snapshot",
+        "A snapshot stored as a loose index and loose objects in the data \
+         directory. The store command creates this form. The pack command can \
+         combine loose snapshots into a pack.",
+    ),
+    (
+        "Pack",
+        "A compressed file containing the data used by one or more snapshots. A \
+         companion pack index records the snapshots and files available from \
+         the pack.",
+    ),
+    (
+        "HEAD",
+        "The snapshot elfshaker uses as the starting point for the next \
+         incremental extraction. The store and extract commands update HEAD.",
+    ),
+];
 
 pub(crate) fn generate(mut command: Command, output_dir: &Path) -> io::Result<()> {
     command = command.disable_help_subcommand(true);
@@ -23,8 +69,31 @@ fn generate_command(command: &Command, output_dir: &Path) -> io::Result<()> {
         .source(format!("elfshaker {}", env!("CARGO_PKG_VERSION")))
         .manual("elfshaker Manual")
         .generate_to(output_dir)?;
+    if command.get_name() == "elfshaker" {
+        insert_terminology(&output_path)?;
+    }
     mark_variadic_positionals(command, &output_path)?;
     Ok(())
+}
+
+fn insert_terminology(output_path: &Path) -> io::Result<()> {
+    let mut page = fs::read_to_string(output_path)?;
+    let insertion_point = page
+        .find(".SH OPTIONS\n")
+        .or_else(|| page.find(".SH SUBCOMMANDS\n"))
+        .or_else(|| page.find(".SH VERSION\n"))
+        .ok_or_else(|| io::Error::other("no section follows DESCRIPTION"))?;
+
+    let mut section = Roff::new();
+    section.control("SH", ["TERMINOLOGY"]);
+    for (term, definition) in TERMINOLOGY {
+        section.control("TP", []);
+        section.text([bold(*term)]);
+        section.text([roman(*definition)]);
+    }
+
+    page.insert_str(insertion_point, &section.to_roff());
+    fs::write(output_path, page)
 }
 
 fn mark_variadic_positionals(command: &Command, output_path: &Path) -> io::Result<()> {

@@ -4,7 +4,7 @@
 .SH NAME
 elfshaker\-pack \- Combine loose snapshots into a compressed pack.
 .SH SYNOPSIS
-\fBelfshaker pack\fR [\fB\-T\fR|\fB\-\-threads\fR] [\fB\-\-compression\-level\fR] [\fB\-\-frames\fR] [\fB\-\-snapshots\-from\fR] [\fB\-\-snapshots0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACK\fR> [\fIINDEX\fR] 
+\fBelfshaker pack\fR [\fB\-T\fR|\fB\-\-threads\fR] [\fB\-\-compression\-level\fR] [\fB\-\-frames\fR] [\fB\-\-snapshots\-from\fR] [\fB\-\-snapshots0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACK\fR> [\fIINDEX\fR]... 
 .SH DESCRIPTION
 Creates a compressed pack and pack index from loose snapshots. By default, all loose snapshots are included. Select snapshots with positional indexes, \-\-snapshots\-from, or \-\-snapshots0\-from.
 .PP
@@ -38,5 +38,5 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIPACK\fR>
 Name of the pack to create.
 .TP
-[\fIINDEX\fR]
+[\fIINDEX\fR]...
 Loose snapshot indexes to include.

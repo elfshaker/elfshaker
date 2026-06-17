@@ -100,11 +100,21 @@ mod tests {
         super::manpages::generate(super::cli::get_app(), &generated_dir).unwrap();
 
         let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("man");
+        let source_pages = manpages_in(&source_dir);
+        let generated_pages = manpages_in(&generated_dir);
         assert_eq!(
-            manpages_in(&source_dir),
-            manpages_in(&generated_dir),
+            source_pages, generated_pages,
             "generated manpages differ; run `cargo run --example generate-manpages -- man`"
         );
+        for (page, marker) in [
+            ("elfshaker-show.1", "<\\fIPATH\\fR>..."),
+            ("elfshaker-list.1", "[\\fIPACK\\fR]..."),
+            ("elfshaker-pack.1", "[\\fIINDEX\\fR]..."),
+        ] {
+            let contents =
+                String::from_utf8(source_pages[Path::new(page)].clone()).expect("valid UTF-8");
+            assert!(contents.contains(marker), "{} is missing {}", page, marker);
+        }
 
         fs::remove_dir_all(generated_dir).unwrap();
     }

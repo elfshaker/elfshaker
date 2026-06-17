@@ -156,6 +156,12 @@ mod tests {
         assert!(clone.contains(".SH \"SEE ALSO\"\n"));
         assert!(clone.contains("https://github.com/elfshaker/manyclangs"));
 
+        let esi_create =
+            String::from_utf8(source_pages[Path::new("elfshaker-esi-create.1")].clone()).unwrap();
+        assert!(esi_create.contains("\\fB\\-\\-meta\\fR \\fI<VERSION>\\fR"));
+        assert!(esi_create.contains("\\fB\\-\\-url\\fR \\fI<URL>\\fR"));
+        assert!(esi_create.contains("<\\fIESI_FILE\\fR>"));
+
         for (page, placeholders) in [
             (
                 "elfshaker-list.1",
@@ -321,5 +327,27 @@ mod tests {
         let help = esi.render_long_help().to_string();
 
         assert!(!help.contains("--data-dir"));
+    }
+
+    #[test]
+    fn esi_help_uses_public_argument_names() {
+        let mut command = super::esi::get_app();
+        command.build();
+
+        let create = command.find_subcommand_mut("create").unwrap();
+        let create_help = create.render_long_help().to_string();
+        assert!(create_help.contains("--meta <VERSION>"));
+        assert!(create_help.contains("--url <URL>"));
+        assert!(create_help.contains("<ESI_FILE>"));
+
+        let add = command.find_subcommand_mut("add").unwrap();
+        let add_help = add.render_long_help().to_string();
+        assert!(add_help.contains("<ESI_FILE>"));
+        assert!(add_help.contains("<PACK>..."));
+
+        let remove = command.find_subcommand_mut("remove").unwrap();
+        let remove_help = remove.render_long_help().to_string();
+        assert!(remove_help.contains("<ESI_FILE>"));
+        assert!(remove_help.contains("<PACK_URL>..."));
     }
 }

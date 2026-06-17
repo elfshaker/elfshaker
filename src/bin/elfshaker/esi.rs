@@ -241,6 +241,7 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("meta")
                         .long("meta")
                         .required(true)
+                        .value_name("VERSION")
                         .value_parser(["v1", "v2"])
                         .help("Wire-format version to write."),
                 )
@@ -248,6 +249,7 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("url")
                         .long("url")
                         .required(true)
+                        .value_name("URL")
                         .help("Public URL recorded in the index."),
                 )
                 .arg(force_arg("Replace an existing ESI file."))
@@ -256,6 +258,7 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("esi_file")
                         .required(true)
                         .index(1)
+                        .value_name("ESI_FILE")
                         .help("ESI file to create."),
                 ),
         )
@@ -267,6 +270,7 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("esi_file")
                         .required(true)
                         .index(1)
+                        .value_name("ESI_FILE")
                         .help("ESI file to list."),
                 ),
         )
@@ -287,6 +291,7 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("esi_file")
                         .required(true)
                         .index(1)
+                        .value_name("ESI_FILE")
                         .help("Primary ESI file to edit."),
                 )
                 .arg(
@@ -294,6 +299,7 @@ pub(crate) fn get_app() -> Command {
                         .required(true)
                         .index(2)
                         .num_args(1..)
+                        .value_name("PACK")
                         .help("Pack files to add, in output order."),
                 ),
         )
@@ -308,6 +314,7 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("esi_file")
                         .required(true)
                         .index(1)
+                        .value_name("ESI_FILE")
                         .help("Primary ESI file to edit."),
                 )
                 .arg(
@@ -315,6 +322,7 @@ pub(crate) fn get_app() -> Command {
                         .required(true)
                         .index(2)
                         .num_args(1..)
+                        .value_name("PACK_URL")
                         .help("Stored pack URLs to remove."),
                 ),
         )

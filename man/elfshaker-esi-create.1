@@ -4,12 +4,12 @@
 .SH NAME
 elfshaker\-esi\-create \- Creates an empty ESI index
 .SH SYNOPSIS
-\fBelfshaker esi create\fR <\fB\-\-meta\fR> <\fB\-\-url\fR> [\fB\-\-force\fR] [\fB\-\-no\-backup\fR] [\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIesi_file\fR> 
+\fBelfshaker esi create\fR [OPTIONS] <ESI_FILE>
 .SH DESCRIPTION
 Creates an empty ESI index
 .SH OPTIONS
 .TP
-\fB\-\-meta\fR
+\fB\-\-meta\fR \fI<VERSION>\fR
 Wire\-format version to write.
 .br
 
@@ -22,7 +22,7 @@ v1
 v2
 .RE
 .TP
-\fB\-\-url\fR
+\fB\-\-url\fR \fI<URL>\fR
 Public URL recorded in the index.
 .TP
 \fB\-\-force\fR
@@ -37,5 +37,5 @@ Show informational progress and diagnostic messages.
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIesi_file\fR>
+<\fIESI_FILE\fR>
 ESI file to create.

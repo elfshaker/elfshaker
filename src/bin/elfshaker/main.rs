@@ -126,6 +126,7 @@ mod tests {
             "Snapshot tag",
             "Loose snapshot",
             "Pack",
+            "Remote index (.esi)",
             "HEAD",
         ] {
             assert!(
@@ -137,6 +138,16 @@ mod tests {
         let extract =
             String::from_utf8(source_pages[Path::new("elfshaker-extract.1")].clone()).unwrap();
         assert!(!extract.contains(".SH TERMINOLOGY\n"));
+
+        let clone =
+            String::from_utf8(source_pages[Path::new("elfshaker-clone.1")].clone()).unwrap();
+        assert!(clone.contains(".SH EXAMPLES\n"));
+        assert!(clone.contains(
+            "https://github.com/elfshaker/manyclangs/releases/download/v0.9.0/\
+             aarch64\\-ubuntu2004.esi"
+        ));
+        assert!(clone.contains(".SH \"SEE ALSO\"\n"));
+        assert!(clone.contains("https://github.com/elfshaker/manyclangs"));
 
         fs::remove_dir_all(generated_dir).unwrap();
     }

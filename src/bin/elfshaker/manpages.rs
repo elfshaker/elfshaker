@@ -2,9 +2,13 @@
 //! Copyright (C) 2026 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::Command;
-use clap_mangen::roff::{bold, roman, Roff};
+use clap_mangen::roff::{bold, line_break, roman, Roff};
 use std::path::Path;
 use std::{fs, io};
+
+const MANYCLANGS_ESI_URL: &str =
+    "https://github.com/elfshaker/manyclangs/releases/download/v0.9.0/aarch64-ubuntu2004.esi";
+const MANYCLANGS_PROJECT_URL: &str = "https://github.com/elfshaker/manyclangs";
 
 const TERMINOLOGY: &[(&str, &str)] = &[
     (
@@ -45,6 +49,13 @@ const TERMINOLOGY: &[(&str, &str)] = &[
          the pack.",
     ),
     (
+        "Remote index (.esi)",
+        "A small catalog of packs published by a remote source. It records where \
+         each pack can be downloaded and the checksums of the pack and its pack \
+         index. The clone and update commands fetch remote indexes and pack \
+         indexes. Pack data is downloaded only when needed.",
+    ),
+    (
         "HEAD",
         "The snapshot elfshaker uses as the starting point for the next \
          incremental extraction. The store and extract commands update HEAD.",
@@ -72,6 +83,9 @@ fn generate_command(command: &Command, output_dir: &Path) -> io::Result<()> {
     if command.get_name() == "elfshaker" {
         insert_terminology(&output_path)?;
     }
+    if command.get_name() == "clone" {
+        append_clone_example(&output_path)?;
+    }
     mark_variadic_positionals(command, &output_path)?;
     Ok(())
 }
@@ -93,6 +107,40 @@ fn insert_terminology(output_path: &Path) -> io::Result<()> {
     }
 
     page.insert_str(insertion_point, &section.to_roff());
+    fs::write(output_path, page)
+}
+
+fn append_clone_example(output_path: &Path) -> io::Result<()> {
+    let mut page = fs::read_to_string(output_path)?;
+    let mut sections = Roff::new();
+
+    sections.control("SH", ["EXAMPLES"]);
+    sections.text([roman(
+        "Clone the public manyclangs remote, which provides snapshots of prebuilt LLVM versions:",
+    )]);
+    sections.control("PP", []);
+    sections.control("nf", []);
+    sections.text([
+        bold("elfshaker clone \\"),
+        line_break(),
+        bold(format!("  {MANYCLANGS_ESI_URL} \\")),
+        line_break(),
+        bold("  manyclangs"),
+    ]);
+    sections.control("fi", []);
+    sections.control("PP", []);
+    sections.text([roman(
+        "This creates a working directory named manyclangs and downloads its pack indexes. \
+         Pack data is fetched when a snapshot is needed.",
+    )]);
+
+    sections.control("SH", ["SEE ALSO"]);
+    sections.text([roman("manyclangs project:")]);
+    sections.control("UR", [MANYCLANGS_PROJECT_URL]);
+    sections.text([roman(MANYCLANGS_PROJECT_URL)]);
+    sections.control("UE", []);
+
+    page.push_str(&sections.to_roff());
     fs::write(output_path, page)
 }
 

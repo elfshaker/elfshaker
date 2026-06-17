@@ -32,6 +32,9 @@ A snapshot stored as a loose index and loose objects in the data directory. The 
 \fBPack\fR
 A compressed file containing the data used by one or more snapshots. A companion pack index records the snapshots and files available from the pack.
 .TP
+\fBRemote index (.esi)\fR
+A small catalog of packs published by a remote source. It records where each pack can be downloaded and the checksums of the pack and its pack index. The clone and update commands fetch remote indexes and pack indexes. Pack data is downloaded only when needed.
+.TP
 \fBHEAD\fR
 The snapshot elfshaker uses as the starting point for the next incremental extraction. The store and extract commands update HEAD.
 .SH OPTIONS

@@ -58,18 +58,25 @@ fn do_clone(work_dir: &Path, data_dir: &Path, origin_url: &str) -> Result<(), Bo
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Clones a remote repository into a new directory")
+        .about("Create a working directory configured from a remote index.")
+        .long_about(
+            "Creates a new working directory, configures the supplied .esi \
+             index as the `origin` remote, and downloads its pack indexes. Pack \
+             payloads are fetched on demand. The destination must not exist.",
+        )
         .arg(
             Arg::new("repository")
                 .required(true)
                 .index(1)
-                .help("The URL of the remote repository index (.esi) to clone."),
+                .value_name("URL")
+                .help("URL of the remote .esi index."),
         )
         .arg(
             Arg::new("directory")
                 .required(true)
                 .index(2)
-                .help("The name of a new directory to clone into."),
+                .value_name("DIRECTORY")
+                .help("New working directory to create."),
         )
 }
 

@@ -2,24 +2,24 @@
 .el .ds Aq '
 .TH elfshaker-show 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-show \- Shows the contents of the files in the snapshot.
+elfshaker\-show \- Write files from a snapshot to standard output.
 .SH SYNOPSIS
-\fBelfshaker show\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsnapshot\fR> <\fIpath\fR> 
+\fBelfshaker show\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISNAPSHOT\fR> <\fIPATH\fR> 
 .SH DESCRIPTION
-Shows the contents of the files in the snapshot.
+Writes the selected snapshot files to standard output in command\-line order. When multiple paths are given, their contents are concatenated without separators. The command fails without producing output if any requested path is absent.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIsnapshot\fR>
-The snapshot in which to to look for the files.
+<\fISNAPSHOT\fR>
+Snapshot tag or PACK:SNAPSHOT identifier to read.
 .TP
-<\fIpath\fR>
-Specifies the path(s) to show.
+<\fIPATH\fR>
+Path within the snapshot to write.

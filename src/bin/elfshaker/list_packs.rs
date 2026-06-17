@@ -24,16 +24,24 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Prints the list of packs available in the repository.")
-        .arg(Arg::new("format").long("format").default_value("%p").help(
-            "Pretty-print each result in the given format, where \
-                    <format> is a string containing one or more of the \
-                    following placeholders:\n\
-                    \t%p - pack\n\
-                    \t%h - human-readable size\n\
-                    \t%b - size in bytes\n\
-                    \t%c - number of snapshots\n",
-        ))
+        .about("List pack indexes known to the data directory.")
+        .long_about(
+            "Lists local, loose, and remote pack indexes known to the data \
+             directory. Output lines are sorted.",
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .default_value("%p")
+                .help(
+                    "Pretty-print each result using placeholders:\n\
+                     \t%p - pack\n\
+                     \t%h - human-readable size\n\
+                     \t%b - size in bytes\n\
+                     \t%c - number of snapshots\n",
+                ),
+        )
 }
 
 fn format_pack_row(fmt: &str, pack_id: &PackId, snapshot_count: usize, size: u64) -> String {

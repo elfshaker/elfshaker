@@ -2,15 +2,15 @@
 .el .ds Aq '
 .TH elfshaker-list 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-list \- Prints the list of snapshots available in the repository.
+elfshaker\-list \- List snapshots in known pack indexes.
 .SH SYNOPSIS
-\fBelfshaker list\fR [\fB\-\-format\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIpack\fR] 
+\fBelfshaker list\fR [\fB\-\-format\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACK\fR] 
 .SH DESCRIPTION
-Prints the list of snapshots available in the repository.
+Lists snapshots from every known pack index, or only from the selected packs when PACK is supplied. Output lines are sorted.
 .SH OPTIONS
 .TP
-\fB\-\-format\fR [default: %s]
-Pretty\-print each result in the given format, where <format> is a string containing one or more of the following placeholders:
+\fB\-\-format\fR \fI<FORMAT>\fR [default: %s]
+Pretty\-print each result using placeholders:
 	%s \- fully\-qualified snapshot
 	%t \- snapshot tag
 	%h \- human\-readable size
@@ -19,13 +19,13 @@ Pretty\-print each result in the given format, where <format> is a string contai
 
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-[\fIpack\fR]
-Prints the contents of the specified packs.
+[\fIPACK\fR]
+Pack index to list; may be repeated.

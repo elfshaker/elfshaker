@@ -2,27 +2,29 @@
 .el .ds Aq '
 .TH elfshaker-store 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-store \- Stores the current state of the repository in a snapshot. The snapshots created in this way can later be packed in a .pack file using the pack command.
+elfshaker\-store \- Store files from the working directory as a loose snapshot.
 .SH SYNOPSIS
-\fBelfshaker store\fR [\fB\-\-files\-from\fR] [\fB\-\-files0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsnapshot\fR> 
+\fBelfshaker store\fR [\fB\-\-files\-from\fR] [\fB\-\-files0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISNAPSHOT\fR> 
 .SH DESCRIPTION
-Stores the current state of the repository in a snapshot. The snapshots created in this way can later be packed in a .pack file using the pack command.
+Creates a loose snapshot from files in the working directory and updates HEAD to refer to it. Without a file\-list option, elfshaker recursively selects files from the working directory and excludes the data directory.
+.PP
+Use elfshaker pack to combine loose snapshots into a compressed pack.
 .SH OPTIONS
 .TP
-\fB\-\-files\-from\fR \fI<file>\fR
-Reads the list of files to include in the snapshot from the specified file. \*(Aq\-\*(Aq is taken to mean stdin.
+\fB\-\-files\-from\fR \fI<FILE>\fR
+Read newline\-delimited paths to store from FILE; use \- for standard input.
 .TP
-\fB\-\-files0\-from\fR \fI<file>\fR
-Reads the NUL\-separated (ASCII \\0) list of files to include in the snapshot from the specified file. \*(Aq\-\*(Aq is taken to mean stdin.
+\fB\-\-files0\-from\fR \fI<FILE>\fR
+Read NUL\-delimited paths to store from FILE; use \- for standard input.
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIsnapshot\fR>
-The tag for the newly created snapshot.
+<\fISNAPSHOT\fR>
+Name of the loose snapshot to create.

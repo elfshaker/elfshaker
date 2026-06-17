@@ -51,29 +51,33 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about(
-            "Stores the current state of the repository in a snapshot. The snapshots \
-            created in this way can later be packed in a .pack file using the pack \
-            command."
+        .about("Store files from the working directory as a loose snapshot.")
+        .long_about(
+            "Creates a loose snapshot from files in the working directory and \
+             updates HEAD to refer to it. Without a file-list option, elfshaker \
+             recursively selects files from the working directory and excludes \
+             the data directory.\n\nUse elfshaker pack to combine loose \
+             snapshots into a compressed pack.",
         )
         .arg(
             Arg::new("snapshot")
                 .required(true)
                 .index(1)
-                .help("The tag for the newly created snapshot."),
+                .value_name("SNAPSHOT")
+                .help("Name of the loose snapshot to create."),
         )
         .arg(
             Arg::new("files-from")
                 .long("files-from")
-                .value_name("file")
+                .value_name("FILE")
                 .conflicts_with("files0-from")
-                .help("Reads the list of files to include in the snapshot from the specified file. '-' is taken to mean stdin."),
+                .help("Read newline-delimited paths to store from FILE; use - for standard input."),
         )
         .arg(
             Arg::new("files0-from")
                 .long("files0-from")
-                .value_name("file")
-                .help("Reads the NUL-separated (ASCII \\0) list of files to include in the snapshot from the specified file. '-' is taken to mean stdin."),
+                .value_name("FILE")
+                .help("Read NUL-delimited paths to store from FILE; use - for standard input."),
         )
 }
 

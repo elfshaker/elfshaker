@@ -11,6 +11,13 @@ pub(crate) fn get_app() -> Command {
     Command::new("elfshaker")
         .override_usage("elfshaker [GLOBAL-OPTS] <SUBCOMMAND> [SUBCOMMAND-OPTS]")
         .version(env!("CARGO_PKG_VERSION"))
+        .about("Store and restore deduplicated snapshots of a working directory.")
+        .long_about(
+            "elfshaker stores snapshots of the current working directory in a \
+             separate data directory. Snapshots may remain loose or be combined \
+             into compressed packs.\n\nCommands that restore files write to the \
+             working directory. --data-dir only selects the data directory.",
+        )
         .subcommand(extract::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())
@@ -26,7 +33,7 @@ pub(crate) fn get_app() -> Command {
         .arg(
             Arg::new("verbose")
                 .long("verbose")
-                .help("Enables verbose description of the execution process.")
+                .help("Show informational progress and diagnostic messages.")
                 .global(true)
                 .action(clap::ArgAction::SetTrue),
         )
@@ -35,7 +42,13 @@ pub(crate) fn get_app() -> Command {
                 .long("data-dir")
                 .env("ELFSHAKER_DATA")
                 .hide_env_values(true)
-                .help("Set the path to the elfshaker repository.")
+                .value_name("PATH")
+                .help("Use PATH as the elfshaker data directory.")
+                .long_help(
+                    "Use PATH as the data directory containing packs, indexes, \
+                     loose objects, remotes, and HEAD. This does not change the \
+                     working directory.",
+                )
                 .default_value(elfshaker::repo::REPO_DIR)
                 .global(true),
         )

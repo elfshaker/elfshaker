@@ -2,59 +2,62 @@
 .el .ds Aq '
 .TH elfshaker 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker
+elfshaker \- Store and restore deduplicated snapshots of a working directory.
 .SH SYNOPSIS
 \fBelfshaker\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
+elfshaker stores snapshots of the current working directory in a separate data directory. Snapshots may remain loose or be combined into compressed packs.
+.PP
+Commands that restore files write to the working directory. \-\-data\-dir only selects the data directory.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH SUBCOMMANDS
 .TP
 elfshaker\-extract(1)
-Can be used to extract a snapshot.
+Restore a snapshot into the working directory.
 .TP
 elfshaker\-store(1)
-Stores the current state of the repository in a snapshot. The snapshots created in this way can later be packed in a .pack file using the pack command.
+Store files from the working directory as a loose snapshot.
 .TP
 elfshaker\-list(1)
-Prints the list of snapshots available in the repository.
+List snapshots in known pack indexes.
 .TP
 elfshaker\-list\-packs(1)
-Prints the list of packs available in the repository.
+List pack indexes known to the data directory.
 .TP
 elfshaker\-list\-files(1)
-Prints the list of files available in the snapshot.
+List files recorded in a snapshot.
 .TP
 elfshaker\-pack(1)
-Packs the given snapshots into a pack file.
+Combine loose snapshots into a compressed pack.
 .TP
 elfshaker\-show(1)
-Shows the contents of the files in the snapshot.
+Write files from a snapshot to standard output.
 .TP
 elfshaker\-find(1)
-Searches the repository index.
+Search snapshot tags in known pack indexes.
 .TP
 elfshaker\-gc(1)
-Cleanup redundant snapshots and unreferenced objects. This frees up disk space after creating a pack.
+Delete redundant loose snapshots and unreferenced loose objects.
 .TP
 elfshaker\-update(1)
-Updates the remote indexes.
+Refresh indexes for all configured remotes.
 .TP
 elfshaker\-clone(1)
-Clones a remote repository into a new directory
+Create a working directory configured from a remote index.
 .TP
 elfshaker\-explode(1)
-Explodes a pack into loose objects
+Materialize a pack\*(Aqs objects in the loose\-object store.
 .SH VERSION
 v1.0.0\-rc1

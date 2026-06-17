@@ -2,18 +2,18 @@
 .el .ds Aq '
 .TH elfshaker-update 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-update \- Updates the remote indexes.
+elfshaker\-update \- Refresh indexes for all configured remotes.
 .SH SYNOPSIS
 \fBelfshaker update\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
-Updates the remote indexes.
+Fetches each configured remote index and its pack indexes into the data directory. Pack payloads are not downloaded; they are fetched on demand when required.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)

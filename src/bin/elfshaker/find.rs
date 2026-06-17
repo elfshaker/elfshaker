@@ -43,12 +43,17 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Searches the repository index.")
+        .about("Search snapshot tags in known pack indexes.")
+        .long_about(
+            "Prints snapshots whose tags contain TERM as a case-sensitive \
+             substring, together with the pack containing each snapshot.",
+        )
         .arg(
             Arg::new("term")
                 .required(true)
                 .index(1)
                 .default_value("")
-                .help("The search term."),
+                .value_name("TERM")
+                .help("Case-sensitive substring to find in snapshot tags."),
         )
 }

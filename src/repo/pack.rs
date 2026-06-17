@@ -16,12 +16,11 @@ use sha1::{Digest, Sha1};
 
 use log::info;
 
+use unicode_general_category::get_general_category;
 use zstd::stream::raw::DParameter;
 use zstd::Decoder;
 
-use super::constants::{
-    DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC, PACK_INDEX_EXTENSION,
-};
+use super::constants::{DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC};
 use super::error::Error;
 use super::fs::{create_file, open_file, FileMode};
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
@@ -31,8 +30,14 @@ use crate::{
     repo::fs::create_empty,
 };
 
+pub(super) fn append_path_suffix(mut path: PathBuf, suffix: &str) -> PathBuf {
+    path.as_mut_os_string().push(suffix);
+    path
+}
+
 /// Pack and snapshots IDs can contain latin letter, digits or the following characters.
-const EXTRA_ID_CHARS: &[char] = &['-', '_', '/'];
+const PACK_EXTRA_ID_CHARS: &[char] = &['-', '_', '/'];
+const FORBIDDEN_SNAPSHOT_CHARS: &[char] = &[':', '\\', '<', '>', '"', '|', '?', '*'];
 
 #[derive(Debug)]
 /// Error used when parsing a [`SnapshotId`] fails.
@@ -48,11 +53,11 @@ impl Display for IdError {
             Self::BadFormat(s) => write!(f, "Unrecognized identifier format '{s}'!"),
             Self::InvalidPack(s) => write!(
                 f,
-                "Invalid pack identifier '{s}'! Latin letters, digits, -, _ and / are allowed!"
+                "Invalid pack identifier '{s}'! Use non-empty relative components containing ASCII letters, digits, - and _."
             ),
             Self::InvalidSnapshot(s) => write!(
                 f,
-                "Invalid snapshot identifier '{s}'! Latin letters, digits, - and _ are allowed!"
+                "Invalid snapshot tag '{s}'! See elfshaker-store(1) for the snapshot tag rules."
             ),
         }
     }
@@ -75,9 +80,41 @@ impl PackId {
             .map(|s| PackId::Pack(s.to_owned()))
     }
 
-    fn is_valid(s: &str) -> bool {
-        s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || EXTRA_ID_CHARS.contains(&c))
+    /// Creates the logical pack ID for a loose snapshot tag.
+    pub fn for_loose_snapshot(tag: &str) -> Result<Self, IdError> {
+        if !SnapshotId::is_valid(tag) {
+            return Err(IdError::InvalidSnapshot(tag.to_owned()));
+        }
+        Ok(PackId::Pack(format!("loose/{tag}")))
+    }
+
+    pub(super) fn validate(&self) -> Result<(), IdError> {
+        match self {
+            PackId::Pack(name) => match name.strip_prefix("loose/") {
+                Some(tag) if SnapshotId::is_valid(tag) => Ok(()),
+                Some(tag) => Err(IdError::InvalidSnapshot(tag.to_owned())),
+                None if Self::is_valid_regular(name) => Ok(()),
+                None => Err(IdError::InvalidPack(name.to_owned())),
+            },
+        }
+    }
+
+    pub(super) fn validate_regular(&self) -> Result<(), IdError> {
+        match self {
+            PackId::Pack(name) if Self::is_valid_regular(name) => Ok(()),
+            PackId::Pack(name) => Err(IdError::InvalidPack(name.to_owned())),
+        }
+    }
+
+    fn is_valid_regular(s: &str) -> bool {
+        !s.is_empty()
+            && !s.starts_with("loose/")
+            && s.split('/').all(|component| {
+                !component.is_empty()
+                    && component
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || PACK_EXTRA_ID_CHARS.contains(&c))
+            })
     }
 }
 
@@ -85,10 +122,9 @@ impl FromStr for PackId {
     type Err = IdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if !PackId::is_valid(s) {
-            return Err(IdError::InvalidPack(s.to_owned()));
-        }
-        Ok(PackId::Pack(s.to_owned()))
+        let result = PackId::Pack(s.to_owned());
+        result.validate()?;
+        Ok(result)
     }
 }
 
@@ -128,9 +164,54 @@ impl SnapshotId {
     }
 
     fn is_valid(tag: &str) -> bool {
-        tag.chars()
-            .all(|c| c.is_ascii_alphanumeric() || EXTRA_ID_CHARS.contains(&c))
+        if tag.is_empty() {
+            return false;
+        }
+
+        let mut components = tag.split('/').peekable();
+        while let Some(component) = components.next() {
+            let is_final = components.peek().is_none();
+            if component.is_empty()
+                || component == "."
+                || component == ".."
+                || component.starts_with(' ')
+                || component.ends_with([' ', '.'])
+                || (!is_final && component.to_ascii_lowercase().ends_with(".pack.idx"))
+                || (component.contains('.') && is_windows_device_name(component))
+            {
+                return false;
+            }
+
+            if !component.chars().all(|c| {
+                if c == ' ' {
+                    return true;
+                }
+                if FORBIDDEN_SNAPSHOT_CHARS.contains(&c) {
+                    return false;
+                }
+                matches!(
+                    get_general_category(c).abbreviation().as_bytes()[0],
+                    b'L' | b'M' | b'N' | b'P' | b'S'
+                )
+            }) {
+                return false;
+            }
+        }
+
+        true
     }
+}
+
+fn is_windows_device_name(component: &str) -> bool {
+    let stem = component
+        .split_once('.')
+        .map_or(component, |(stem, _)| stem);
+    let upper = stem.to_ascii_uppercase();
+
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper.len() == 4
+            && matches!(&upper.as_bytes()[..3], b"COM" | b"LPT")
+            && matches!(upper.as_bytes()[3], b'1'..=b'9')
 }
 
 /// [`SnapshotId`] equality is a full equivalence relation.
@@ -148,18 +229,11 @@ impl FromStr for SnapshotId {
     type Err = IdError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((pack, snapshot)) = s.trim_end().rsplit_once(':') {
+        if let Some((pack, snapshot)) = s.rsplit_once(':') {
             if pack.is_empty() {
                 return Err(IdError::InvalidPack(pack.to_owned()));
             }
-            if snapshot.is_empty() {
-                return Err(IdError::InvalidSnapshot(snapshot.to_owned()));
-            }
-
-            Ok(SnapshotId {
-                pack: PackId::from_str(pack)?,
-                tag: snapshot.to_owned(),
-            })
+            SnapshotId::new(PackId::from_str(pack)?, snapshot)
         } else {
             Err(IdError::BadFormat(s.to_owned()))
         }
@@ -295,14 +369,11 @@ impl Pack {
     where
         P: AsRef<Path>,
     {
+        pack_name.validate_regular()?;
         let PackId::Pack(pack_name) = pack_name;
         let packs_data = data_dir.as_ref().join(PACKS_DIR);
-
-        let mut pack_index_path = packs_data.join(pack_name);
-        pack_index_path.set_extension(PACK_INDEX_EXTENSION);
-
-        let mut pack_path = packs_data.join(pack_name);
-        pack_path.set_extension(PACK_EXTENSION);
+        let pack_path =
+            append_path_suffix(packs_data.join(pack_name), &format!(".{PACK_EXTENSION}"));
 
         info!("Opening pack file {:?}...", pack_path);
         let (file_size, header, frame_readers) =
@@ -697,34 +768,130 @@ mod tests {
     #[test]
     fn pack_id_validation_works() {
         // VALID
-        assert!(PackId::is_valid("ABCD"));
-        assert!(PackId::is_valid("abcd"));
-        assert!(PackId::is_valid("____"));
-        assert!(PackId::is_valid("----"));
-        assert!(PackId::is_valid("ABCD-132_TAG"));
+        assert!("ABCD".parse::<PackId>().is_ok());
+        assert!("abcd".parse::<PackId>().is_ok());
+        assert!("____".parse::<PackId>().is_ok());
+        assert!("----".parse::<PackId>().is_ok());
+        assert!("ABCD-132_TAG".parse::<PackId>().is_ok());
         // NOT VALID
         // spaces
-        assert!(!PackId::is_valid("Some Text"));
+        assert!("Some Text".parse::<PackId>().is_err());
         // non-latin alphabets
-        assert!(!PackId::is_valid("това-е-тест"));
+        assert!("това-е-тест".parse::<PackId>().is_err());
         // non-letter symbols other than - and _
-        assert!(!PackId::is_valid("QWERTY-^!$^%^@!#"));
+        assert!("QWERTY-^!$^%^@!#".parse::<PackId>().is_err());
     }
     #[test]
-    fn snapshot_tag_validation_works() {
-        // VALID
-        assert!(SnapshotId::is_valid("ABCD"));
-        assert!(SnapshotId::is_valid("abcd"));
-        assert!(SnapshotId::is_valid("____"));
-        assert!(SnapshotId::is_valid("----"));
-        assert!(SnapshotId::is_valid("ABCD-132_TAG"));
-        // NOT VALID
-        // spaces
-        assert!(!SnapshotId::is_valid("Some Text"));
-        // non-latin alphabets
-        assert!(!SnapshotId::is_valid("това-е-тест"));
-        // non-letter symbols other than - and _
-        assert!(!SnapshotId::is_valid("QWERTY-^!$^%^@!#"));
+    fn snapshot_id_accepts_dotted_tag() {
+        let result = SnapshotId::new(PackId::Pack("pack".to_owned()), "v1.2.3");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn snapshot_id_accepts_visible_unicode_and_internal_spaces() {
+        for tag in [
+            "release 1.2",
+            "résumé/β.2",
+            "symbols/🚀+✓",
+            ".candidate",
+            "release.pack.idx",
+        ] {
+            assert!(
+                SnapshotId::new(PackId::Pack("pack".to_owned()), tag).is_ok(),
+                "{:?} should be valid",
+                tag
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_id_rejects_unsafe_components() {
+        for tag in [
+            "",
+            ".",
+            "..",
+            "/release",
+            "release/",
+            "release//candidate",
+            "release/./candidate",
+            "release/../candidate",
+            " release",
+            "release ",
+            "release.",
+            "release.pack.idx/candidate",
+            "release.PACK.IDX/candidate",
+        ] {
+            assert!(
+                SnapshotId::new(PackId::Pack("pack".to_owned()), tag).is_err(),
+                "{:?} should be invalid",
+                tag
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_id_rejects_unportable_or_invisible_characters() {
+        for tag in [
+            "a:b",
+            "a\\b",
+            "a<b",
+            "a>b",
+            "a\"b",
+            "a|b",
+            "a?b",
+            "a*b",
+            "a\tb",
+            "a\nb",
+            "a\u{a0}b",
+            "a\u{200d}b",
+            "a\u{2028}b",
+            "a\u{e000}b",
+            "con.txt",
+            "aux.log",
+            "com9.txt",
+            "lpt9.log",
+        ] {
+            assert!(
+                SnapshotId::new(PackId::Pack("pack".to_owned()), tag).is_err(),
+                "{:?} should be invalid",
+                tag
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_snapshot_id_uses_the_same_tag_rules() {
+        let snapshot: SnapshotId = "pack:résumé/β.2".parse().unwrap();
+        assert_eq!(snapshot.to_string(), "pack:résumé/β.2");
+
+        for value in ["pack:..", "pack:a:b", "pack:release "] {
+            assert!(value.parse::<SnapshotId>().is_err(), "{:?}", value);
+        }
+    }
+
+    #[test]
+    fn snapshot_ids_preserve_unicode_spelling_without_normalization() {
+        let composed = SnapshotId::new(PackId::Pack("pack".to_owned()), "é").unwrap();
+        let decomposed = SnapshotId::new(PackId::Pack("pack".to_owned()), "e\u{301}").unwrap();
+
+        assert_ne!(composed, decomposed);
+        assert_eq!(composed.tag(), "é");
+        assert_eq!(decomposed.tag(), "e\u{301}");
+    }
+
+    #[test]
+    fn pack_ids_distinguish_regular_packs_from_loose_snapshot_paths() {
+        let loose = PackId::for_loose_snapshot("release/v1.2").unwrap();
+        assert_eq!(loose.to_string(), "loose/release/v1.2");
+        assert_eq!("loose/release/v1.2".parse::<PackId>().unwrap(), loose);
+        assert!(loose.validate_regular().is_err());
+
+        assert!("pack/name".parse::<PackId>().is_ok());
+        assert!("pack.name".parse::<PackId>().is_err());
+        for value in ["", "/pack", "pack/", "pack//name"] {
+            assert!(value.parse::<PackId>().is_err(), "{:?}", value);
+        }
     }
     #[test]
     fn assign_to_frames_single_works() {

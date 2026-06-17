@@ -21,9 +21,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let files_from = matches.get_one::<String>("files-from");
     let files0_from = matches.get_one::<String>("files0-from");
     let snapshot = matches.get_one::<String>("snapshot").unwrap();
-    // Use snapshot name as pack name.
-    let pack_id = PathBuf::from(format!("loose/{snapshot}"));
-    let pack_id = PackId::Pack(pack_id.to_str().unwrap().to_owned());
+    let pack_id = PackId::for_loose_snapshot(snapshot)?;
     let snapshot = SnapshotId::new(pack_id, snapshot)?;
 
     if files_from.is_some() && files0_from.is_some() {
@@ -57,7 +55,15 @@ pub(crate) fn get_app() -> Command {
              updates HEAD to refer to it. Without a file-list option, elfshaker \
              recursively selects files from the working directory and excludes \
              the data directory.\n\nUse elfshaker pack to combine loose \
-             snapshots into a compressed pack.",
+             snapshots into a compressed pack.\n\nA snapshot tag is one or more \
+             slash-separated components. Components may contain visible Unicode \
+             characters and internal ASCII spaces. They must not be empty, '.', \
+             '..', start or end with a space, or end with a period. The characters \
+             :, \\, <, >, \", |, ?, and * are reserved. Dotted Windows device names and \
+             invisible Unicode characters are also rejected.\n\nLoose snapshot \
+             indexes mirror the tag beneath the data directory. Case, Unicode \
+             normalization, and path-length behavior therefore depend on the \
+             filesystem. Pack snapshots before moving them between systems.",
         )
         .arg(
             Arg::new("snapshot")

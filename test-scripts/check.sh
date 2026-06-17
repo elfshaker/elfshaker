@@ -381,6 +381,36 @@ test_store_data_dir_works() {
   [ "$("$elfshaker" --verbose --data-dir=../data_dir list | wc -l)" -eq 1 ]
 }
 
+test_snapshot_tag_charset_works() {
+  tag='release 1.2/résumé-β.2'
+  printf '%s' payload > payload
+
+  "$elfshaker" store "$tag"
+
+  index_path="elfshaker_data/packs/loose/release 1.2/résumé-β.2.pack.idx"
+  [ -f "$index_path" ]
+  [ "$(cat elfshaker_data/HEAD)" = "loose/$tag:$tag" ]
+  "$elfshaker" list --format '%t' | grep -Fx -- "$tag"
+  "$elfshaker" list-files "loose/$tag:$tag" | grep -F -- payload
+
+  printf '%s\n' "$tag" > snapshots
+  if "$elfshaker" pack loose/output --snapshots-from snapshots; then
+    echo "regular pack creation accepted the reserved loose/ namespace"
+    return 1
+  fi
+  "$elfshaker" pack packed --snapshots-from snapshots
+  rm snapshots
+  [ "$(cat elfshaker_data/HEAD)" = "packed:$tag" ]
+
+  "$elfshaker" gc --loose-snapshots
+  [ ! -e "$index_path" ]
+  [ ! -e "elfshaker_data/packs/loose/release 1.2" ]
+
+  rm payload
+  "$elfshaker" extract --reset --verify "packed:$tag"
+  [ "$(cat payload)" = payload ]
+}
+
 rand_megs() {
   dd if=/dev/urandom bs="$1M" count=1 iflag=fullblock
 }
@@ -972,6 +1002,7 @@ main() {
   run_test test_store_finds_new_files
   run_test test_store_empty_directory_works
   run_test test_store_data_dir_works
+  run_test test_snapshot_tag_charset_works
   run_test test_pack_simple_works
   run_test test_pack_two_snapshots_works
   run_test test_pack_snapshots_from_list_works

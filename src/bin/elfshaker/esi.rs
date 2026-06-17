@@ -220,6 +220,8 @@ fn encode_url_path_segment(value: &str) -> String {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
+        .subcommand_required(true)
+        .arg_required_else_help(true)
         .about("Creates and edits elfshaker remote indexes")
         .subcommand(
             Command::new("create")

@@ -11,12 +11,17 @@ Lists snapshots from every known pack index, or only from the selected packs whe
 .TP
 \fB\-\-format\fR \fI<FORMAT>\fR [default: %s]
 Pretty\-print each result using placeholders:
-	%s \- fully\-qualified snapshot
-	%t \- snapshot tag
-	%h \- human\-readable size
-	%b \- size in bytes
-	%n \- number of files
-
+.RS 4
+\fB%s\fR \- fully\-qualified snapshot
+.br
+\fB%t\fR \- snapshot tag
+.br
+\fB%h\fR \- human\-readable size
+.br
+\fB%b\fR \- size in bytes
+.br
+\fB%n\fR \- number of files
+.RE
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.

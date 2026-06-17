@@ -11,11 +11,17 @@ Lists file metadata for a snapshot identified by its tag or as PACK:SNAPSHOT. Ou
 .TP
 \fB\-\-format\fR \fI<FORMAT>\fR [default: %o %b %f]
 Pretty\-print each result using placeholders:
-	%o \- file checksum
-	%f \- file name
-	%h \- human\-readable size
-	%b \- size in bytes
-	%p \- permissions
+.RS 4
+\fB%o\fR \- file checksum
+.br
+\fB%f\fR \- file name
+.br
+\fB%h\fR \- human\-readable size
+.br
+\fB%b\fR \- size in bytes
+.br
+\fB%p\fR \- permissions
+.RE
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.

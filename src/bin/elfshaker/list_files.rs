@@ -47,14 +47,14 @@ pub(crate) fn get_app() -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .default_value("%o %b %f")
-                .help(
-                    "Pretty-print each result using placeholders:\n\
-                    \t%o - file checksum\n\
-                    \t%f - file name\n\
-                    \t%h - human-readable size\n\
-                    \t%b - size in bytes\n\
-                    \t%p - permissions",
-                ),
+                .help(concat!(
+                    "Pretty-print each result using placeholders:\n",
+                    "  %o - file checksum\n",
+                    "  %f - file name\n",
+                    "  %h - human-readable size\n",
+                    "  %b - size in bytes\n",
+                    "  %p - permissions",
+                )),
         )
 }
 

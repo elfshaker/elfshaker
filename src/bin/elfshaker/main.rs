@@ -149,6 +149,35 @@ mod tests {
         assert!(clone.contains(".SH \"SEE ALSO\"\n"));
         assert!(clone.contains("https://github.com/elfshaker/manyclangs"));
 
+        for (page, placeholders) in [
+            (
+                "elfshaker-list.1",
+                ["%s", "%t", "%h", "%b", "%n"].as_slice(),
+            ),
+            (
+                "elfshaker-list-files.1",
+                ["%o", "%f", "%h", "%b", "%p"].as_slice(),
+            ),
+            (
+                "elfshaker-list-packs.1",
+                ["%p", "%h", "%b", "%c"].as_slice(),
+            ),
+        ] {
+            let contents =
+                String::from_utf8(source_pages[Path::new(page)].clone()).expect("valid UTF-8");
+            assert!(contents.contains(".RS 4\n"));
+            assert!(contents.contains(".br\n"));
+            assert!(!contents.contains(".IP \\(bu 2\n"));
+            for placeholder in placeholders {
+                assert!(
+                    contents.contains(&format!("\\fB{placeholder}\\fR")),
+                    "{} does not list {} on its own line",
+                    page,
+                    placeholder
+                );
+            }
+        }
+
         fs::remove_dir_all(generated_dir).unwrap();
     }
 

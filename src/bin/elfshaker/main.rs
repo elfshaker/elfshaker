@@ -10,6 +10,8 @@ mod gc;
 mod list;
 mod list_files;
 mod list_packs;
+#[cfg(test)]
+mod manpages;
 mod pack;
 mod show;
 mod store;
@@ -95,7 +97,7 @@ mod tests {
             std::env::temp_dir().join(format!("elfshaker-manpages-{}-{nonce}", std::process::id()));
         fs::create_dir(&generated_dir).unwrap();
 
-        clap_mangen::generate_to(super::cli::get_app(), &generated_dir).unwrap();
+        super::manpages::generate(super::cli::get_app(), &generated_dir).unwrap();
 
         let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("man");
         assert_eq!(

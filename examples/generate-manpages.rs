@@ -21,6 +21,8 @@ mod list;
 mod list_files;
 #[path = "../src/bin/elfshaker/list_packs.rs"]
 mod list_packs;
+#[path = "../src/bin/elfshaker/manpages.rs"]
+mod manpages;
 #[path = "../src/bin/elfshaker/pack.rs"]
 mod pack;
 #[path = "../src/bin/elfshaker/show.rs"]
@@ -50,6 +52,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    clap_mangen::generate_to(cli::get_app(), output_dir)?;
+    manpages::generate(cli::get_app(), &output_dir)?;
     Ok(())
 }

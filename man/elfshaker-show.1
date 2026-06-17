@@ -4,7 +4,7 @@
 .SH NAME
 elfshaker\-show \- Write files from a snapshot to standard output.
 .SH SYNOPSIS
-\fBelfshaker show\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISNAPSHOT\fR> <\fIPATH\fR> 
+\fBelfshaker show\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISNAPSHOT\fR> <\fIPATH\fR>... 
 .SH DESCRIPTION
 Writes the selected snapshot files to standard output in command\-line order. When multiple paths are given, their contents are concatenated without separators. The command fails without producing output if any requested path is absent.
 .SH OPTIONS
@@ -21,5 +21,5 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fISNAPSHOT\fR>
 Snapshot tag or PACK:SNAPSHOT identifier to read.
 .TP
-<\fIPATH\fR>
+<\fIPATH\fR>...
 Path within the snapshot to write.

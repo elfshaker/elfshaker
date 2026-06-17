@@ -4,7 +4,7 @@
 .SH NAME
 elfshaker\-list \- List snapshots in known pack indexes.
 .SH SYNOPSIS
-\fBelfshaker list\fR [\fB\-\-format\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACK\fR] 
+\fBelfshaker list\fR [\fB\-\-format\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACK\fR]... 
 .SH DESCRIPTION
 Lists snapshots from every known pack index, or only from the selected packs when PACK is supplied. Output lines are sorted.
 .SH OPTIONS
@@ -27,5 +27,5 @@ Use PATH as the data directory containing packs, indexes, loose objects, remotes
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-[\fIPACK\fR]
+[\fIPACK\fR]...
 Pack index to list; may be repeated.

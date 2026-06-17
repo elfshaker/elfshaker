@@ -50,9 +50,16 @@ the variadic `<PACK>...` argument remains last so shell globs and generated
 argument lists are unambiguous.
 
 `esi create` requires the wire-format version and the public URL recorded in
-the index. `esi add` reads each pack and its adjacent `.pack.idx`, computes
+the index. It refuses to replace an existing file unless `--force` is present.
+`esi add` reads each pack and its adjacent `.pack.idx`, computes
 their SHA-1 checksums with streaming I/O, and records their sizes when writing
-v2. The entry URL defaults to the pack filename.
+v2. The entry URL defaults to the pack filename encoded as one relative URL
+path segment. `--pack-url` supplies a different stored URL when adding exactly
+one pack.
+
+Index and pack URL fields are non-empty and contain no literal whitespace,
+because ESI records are whitespace-delimited. Publishers percent-encode any
+whitespace required by the URL.
 
 Adding an existing pack URL is an error. `--force` replaces that entry in its
 current position. Removing a missing URL is likewise an error unless
@@ -69,9 +76,16 @@ change. `--no-backup` disables this behaviour. Validation and hashing finish
 before any target changes, and a failed multi-index operation does not leave
 only part of the target set updated.
 
+An operation rejects target sets where a target or derived backup path aliases
+another target or backup path.
+
 Unchanged headers, blank lines, entry order, URL spelling, line endings, and
 entry lines remain byte-for-byte intact. New or replaced entries use
 tab-separated canonical formatting. Backups therefore produce focused diffs.
+
+`esi list` prints entries in their stored order using that canonical field
+order: index checksum, pack checksum, pack URL, and, for v2, pack size and pack
+index size.
 
 ## Publishing workflow
 

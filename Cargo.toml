@@ -39,7 +39,7 @@ lazy_static = "1.5.1"
 libc = "0.2.191"
 rand = "0.10.3"
 fs2 = "0.4.3"
-winapi = "0.3.9"
+winapi = { version = "0.3.9", features = ["everything"] }
 unicode-general-category = "1.1.0"
 
 [dev-dependencies]

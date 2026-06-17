@@ -1,8 +1,7 @@
 use std::{
-    convert::TryInto,
     ffi::OsStr,
     fs, io,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, Read, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
@@ -15,11 +14,13 @@ use url::Url;
 use super::constants::{PACK_EXTENSION, REMOTE_INDEX_EXTENSION};
 use super::error::Error;
 use super::fs::{create_file, open_file};
+use crate::esi::{Document, MetaVersion};
 use crate::packidx::{ObjectChecksum, PackIndex};
 use crate::progress::{ProgressReporter, ProgressWriter};
 
 const HTTP_STATUS_OK: u16 = 200;
 const HTTP_STATUS_NOT_MODIFIED: u16 = 304;
+const HTTP_STATUS_NOT_FOUND: u16 = 404;
 
 /// The .esi file is corrupted.
 #[derive(Debug)]
@@ -38,12 +39,12 @@ impl RemoteIndexFormatError {
 
     fn reify<D: std::fmt::Display>(self, display_name: D) -> Self {
         if self.source.is_none() {
-            self
-        } else {
             RemoteIndexFormatError {
                 message: self.message,
                 source: Some(format!("{display_name}")),
             }
+        } else {
+            self
         }
     }
 }
@@ -97,8 +98,7 @@ impl RemotePack {
 pub struct RemoteIndex {
     // Set when open by load().
     path: Option<PathBuf>,
-    #[allow(dead_code)]
-    meta: String,
+    meta: MetaVersion,
     url: String,
     packs: Vec<RemotePack>,
 }
@@ -108,7 +108,7 @@ impl RemoteIndex {
     pub fn new(url: String) -> RemoteIndex {
         Self {
             path: None,
-            meta: "v1".to_owned(),
+            meta: MetaVersion::V1,
             url,
             packs: vec![],
         }
@@ -131,8 +131,7 @@ impl RemoteIndex {
 
     pub fn load<P: AsRef<Path>>(path: P) -> Result<RemoteIndex, Error> {
         let file = open_file(path.as_ref()).map_err(Error::IOError)?;
-        let reader = BufReader::new(file);
-        let mut remote = Self::read(reader).reify(path.as_ref().display())?;
+        let mut remote = Self::read(file).reify(path.as_ref().display())?;
         remote.path = Some(path.as_ref().into());
         Ok(remote)
     }
@@ -142,171 +141,35 @@ impl RemoteIndex {
         self.packs.iter().find(|p| p.file_name() == file_name)
     }
 
-    pub fn read<R: BufRead>(reader: R) -> Result<RemoteIndex, Error> {
-        let mut lines = reader.lines();
-        let mut line_no = 1;
-        let meta = Self::read_keyed_line(&mut lines, "meta")?;
-        line_no += 1;
-        let url = Self::read_keyed_line(&mut lines, "url")?;
-        let base_url = url.parse::<Url>().map_err(|_| {
-            RemoteIndexFormatError::new(format!(
-                "Expected a valid elfshaker index URL, found {url} on line {line_no}"
-            ))
-        })?;
-        line_no += 1;
+    pub fn read<R: Read>(mut reader: R) -> Result<RemoteIndex, Error> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).map_err(Error::IOError)?;
+        let document = Document::parse(&bytes)
+            .map_err(|error| RemoteIndexFormatError::new(error.to_string()))?;
+        Self::from_document(document)
+    }
 
-        let mut packs = vec![];
-        for line in lines {
-            line_no += 1;
-            let line = line.map_err(Error::IOError)?;
-            if line.is_empty() {
-                continue;
-            }
-            let mut parts = line
-                .split(Self::is_field_separator)
-                .filter(|&p| !p.is_empty());
-            let index_checksum = parts.next().ok_or_else(|| {
-                RemoteIndexFormatError::new(format!(
-                    "Expected pack index checksum, reached end of line {line_no}"
-                ))
-            })?;
-
-            let pack_checksum = parts.next().ok_or_else(|| {
-                RemoteIndexFormatError::new(format!(
-                    "Expected pack checksum, reached end of line {line_no}"
-                ))
-            })?;
-
-            // Pack URL (possibly relative)
-            let relative_url = parts.next().ok_or_else(|| {
-                RemoteIndexFormatError::new(format!(
-                    "Expected pack URL, reached end of line {line_no}"
-                ))
-            })?;
-
-            // Always provide the index URL as base URL. If the pack URL is absolute,
-            // the `join` will use it as-is.
-            let absolute_url = base_url.join(relative_url).map_err(|_| {
-                Error::BadRemoteIndexFormat(RemoteIndexFormatError::new(format!(
-                    "Expected a valid pack URL, found {relative_url} on line {line_no}"
-                )))
-            })?;
-
-            // Parse optional sizes for v2 (*.esi) entries: pack_size then index_size
-            let (pack_size, index_size) = if meta == "v2" {
-                let pack_sz_str = parts.next().ok_or_else(|| {
-                    RemoteIndexFormatError::new(format!(
-                        "Expected pack size, reached end of line {line_no}"
-                    ))
-                })?;
-                let idx_sz_str = parts.next().ok_or_else(|| {
-                    RemoteIndexFormatError::new(format!(
-                        "Expected index size, reached end of line {line_no}"
-                    ))
-                })?;
-                if parts.next().is_some() {
-                    return Err(RemoteIndexFormatError::new(format!(
-                        "Too many values on line {line_no}"
-                    ))
-                    .into());
-                }
-                let pack_size = pack_sz_str.parse::<u64>().map_err(|_| {
-                    RemoteIndexFormatError::new(format!(
-                        "Invalid pack size '{pack_sz_str}' on line {line_no}"
-                    ))
-                })?;
-                let index_size = idx_sz_str.parse::<u64>().map_err(|_| {
-                    RemoteIndexFormatError::new(format!(
-                        "Invalid index size '{idx_sz_str}' on line {line_no}"
-                    ))
-                })?;
-                (Some(pack_size), Some(index_size))
-            } else {
-                if parts.next().is_some() {
-                    return Err(RemoteIndexFormatError::new(format!(
-                        "Too many values on line {line_no}"
-                    ))
-                    .into());
-                }
-                (None, None)
-            };
-
-            let index_checksum = hex::decode(index_checksum)
-                .map_err(|_| {
-                    RemoteIndexFormatError::new(format!(
-                        "Bad pack index checksum format on line {line_no}"
-                    ))
-                })?
-                .try_into()
-                .map_err(|_| {
-                    RemoteIndexFormatError::new(format!(
-                        "The value for pack index checksum on line {line_no} is not the right length"
-                    ))
-                })?;
-
-            let pack_checksum = hex::decode(pack_checksum)
-                .map_err(|_| {
-                    RemoteIndexFormatError::new(format!(
-                        "Bad pack checksum format on line {line_no}"
-                    ))
-                })?
-                .try_into()
-                .map_err(|_| {
-                    RemoteIndexFormatError::new(format!(
-                        "The value for pack checksum on line {line_no} is not the right length"
-                    ))
-                })?;
-
-            packs.push(RemotePack {
-                url: absolute_url.into(),
-                index_checksum,
-                pack_checksum,
-                pack_size,
-                index_size,
-            });
-        }
+    fn from_document(document: Document) -> Result<Self, Error> {
+        let packs = document
+            .entries()
+            .map(|entry| {
+                Ok(RemotePack {
+                    url: document.resolved_entry_url(entry)?.into(),
+                    index_checksum: entry.index_checksum,
+                    pack_checksum: entry.pack_checksum,
+                    pack_size: entry.pack_size,
+                    index_size: entry.index_size,
+                })
+            })
+            .collect::<Result<Vec<_>, crate::esi::FormatError>>()
+            .map_err(|error| RemoteIndexFormatError::new(error.to_string()))?;
 
         Ok(Self {
             path: None,
-            meta,
-            url,
+            meta: document.meta(),
+            url: document.url().to_owned(),
             packs,
         })
-    }
-
-    fn read_keyed_line<R: BufRead>(lines: &mut io::Lines<R>, key: &str) -> Result<String, Error> {
-        let line = match lines.next() {
-            None => Err(RemoteIndexFormatError::new(format!(
-                "Expected '{key} ...', but end of file was reached!"
-            ))
-            .into()),
-            Some(Err(e)) => Err(Error::IOError(e)),
-            Some(Ok(line)) => Ok(line),
-        }?;
-
-        let mut parts = line
-            .split(Self::is_field_separator)
-            .filter(|&p| !p.is_empty());
-
-        if parts.next() != Some(key) {
-            return Err(
-                RemoteIndexFormatError::new(format!("Expected '{key} ...': '{line}'")).into(),
-            );
-        }
-
-        let value = parts.next().ok_or_else(|| {
-            RemoteIndexFormatError::new(format!("Expected a value after '{key}': '{line}'"))
-        })?;
-
-        if parts.next().is_some() {
-            return Err(RemoteIndexFormatError::new(format!("Too many values: '{line}'")).into());
-        }
-
-        Ok(value.to_string())
-    }
-
-    fn is_field_separator(ch: char) -> bool {
-        ch == ' ' || ch == '\t'
     }
 }
 
@@ -367,26 +230,32 @@ pub(crate) fn http_agent() -> Agent {
         .into()
 }
 
+enum RemoteResource<R> {
+    Found { content_length: usize, body: R },
+    NotModified,
+    NotFound,
+}
+
 /// Sends an HTTP GET request with the specified URL.
-///
-/// # Arguments
-/// * `url` - the URL to fetch
-/// * `timeout` - the timeout for the whole of the request
-/// * `if_modified_since` - Sets the value of the `If-Modified-Since` HTTP
-///   header
 fn open_remote_resource(
     agent: &Agent,
     url: &Url,
     timeout: Option<Duration>,
     if_modified_since: Option<SystemTime>,
-) -> Result<Option<(usize, impl Read)>, Error> {
+) -> Result<RemoteResource<Box<dyn Read>>, Error> {
     let mut request = agent.get(url.as_ref());
-    request = request.config().timeout_global(timeout).build();
+    request = request
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(timeout)
+        .build();
     if let Some(if_modified_since) = if_modified_since {
         request = request.header("If-Modified-Since", &format_http_date(if_modified_since));
     }
 
-    let response = request.call().map_err(|e| Error::HttpError(e.into()))?;
+    let response = request
+        .call()
+        .map_err(|error| Error::HttpError(error.into()))?;
 
     let status = response.status().as_u16();
 
@@ -406,14 +275,14 @@ fn open_remote_resource(
     );
 
     match status {
-        HTTP_STATUS_OK => Ok(Some((content_length, response.into_body().into_reader()))),
-        HTTP_STATUS_NOT_MODIFIED => Ok(None),
+        HTTP_STATUS_OK => Ok(RemoteResource::Found {
+            content_length,
+            body: Box::new(response.into_body().into_reader()),
+        }),
+        HTTP_STATUS_NOT_MODIFIED => Ok(RemoteResource::NotModified),
+        HTTP_STATUS_NOT_FOUND => Ok(RemoteResource::NotFound),
         _ => Err(Error::HttpError(
-            format!(
-                "Response status code {} indicates failure!",
-                response.status()
-            )
-            .into(),
+            format!("Response status code {status} indicates failure!").into(),
         )),
     }
 }
@@ -423,19 +292,28 @@ fn read_remote_resource(
     url: &Url,
     timeout: Duration,
     if_modified_since: Option<SystemTime>,
-) -> Result<Option<Vec<u8>>, Error> {
-    open_remote_resource(agent, url, Some(timeout), if_modified_since).and_then(|opt_reader| {
-        opt_reader
-            .map(|mut reader| {
-                let mut body: Vec<u8> = vec![];
-                reader
-                    .1
-                    .read_to_end(&mut body)
-                    .map_err(|e| Error::HttpError(e.into()))
-                    .map(|_| body)
+) -> Result<RemoteResource<Vec<u8>>, Error> {
+    match open_remote_resource(agent, url, Some(timeout), if_modified_since)? {
+        RemoteResource::Found {
+            content_length,
+            body,
+        } => {
+            let bytes = read_remote_body(body, content_length)?;
+            Ok(RemoteResource::Found {
+                content_length,
+                body: bytes,
             })
-            .map_or(Ok(None), |v| v.map(Some))
-    })
+        }
+        RemoteResource::NotModified => Ok(RemoteResource::NotModified),
+        RemoteResource::NotFound => Ok(RemoteResource::NotFound),
+    }
+}
+
+fn read_remote_body<R: Read>(mut body: R, _content_length: usize) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    body.read_to_end(&mut bytes)
+        .map_err(|error| Error::HttpError(error.into()))?;
+    Ok(bytes)
 }
 
 /// Updates the specified pack file by fetching the URL in the [`RemotePack`]
@@ -449,25 +327,38 @@ pub fn update_remote_pack(
     let date_modified = fs::metadata(pack_path).ok().and_then(|x| x.modified().ok());
 
     let url = remote_pack.url.parse::<Url>().unwrap();
-    if let Some((content_length, mut reader)) =
-        open_remote_resource(agent, &url, None, date_modified)?
-    {
-        let mut data = vec![];
+    match open_remote_resource(agent, &url, None, date_modified)? {
+        RemoteResource::Found {
+            content_length,
+            mut body,
+        } => {
+            let mut data = vec![];
 
-        let mut writer = ProgressWriter::with_known_size(&mut data, reporter, content_length);
-        io::copy(&mut reader, &mut writer)?;
+            let mut writer = ProgressWriter::with_known_size(&mut data, reporter, content_length);
+            io::copy(&mut body, &mut writer)?;
 
-        let mut hasher = Sha1::new();
-        hasher.update(&data);
-        let checksum: [u8; 20] = hasher.finalize().into();
+            let mut hasher = Sha1::new();
+            hasher.update(&data);
+            let checksum: [u8; 20] = hasher.finalize().into();
+            let size_matches = remote_pack
+                .pack_size
+                .map(|size| size == data.len() as u64)
+                .unwrap_or(true);
 
-        if checksum == remote_pack.pack_checksum {
-            create_file(pack_path, None)?.write_all(&data)?;
-        } else {
-            log::error!(
-                "The pack checksum did not match the one in the .esi! The download failed."
-            );
-            return Err(Error::CorruptPack);
+            if checksum == remote_pack.pack_checksum && size_matches {
+                create_file(pack_path, None)?.write_all(&data)?;
+            } else {
+                log::error!(
+                    "The pack checksum or size did not match the value in the .esi! The download failed."
+                );
+                return Err(Error::CorruptPack);
+            }
+        }
+        RemoteResource::NotModified => {}
+        RemoteResource::NotFound => {
+            return Err(Error::HttpError(
+                format!("Response status code {HTTP_STATUS_NOT_FOUND} indicates failure!").into(),
+            ));
         }
     }
     Ok(())
@@ -493,7 +384,7 @@ pub fn update_remote_pack_indexes(
             // The file exists and the checksums match -> skip
             log::info!("{} is up to date", pack_index_path.display());
         } else {
-            update_pack_index(agent, &url, &pack_index_path)?;
+            update_pack_index(agent, &url, &pack_index_path, pack.index_size)?;
         }
 
         done += 1;
@@ -505,28 +396,47 @@ pub fn update_remote_pack_indexes(
 
 /// Updates the pack index file by fetching its contents from the URL only
 /// when the content at the URL is newer than what is available on-disk.
-fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result<(), Error> {
+fn update_pack_index(
+    agent: &Agent,
+    url: &Url,
+    pack_index_path: &Path,
+    expected_size: Option<u64>,
+) -> Result<(), Error> {
     let date_modified = fs::metadata(pack_index_path)
         .ok()
         .and_then(|x| x.modified().ok());
 
-    let pack_index_bytes =
-        read_remote_resource(agent, url, Duration::from_secs(15), date_modified)?;
-
-    if let Some(pack_index_bytes) = pack_index_bytes {
-        if let Err(e) = PackIndex::parse(pack_index_bytes.as_slice()) {
-            log::error!(
-                "Failed to fetch {} from remote: The remote returned a broken .pack.idx! {}",
-                url,
-                e
-            );
-        } else {
-            log::info!(
-                "Writing {} ({} B)...",
-                pack_index_path.display(),
-                pack_index_bytes.len()
-            );
-            fs::write(pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
+    match read_remote_resource(agent, url, Duration::from_secs(15), date_modified)? {
+        RemoteResource::Found {
+            body: pack_index_bytes,
+            ..
+        } => {
+            if expected_size
+                .map(|size| size != pack_index_bytes.len() as u64)
+                .unwrap_or(false)
+            {
+                return Err(Error::CorruptPackIndex);
+            }
+            if let Err(e) = PackIndex::parse(pack_index_bytes.as_slice()) {
+                log::error!(
+                    "Failed to fetch {} from remote: The remote returned a broken .pack.idx! {}",
+                    url,
+                    e
+                );
+            } else {
+                log::info!(
+                    "Writing {} ({} B)...",
+                    pack_index_path.display(),
+                    pack_index_bytes.len()
+                );
+                fs::write(pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
+            }
+        }
+        RemoteResource::NotModified => {}
+        RemoteResource::NotFound => {
+            return Err(Error::HttpError(
+                format!("Response status code {HTTP_STATUS_NOT_FOUND} indicates failure!").into(),
+            ));
         }
     }
     Ok(())
@@ -534,25 +444,36 @@ fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result
 
 /// Fetches the remote index from the server.
 pub fn fetch_remote(agent: &Agent, url: &str, path: &Path) -> Result<RemoteIndex, Error> {
-    let url = url.parse::<Url>().unwrap();
-    let response = read_remote_resource(agent, &url, Duration::from_secs(15), None)?;
-
-    match response {
-        None => unreachable!(
-            "Unexpected Not-Modified response from server given previously unseen resource"
-        ),
-        Some(data) => {
-            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
-            // Update the .esi
-            create_file(path, None)
-                .map_err(Error::IOError)?
-                .write_all(data.as_slice())
-                .map_err(Error::IOError)?;
-            // And return the parsed index
-            remote.path = Some(path.to_owned());
-            Ok(remote)
+    let supplied_url = url
+        .parse::<Url>()
+        .map_err(|error| Error::HttpError(error.into()))?;
+    let (fetched_url, data) = if let Some(versioned_url) = v2_sibling_url(&supplied_url) {
+        match read_remote_resource(agent, &versioned_url, Duration::from_secs(15), None)? {
+            RemoteResource::Found { body, .. } => (versioned_url, body),
+            RemoteResource::NotFound => {
+                let body = require_found(read_remote_resource(
+                    agent,
+                    &supplied_url,
+                    Duration::from_secs(15),
+                    None,
+                )?)?;
+                (supplied_url, body)
+            }
+            RemoteResource::NotModified => unreachable!(
+                "Unexpected Not-Modified response from server given previously unseen resource"
+            ),
         }
-    }
+    } else {
+        let body = require_found(read_remote_resource(
+            agent,
+            &supplied_url,
+            Duration::from_secs(15),
+            None,
+        )?)?;
+        (supplied_url, body)
+    };
+
+    install_remote(path, &fetched_url, data)
 }
 
 /// Fetches the new newest version of the [`RemoteIndex`] from the server and
@@ -563,26 +484,115 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
         .as_ref()
         .expect("The RemoteIndex must have a valid .path set! Use RemoteIndex::load().");
 
-    // Read the modification date of the .esi.
     let date_modified = fs::metadata(path).ok().and_then(|x| x.modified().ok());
-    let url = remote.url.parse::<Url>().unwrap();
-    let response = read_remote_resource(agent, &url, Duration::from_secs(15), date_modified)?;
+    let url = remote
+        .url
+        .parse::<Url>()
+        .map_err(|error| Error::HttpError(error.into()))?;
 
-    match response {
-        // The local version is up-to-date.
-        None => RemoteIndex::load(path).reify(path.display()),
-        Some(data) => {
-            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
-            // Update the .esi
-            create_file(path, None)
-                .map_err(Error::IOError)?
-                .write_all(data.as_slice())
-                .map_err(Error::IOError)?;
-            // And return the parsed index
-            remote.path = Some(path.clone());
-            Ok(remote)
+    if let Some(versioned_url) = v2_sibling_url(&url) {
+        // The v2 probe is unconditional because the local mtime belongs to the
+        // legacy resource, not the versioned sibling.
+        match read_remote_resource(agent, &versioned_url, Duration::from_secs(15), None)? {
+            RemoteResource::Found { body, .. } => {
+                return install_remote(path, &versioned_url, body);
+            }
+            RemoteResource::NotFound => {}
+            RemoteResource::NotModified => {
+                unreachable!("Unexpected Not-Modified response from unconditional versioned probe")
+            }
         }
     }
+
+    match read_remote_resource(agent, &url, Duration::from_secs(15), date_modified)? {
+        RemoteResource::Found { body, .. } => install_remote(path, &url, body),
+        RemoteResource::NotModified => RemoteIndex::load(path).reify(path.display()),
+        RemoteResource::NotFound => Err(Error::HttpError(
+            format!("Response status code {HTTP_STATUS_NOT_FOUND} indicates failure!").into(),
+        )),
+    }
+}
+
+fn install_remote(path: &Path, fetched_url: &Url, data: Vec<u8>) -> Result<RemoteIndex, Error> {
+    let mut remote = RemoteIndex::read(data.as_slice()).reify(fetched_url)?;
+    validate_endpoint_version(fetched_url, remote.meta)?;
+    create_file(path, None)
+        .map_err(Error::IOError)?
+        .write_all(data.as_slice())
+        .map_err(Error::IOError)?;
+    remote.path = Some(path.to_owned());
+    Ok(remote)
+}
+
+fn require_found(resource: RemoteResource<Vec<u8>>) -> Result<Vec<u8>, Error> {
+    match resource {
+        RemoteResource::Found { body, .. } => Ok(body),
+        RemoteResource::NotModified => unreachable!(
+            "Unexpected Not-Modified response from server given previously unseen resource"
+        ),
+        RemoteResource::NotFound => Err(Error::HttpError(
+            format!("Response status code {HTTP_STATUS_NOT_FOUND} indicates failure!").into(),
+        )),
+    }
+}
+
+fn validate_endpoint_version(url: &Url, meta: MetaVersion) -> Result<(), Error> {
+    if is_versioned_endpoint(url) {
+        match endpoint_version(url) {
+            Some(expected) if expected == meta => {}
+            Some(expected) => {
+                return Err(RemoteIndexFormatError::new(format!(
+                    "Endpoint '{url}' requires meta {expected}, found meta {meta}"
+                ))
+                .into());
+            }
+            None => {
+                return Err(RemoteIndexFormatError::new(format!(
+                    "Unsupported versioned ESI endpoint '{url}'"
+                ))
+                .into());
+            }
+        }
+    } else if url.path().ends_with(".esi") && meta != MetaVersion::V1 {
+        return Err(RemoteIndexFormatError::new(format!(
+            "Unversioned endpoint '{url}' requires meta v1, found meta {meta}"
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+fn endpoint_version(url: &Url) -> Option<MetaVersion> {
+    let file_name = url.path_segments()?.next_back()?;
+    let stem = file_name.strip_suffix(".esi")?;
+    let (_, version) = stem.rsplit_once(".v")?;
+    match version {
+        "1" => Some(MetaVersion::V1),
+        "2" => Some(MetaVersion::V2),
+        _ => None,
+    }
+}
+
+fn v2_sibling_url(url: &Url) -> Option<Url> {
+    if is_versioned_endpoint(url) {
+        return None;
+    }
+    let path = url.path();
+    let stem = path.strip_suffix(".esi")?;
+    let mut sibling = url.clone();
+    sibling.set_path(&format!("{stem}.v2.esi"));
+    Some(sibling)
+}
+
+fn is_versioned_endpoint(url: &Url) -> bool {
+    url.path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .and_then(|file_name| file_name.strip_suffix(".esi"))
+        .and_then(|stem| stem.rsplit_once(".v"))
+        .map(|(_, version)| {
+            !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .unwrap_or(false)
 }
 
 /// A convenience function which verifies the checksum of the file
@@ -624,6 +634,7 @@ fn format_http_date(t: SystemTime) -> String {
 #[cfg(test)]
 mod remote_index_tests {
     use super::*;
+    use std::io::{BufReader, Cursor};
 
     #[test]
     fn test_format_http_date_works() {
@@ -631,6 +642,12 @@ mod remote_index_tests {
             format_http_date(SystemTime::UNIX_EPOCH),
             "Thu, 01 Jan 1970 00:00:00 GMT"
         );
+    }
+
+    #[test]
+    fn remote_body_does_not_reserve_untrusted_content_length() {
+        let bytes = read_remote_body(Cursor::new(b"body"), usize::MAX).unwrap();
+        assert_eq!(bytes, b"body");
     }
 
     #[test]
@@ -644,7 +661,7 @@ f3a50129b7ac872b63585f884f1a73e013d51f85\td8a41c1859d6276f0dd74fdd7e4513d89f6860
                 .as_bytes(),
         ))?;
 
-        assert_eq!(r.meta, "v1");
+        assert_eq!(r.meta, MetaVersion::V1);
         assert_eq!(
             r.url,
             "https://github.com/elfshaker/releases/download/index.esi"
@@ -687,7 +704,7 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
                 .as_bytes(),
         ))?;
 
-        assert_eq!(r.meta, "v1");
+        assert_eq!(r.meta, MetaVersion::V1);
         assert_eq!(
             r.url,
             "https://github.com/elfshaker/releases/download/index.esi"
@@ -696,8 +713,6 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
 
         Ok(())
     }
-
-    use std::io::Cursor;
 
     // Helper: create a 20-byte (40 hex chars) checksum string of repeated ch.
     fn hex20(ch: char) -> String {
@@ -714,7 +729,7 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
             pc = hex20('b'),
         );
         let remote = RemoteIndex::read(Cursor::new(idx)).unwrap();
-        assert_eq!(remote.meta, "v1");
+        assert_eq!(remote.meta, MetaVersion::V1);
         assert_eq!(remote.packs.len(), 1);
         let p = &remote.packs[0];
         // v1 should not set sizes
@@ -734,7 +749,7 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
             pc = hex20('d'),
         );
         let remote = RemoteIndex::read(Cursor::new(idx)).unwrap();
-        assert_eq!(remote.meta, "v2");
+        assert_eq!(remote.meta, MetaVersion::V2);
         assert_eq!(remote.packs.len(), 1);
         let p = &remote.packs[0];
         // sizes parsed correctly
@@ -872,5 +887,32 @@ url\thttps://github.com/elfshaker/releases/download/index.esi"
             "meta\tv1\nurl\thttps://\nf3a50129b7ac872b63585f884f1a73e013d51f85 https://".as_bytes(),
         ))
         .unwrap_err();
+    }
+
+    #[test]
+    fn derives_v2_only_for_unversioned_esi_urls() {
+        let unversioned = Url::parse("https://example.test/releases/index.esi?token=yes").unwrap();
+        assert_eq!(
+            v2_sibling_url(&unversioned).unwrap().as_str(),
+            "https://example.test/releases/index.v2.esi?token=yes"
+        );
+
+        for url in [
+            "https://example.test/index.v1.esi",
+            "https://example.test/index.v2.esi",
+            "https://example.test/index.v12.esi",
+            "https://example.test/index",
+        ] {
+            assert!(v2_sibling_url(&Url::parse(url).unwrap()).is_none());
+        }
+    }
+
+    #[test]
+    fn versioned_endpoint_requires_matching_meta() {
+        let v2 = Url::parse("https://example.test/index.v2.esi").unwrap();
+        assert!(validate_endpoint_version(&v2, MetaVersion::V2).is_ok());
+        assert!(validate_endpoint_version(&v2, MetaVersion::V1).is_err());
+        let future = Url::parse("https://example.test/index.v3.esi").unwrap();
+        assert!(validate_endpoint_version(&future, MetaVersion::V2).is_err());
     }
 }

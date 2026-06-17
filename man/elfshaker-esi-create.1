@@ -1,0 +1,44 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-esi-create 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
+.SH NAME
+elfshaker\-esi\-create \- Creates an empty ESI index
+.SH SYNOPSIS
+\fBelfshaker esi create\fR <\fB\-\-meta\fR> <\fB\-\-url\fR> [\fB\-\-force\fR] [\fB\-\-no\-backup\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIesi_file\fR> 
+.SH DESCRIPTION
+Creates an empty ESI index
+.SH OPTIONS
+.TP
+\fB\-\-meta\fR
+Wire\-format version to write.
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+v1
+.IP \(bu 2
+v2
+.RE
+.TP
+\fB\-\-url\fR
+Public URL recorded in the index.
+.TP
+\fB\-\-force\fR
+Replace an existing ESI file.
+.TP
+\fB\-\-no\-backup\fR
+Do not replace <ESI_FILE>.bak with the previous contents.
+.TP
+\fB\-\-verbose\fR
+Show informational progress and diagnostic messages.
+.TP
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIesi_file\fR>
+ESI file to create.

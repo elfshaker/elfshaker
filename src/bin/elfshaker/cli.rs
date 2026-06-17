@@ -4,7 +4,7 @@
 use clap::{Arg, Command};
 
 use crate::{
-    clone, explode, extract, find, gc, list, list_files, list_packs, pack, show, store, update,
+    clone, esi, explode, extract, find, gc, list, list_files, list_packs, pack, show, store, update,
 };
 
 pub(crate) fn get_app() -> Command {
@@ -29,6 +29,7 @@ pub(crate) fn get_app() -> Command {
         .subcommand(gc::get_app())
         .subcommand(update::get_app())
         .subcommand(clone::get_app())
+        .subcommand(esi::get_app())
         .subcommand(explode::get_app())
         .arg(
             Arg::new("verbose")

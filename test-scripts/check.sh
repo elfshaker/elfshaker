@@ -690,7 +690,7 @@ test_update_fetches_indexes() (
   mkdir ./elfshaker_data/remotes
   {
     printf 'meta\tv1\n'
-    printf 'url\thttp://127.0.0.1:43102/index.esi\n'
+    printf 'url\thttp://127.0.0.1:43102/index.v1.esi\n'
     printf "$pack_idx_sha\t$pack_sha\thttp://127.0.0.1:43103/test.pack\n"
   } > "$index"
 
@@ -785,7 +785,7 @@ test_clone_fetches_indexes() {
   index="$(mktemp)"
   {
     printf 'meta\tv1\n'
-    printf 'url\thttp://127.0.0.1:43103/index.esi\n'
+    printf 'url\thttp://127.0.0.1:43103/index.v1.esi\n'
     printf "$pack_idx_sha\t$pack_sha\thttp://127.0.0.1:43104/test.pack\n"
     echo
   } > "$index"
@@ -803,7 +803,7 @@ test_clone_fetches_indexes() {
   # Give the servers time to open the sockets and start listening
   sleep 1
 
-  if ! "$elfshaker" clone http://127.0.0.1:43102/index.esi clone_fetches_indexes; then
+  if ! "$elfshaker" clone http://127.0.0.1:43102/index.v1.esi clone_fetches_indexes; then
     echo 'elfshaker clone failed!'
     kill $server1_pid $server2_pid $server3_pid || true
     exit 1

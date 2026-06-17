@@ -1,0 +1,34 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-esi-remove 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
+.SH NAME
+elfshaker\-esi\-remove \- Removes pack URLs from one or more ESI indexes
+.SH SYNOPSIS
+\fBelfshaker esi remove\fR [\fB\-\-force\fR] [\fB\-\-no\-backup\fR] [\fB\-\-also\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIesi_file\fR> <\fIpack_url\fR>... 
+.SH DESCRIPTION
+Removes pack URLs from one or more ESI indexes
+.SH OPTIONS
+.TP
+\fB\-\-force\fR
+Ignore stored URLs that are not present.
+.TP
+\fB\-\-no\-backup\fR
+Do not replace <ESI_FILE>.bak with the previous contents.
+.TP
+\fB\-\-also\fR \fI<ESI_FILE>\fR
+Apply the operation to another ESI file; may be repeated.
+.TP
+\fB\-\-verbose\fR
+Show informational progress and diagnostic messages.
+.TP
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIesi_file\fR>
+Primary ESI file to edit.
+.TP
+<\fIpack_url\fR>...
+Stored pack URLs to remove.

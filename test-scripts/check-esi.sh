@@ -72,6 +72,7 @@ mkdir "$work"
 cp "$input" "$work/$pack_name"
 cp "$input.idx" "$work/$pack_name.idx"
 pack="$work/$pack_name"
+chmod u+w "$pack"
 pack_sha=$(sha1sum "$pack" | awk '{print $1}')
 index_sha=$(sha1sum "$pack.idx" | awk '{print $1}')
 pack_size=$(wc -c < "$pack")

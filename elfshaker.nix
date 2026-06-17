@@ -61,6 +61,8 @@ naerskBuildPackage isWindows target {
     removeReferencesTo
     netcat # For tests.
     openssl # For the local HTTPS clone test.
+  ] ++ lib.optionals (!isWindows) [
+    buildPackages.python3 # For the ESI HTTP fixture.
   ];
 
   postInstall = ''
@@ -82,6 +84,13 @@ naerskBuildPackage isWindows target {
       ${maybeWindows} ${buildPackages.coreutils}/bin/timeout \
         --signal=TERM --kill-after=30s 10m \
         "$SHELL" ${./.}/test-scripts/check.sh ${elfshakerBinRunner} ${./.}/test-scripts/artifacts/${packName}
+      ${lib.optionalString (!isWindows) ''
+        echo "Testing ESI commands and remote index compatibility"
+        ${buildPackages.coreutils}/bin/timeout \
+          --signal=TERM --kill-after=30s 10m \
+          "$SHELL" ${./.}/test-scripts/check-esi.sh \
+          "$ELFSHAKER_BIN" ${./.}/test-scripts/artifacts/${packName}
+      ''}
     '';
   };
 }

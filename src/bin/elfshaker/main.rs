@@ -122,4 +122,19 @@ mod tests {
 
         assert_eq!(packs, ["first", "second"]);
     }
+
+    #[test]
+    fn pack_accepts_multiple_indexes() {
+        let matches = super::get_app()
+            .try_get_matches_from(["elfshaker", "pack", "combined", "first", "second"])
+            .unwrap();
+        let (_, pack) = matches.subcommand().unwrap();
+        let indexes: Vec<_> = pack
+            .get_many::<String>("indexes")
+            .unwrap()
+            .cloned()
+            .collect();
+
+        assert_eq!(indexes, ["first", "second"]);
+    }
 }

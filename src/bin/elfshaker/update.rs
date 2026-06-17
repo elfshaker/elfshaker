@@ -19,5 +19,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 }
 
 pub(crate) fn get_app() -> Command {
-    Command::new(SUBCOMMAND).about("Updates the remote indexes.")
+    Command::new(SUBCOMMAND)
+        .about("Refresh indexes for all configured remotes.")
+        .long_about(
+            "Fetches each configured remote index and its pack indexes into the \
+             data directory. Pack payloads are not downloaded; they are fetched \
+             on demand when required.",
+        )
 }

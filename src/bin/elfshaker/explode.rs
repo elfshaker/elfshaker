@@ -28,11 +28,17 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn std::error::Error>
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Explodes a pack into loose objects")
+        .about("Materialize a pack's objects in the loose-object store.")
+        .long_about(
+            "Extracts every object in a pack into the data directory's loose \
+             object store. The pack remains in place, and no loose snapshot \
+             indexes are created.",
+        )
         .arg(
             Arg::new("pack-name")
                 .required(true)
                 .index(1)
-                .help("The name of the pack to explode."),
+                .value_name("PACK")
+                .help("Pack whose objects should be materialized."),
         )
 }

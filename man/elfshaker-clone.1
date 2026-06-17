@@ -2,24 +2,24 @@
 .el .ds Aq '
 .TH elfshaker-clone 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-clone \- Clones a remote repository into a new directory
+elfshaker\-clone \- Create a working directory configured from a remote index.
 .SH SYNOPSIS
-\fBelfshaker clone\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIrepository\fR> <\fIdirectory\fR> 
+\fBelfshaker clone\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> <\fIDIRECTORY\fR> 
 .SH DESCRIPTION
-Clones a remote repository into a new directory
+Creates a new working directory, configures the supplied .esi index as the `origin` remote, and downloads its pack indexes. Pack payloads are fetched on demand. The destination must not exist.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIrepository\fR>
-The URL of the remote repository index (.esi) to clone.
+<\fIURL\fR>
+URL of the remote .esi index.
 .TP
-<\fIdirectory\fR>
-The name of a new directory to clone into.
+<\fIDIRECTORY\fR>
+New working directory to create.

@@ -85,31 +85,32 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about(
-            "Cleanup redundant snapshots and unreferenced objects. \
-            This frees up disk space after creating a pack.",
+        .about("Delete redundant loose snapshots and unreferenced loose objects.")
+        .long_about(
+            "Reclaims data-directory space after snapshots have been packed. \
+             At least one of --loose-snapshots or --loose-objects is required. \
+             When both are selected, redundant loose snapshot indexes are \
+             removed before object reachability is calculated.\n\nPacked data \
+             is not deleted. Use --dry-run to inspect the deletion set.",
         )
         .arg(
             Arg::new("dry_run")
                 .long("dry-run")
-                .help("Do not actually delete anything.")
+                .help("Report what would be deleted without changing the data directory.")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("loose_snapshots")
                 .short('s')
                 .long("loose-snapshots")
-                .help("Delete redundant loose snapshots which exist an a pack.")
+                .help("Delete loose snapshot indexes whose snapshots also exist in a pack.")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("loose_objects")
                 .short('o')
                 .long("loose-objects")
-                .help(
-                    "Delete unreferenced loose objects (which are not needed \
-                    by any snapshot).",
-                )
+                .help("Delete loose objects not referenced by a remaining loose snapshot.")
                 .action(clap::ArgAction::SetTrue),
         )
 }

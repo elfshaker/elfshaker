@@ -30,21 +30,25 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Prints the list of files available in the snapshot.")
+        .about("List files recorded in a snapshot.")
+        .long_about(
+            "Lists file metadata for a snapshot identified by its tag or as \
+             PACK:SNAPSHOT. Output lines are sorted.",
+        )
         .arg(
             Arg::new("snapshot")
                 .index(1)
                 .required(true)
-                .help("Prints the contents of the specified snapshot."),
+                .value_name("SNAPSHOT")
+                .help("Snapshot tag or PACK:SNAPSHOT identifier to inspect."),
         )
         .arg(
             Arg::new("format")
                 .long("format")
+                .value_name("FORMAT")
                 .default_value("%o %b %f")
                 .help(
-                    "Pretty-print each result in the given format, where \
-                    <format> is a string containing one or more of the \
-                    following placeholders:\n\
+                    "Pretty-print each result using placeholders:\n\
                     \t%o - file checksum\n\
                     \t%f - file name\n\
                     \t%h - human-readable size\n\

@@ -73,18 +73,26 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Shows the contents of the files in the snapshot.")
+        .about("Write files from a snapshot to standard output.")
+        .long_about(
+            "Writes the selected snapshot files to standard output in \
+             command-line order. When multiple paths are given, their contents \
+             are concatenated without separators. The command fails without \
+             producing output if any requested path is absent.",
+        )
         .arg(
             Arg::new("snapshot")
                 .required(true)
                 .index(1)
-                .help("The snapshot in which to to look for the files."),
+                .value_name("SNAPSHOT")
+                .help("Snapshot tag or PACK:SNAPSHOT identifier to read."),
         )
         .arg(
             Arg::new("path")
                 .required(true)
                 .index(2)
                 .num_args(1..)
-                .help("Specifies the path(s) to show."),
+                .value_name("PATH")
+                .help("Path within the snapshot to write."),
         )
 }

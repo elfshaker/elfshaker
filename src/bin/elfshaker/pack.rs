@@ -184,26 +184,35 @@ pub(crate) fn get_app() -> Command {
     let compression_level_range = zstd::compression_level_range();
 
     Command::new(SUBCOMMAND)
-        .about("Packs the given snapshots into a pack file.")
+        .about("Combine loose snapshots into a compressed pack.")
+        .long_about(
+            "Creates a compressed pack and pack index from loose snapshots. By \
+             default, all loose snapshots are included. Select snapshots with \
+             positional indexes, --snapshots-from, or --snapshots0-from.\n\nThe \
+             source loose snapshots and objects remain in the data directory. \
+             Use elfshaker gc to remove redundant loose data after the pack is \
+             created.",
+        )
         .arg(
             Arg::new("pack")
                 .required(true)
                 .index(1)
-                .value_name("name")
-                .help("Specifies the name of the pack to create."),
+                .value_name("PACK")
+                .help("Name of the pack to create."),
         )
         .arg(
             Arg::new("threads")
                 .short('T')
                 .long("threads")
-                .help("Use the specified number of worker threads for compression. \
-                      The number of threads used is proportional to the memory needed for compression.")
+                .value_name("N")
+                .help("Use N compression workers; 0 selects the number of physical CPU cores.")
                 .default_value("0"),
         )
         .arg(
             Arg::new("compression-level")
                 .long("compression-level")
-                .help(leak_static_str(format!("The ZStandard compression level to use (up to {}). Negative values enable fast compression.",
+                .value_name("LEVEL")
+                .help(leak_static_str(format!("Use Zstandard compression LEVEL (up to {}); negative values select fast compression.",
                     compression_level_range.end())))
                 .default_value("10")
                 .allow_hyphen_values(true)
@@ -211,34 +220,34 @@ pub(crate) fn get_app() -> Command {
         .arg(
             Arg::new("frames")
                 .long("frames")
+                .value_name("N")
                 .help(
-                    "The number of frames to emit in the pack file. \
-                    A lower number of frames limits the number of decompression \
-                    processes that can run concurrently. A higher number of \
-                    frames can result in poorer compression. Specify 0 to \
-                    auto-detect the appropriate number of frames to emit.")
+                    "Write N independent compression frames. More frames permit \
+                     more parallel decompression but may reduce compression. \
+                     0 selects approximately one frame per 512 MiB of input.")
                 .default_value("0")
         )
         .arg(
             Arg::new("snapshots-from")
                 .long("snapshots-from")
-                .value_name("file")
+                .value_name("FILE")
                 .conflicts_with_all(["snapshots0-from", "indexes"])
-                .help("Reads the list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
+                .help("Read newline-delimited snapshot names from FILE; use - for standard input."),
         )
         .arg(
             Arg::new("snapshots0-from")
                 .long("snapshots0-from")
-                .value_name("file")
+                .value_name("FILE")
                 .conflicts_with_all(["snapshots-from", "indexes"])
-                .help("Reads the NUL-separated (ASCII \\0) list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
+                .help("Read NUL-delimited snapshot names from FILE; use - for standard input."),
         )
         .arg(
             Arg::new("indexes")
                 .index(2)
                 .num_args(0..)
                 .conflicts_with_all(["snapshots-from", "snapshots0-from"])
-                .help("Specify the indexes of packs to include.")
+                .value_name("INDEX")
+                .help("Loose snapshot indexes to include.")
         )
 }
 

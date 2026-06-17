@@ -2,27 +2,29 @@
 .el .ds Aq '
 .TH elfshaker-gc 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-gc \- Cleanup redundant snapshots and unreferenced objects. This frees up disk space after creating a pack.
+elfshaker\-gc \- Delete redundant loose snapshots and unreferenced loose objects.
 .SH SYNOPSIS
 \fBelfshaker gc\fR [\fB\-\-dry\-run\fR] [\fB\-s\fR|\fB\-\-loose\-snapshots\fR] [\fB\-o\fR|\fB\-\-loose\-objects\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
-Cleanup redundant snapshots and unreferenced objects. This frees up disk space after creating a pack.
+Reclaims data\-directory space after snapshots have been packed. At least one of \-\-loose\-snapshots or \-\-loose\-objects is required. When both are selected, redundant loose snapshot indexes are removed before object reachability is calculated.
+.PP
+Packed data is not deleted. Use \-\-dry\-run to inspect the deletion set.
 .SH OPTIONS
 .TP
 \fB\-\-dry\-run\fR
-Do not actually delete anything.
+Report what would be deleted without changing the data directory.
 .TP
 \fB\-s\fR, \fB\-\-loose\-snapshots\fR
-Delete redundant loose snapshots which exist an a pack.
+Delete loose snapshot indexes whose snapshots also exist in a pack.
 .TP
 \fB\-o\fR, \fB\-\-loose\-objects\fR
-Delete unreferenced loose objects (which are not needed by any snapshot).
+Delete loose objects not referenced by a remaining loose snapshot.
 .TP
 \fB\-\-verbose\fR
-Enables verbose description of the execution process.
+Show informational progress and diagnostic messages.
 .TP
-\fB\-\-data\-dir\fR [default: elfshaker_data]
-Set the path to the elfshaker repository.
+\fB\-\-data\-dir\fR \fI<PATH>\fR [default: elfshaker_data]
+Use PATH as the data directory containing packs, indexes, loose objects, remotes, and HEAD. This does not change the working directory.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)

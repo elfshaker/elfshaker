@@ -30,24 +30,33 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Prints the list of snapshots available in the repository.")
+        .about("List snapshots in known pack indexes.")
+        .long_about(
+            "Lists snapshots from every known pack index, or only from the \
+             selected packs when PACK is supplied. Output lines are sorted.",
+        )
         .arg(
             Arg::new("pack")
                 .index(1)
                 .required(false)
                 .num_args(0..)
-                .help("Prints the contents of the specified packs."),
+                .value_name("PACK")
+                .help("Pack index to list; may be repeated."),
         )
-        .arg(Arg::new("format").long("format").default_value("%s").help(
-            "Pretty-print each result in the given format, where \
-                    <format> is a string containing one or more of the \
-                    following placeholders:\n\
-                    \t%s - fully-qualified snapshot\n\
-                    \t%t - snapshot tag\n\
-                    \t%h - human-readable size\n\
-                    \t%b - size in bytes\n\
-                    \t%n - number of files\n",
-        ))
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .value_name("FORMAT")
+                .default_value("%s")
+                .help(
+                    "Pretty-print each result using placeholders:\n\
+                     \t%s - fully-qualified snapshot\n\
+                     \t%t - snapshot tag\n\
+                     \t%h - human-readable size\n\
+                     \t%b - size in bytes\n\
+                     \t%n - number of files\n",
+                ),
+        )
 }
 
 fn format_snapshot_row(

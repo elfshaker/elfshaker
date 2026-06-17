@@ -74,33 +74,41 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
-        .about("Can be used to extract a snapshot.")
+        .about("Restore a snapshot into the working directory.")
+        .long_about(
+            "Restores a snapshot into the working directory and updates HEAD. \
+             A snapshot may be named by its tag or as PACK:SNAPSHOT. If the \
+             snapshot is not available locally, elfshaker refreshes configured \
+             remotes and retries.\n\nBy default, extraction transitions from \
+             HEAD incrementally: files removed from the new snapshot are \
+             deleted, and changed files are checked for unexpected local \
+             modifications. Untracked files are left alone.",
+        )
         .arg(
             Arg::new("snapshot")
                 .required(true)
                 .index(1)
-                .help("The tag of the snapshot to extract."),
+                .value_name("SNAPSHOT")
+                .help("Snapshot tag or PACK:SNAPSHOT identifier to restore."),
         )
         .arg(Arg::new("reset").long("reset").help(
-            "Specifying this ignores the current HEAD and extract all files from the snapshot. \
-            When this flag is not specified, only an incremental file update is done.",
+            "Ignore HEAD and write every file in the snapshot. Files outside the snapshot are not removed.",
         ).action(ArgAction::SetTrue))
         .arg(
             Arg::new("verify")
                 .long("verify")
-                .help("Enables SHA-1 verification of the extracted files. This has a small performance overhead.")
+                .help("Verify each extracted file against its stored SHA-1 checksum.")
                 .action(ArgAction::SetTrue)
         )
         .arg(Arg::new("force")
                 .long("force")
-                .help("Disables certain runtime checks that aim to detect unexpected file modification and prevent data loss.")
+                .help("Overwrite despite checks for unexpected working-directory modifications.")
                 .action(ArgAction::SetTrue)
             )
         .arg(Arg::new("threads")
                 .short('T')
                 .long("threads")
-                // .takes_value(true)
-                .help("Use the specified number of worker threads for decompression. \
-                      The number of threads used is proportional to the memory needed for decompression.")
+                .value_name("N")
+                .help("Use N decompression workers; 0 selects the number of physical CPU cores.")
                 .default_value("0"))
 }

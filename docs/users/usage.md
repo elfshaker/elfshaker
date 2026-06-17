@@ -145,3 +145,10 @@ elfshaker gc --loose-snapshots --loose-objects
 ```
 
 Packed data is not removed.
+
+## Publish packs
+
+To make packs available through `elfshaker clone` and `elfshaker update`,
+follow the [pack publishing guide](publishing.md). It covers remote indexes,
+v1 compatibility, v2 size metadata, safe upload ordering, and validation from
+a clean directory.

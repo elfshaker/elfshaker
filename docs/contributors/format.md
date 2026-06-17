@@ -1,6 +1,8 @@
 # elfshaker File Format
 
 The format of `.pack` and `.pack.idx` files is stable and must only change with major version changes.
+The [ESI index design](esi.md) defines the remote-index formats, endpoint
+versioning, and editing workflow.
 
 ## `.pack` format
 

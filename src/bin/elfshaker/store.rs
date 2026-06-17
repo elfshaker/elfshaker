@@ -66,6 +66,7 @@ pub(crate) fn get_app() -> Command {
             Arg::new("files-from")
                 .long("files-from")
                 .value_name("file")
+                .conflicts_with("files0-from")
                 .help("Reads the list of files to include in the snapshot from the specified file. '-' is taken to mean stdin."),
         )
         .arg(

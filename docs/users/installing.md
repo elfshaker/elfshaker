@@ -24,6 +24,12 @@ ln -sf ~/.local/opt/elfshaker/elfshaker ~/.local/bin/elfshaker
 
 *[How to add directory to PATH?](https://askubuntu.com/questions/60218/how-to-add-a-directory-to-the-path)*
 
+## Building a native Linux package
+
+The repository contains host-native package builders for Debian, Ubuntu,
+Fedora, Red Hat Enterprise Linux, and compatible distributions. See the
+[native package instructions](../../contrib/packages/README.md).
+
 ## Building from source
 
 elfshaker is written in Rust, so you will need to install the Rust build system.

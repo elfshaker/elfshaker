@@ -2,15 +2,17 @@
 .el .ds Aq '
 .TH elfshaker-esi-create 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-esi\-create \- Creates an empty ESI index
+elfshaker\-esi\-create \- Create an empty remote index
 .SH SYNOPSIS
 \fBelfshaker esi create\fR [OPTIONS] <ESI_FILE>
 .SH DESCRIPTION
-Creates an empty ESI index
+Create an empty remote index at ESI_FILE. VERSION selects the ESI wire format: v1 records pack and pack\-index checksums, while v2 also records their byte sizes. URL is the public URL of the index and is the base for relative pack URLs.
+.PP
+The command refuses to replace an existing file unless \-\-force is present. When it replaces a file, it saves the previous contents as ESI_FILE.bak unless \-\-no\-backup is present.
 .SH OPTIONS
 .TP
 \fB\-\-meta\fR \fI<VERSION>\fR
-Wire\-format version to write.
+ESI wire format: v1 records checksums; v2 also records byte sizes.
 .br
 
 .br
@@ -23,19 +25,27 @@ v2
 .RE
 .TP
 \fB\-\-url\fR \fI<URL>\fR
-Public URL recorded in the index.
+Public URL of this index; relative pack URLs are resolved against it.
 .TP
 \fB\-\-force\fR
 Replace an existing ESI file.
 .TP
 \fB\-\-no\-backup\fR
-Do not replace <ESI_FILE>.bak with the previous contents.
+Do not write .bak copies of the previous index contents.
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIESI_FILE\fR>
 ESI file to create.
+.SH EXAMPLES
+Create a v2 index whose published URL is index.v2.esi:
+.PP
+.nf
+\fBelfshaker esi create \-\-meta v2 \-\-url https://example.test/index.v2.esi index.v2.esi\fR
+.fi
+.SH "SEE ALSO"
+elfshaker\-esi(1), elfshaker\-esi\-add(1), elfshaker\-clone(1)

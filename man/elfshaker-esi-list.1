@@ -2,18 +2,26 @@
 .el .ds Aq '
 .TH elfshaker-esi-list 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-esi\-list \- Lists entries in an ESI index
+elfshaker\-esi\-list \- List entries in a remote index
 .SH SYNOPSIS
 \fBelfshaker esi list\fR <ESI_FILE>
 .SH DESCRIPTION
-Lists entries in an ESI index
+Print the entries in ESI_FILE, one per line and in stored order. A v1 line contains the pack\-index checksum, pack checksum, and pack URL. A v2 line appends the pack size and pack\-index size in bytes. Fields are separated by tabs and no heading is printed.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIESI_FILE\fR>
 ESI file to list.
+.SH EXAMPLES
+Print the entries in a v2 index:
+.PP
+.nf
+\fBelfshaker esi list index.v2.esi\fR
+.fi
+.SH "SEE ALSO"
+elfshaker\-esi(1), elfshaker\-esi\-add(1), elfshaker\-esi\-remove(1)

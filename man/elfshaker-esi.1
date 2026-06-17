@@ -2,28 +2,40 @@
 .el .ds Aq '
 .TH elfshaker-esi 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-esi \- Creates and edits elfshaker remote indexes
+elfshaker\-esi \- Create and edit elfshaker remote indexes
 .SH SYNOPSIS
 \fBelfshaker esi\fR [\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
-Creates and edits elfshaker remote indexes
+Create and edit remote index (.esi) files. A remote index is a small published catalog used by clone and update. It tells clients where to find packs and how to verify them. The v1 format records checksums; v2 also records byte sizes. These commands edit explicitly named local files; they do not use an elfshaker data directory.
 .SH OPTIONS
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SH SUBCOMMANDS
 .TP
 elfshaker\-esi\-create(1)
-Creates an empty ESI index
+Create an empty remote index
 .TP
 elfshaker\-esi\-list(1)
-Lists entries in an ESI index
+List entries in a remote index
 .TP
 elfshaker\-esi\-add(1)
-Adds packs to one or more ESI indexes
+Add packs to one or more remote indexes
 .TP
 elfshaker\-esi\-remove(1)
-Removes pack URLs from one or more ESI indexes
+Remove pack URLs from one or more remote indexes
+.SH EXAMPLES
+Create compatible v1 and v2 indexes, then add one pack to both:
+.PP
+.nf
+\fBelfshaker esi create \-\-meta v1 \-\-url https://example.test/index.esi index.esi\fR
+.br
+\fBelfshaker esi create \-\-meta v2 \-\-url https://example.test/index.v2.esi index.v2.esi\fR
+.br
+\fBelfshaker esi add \-\-also index.esi index.v2.esi release.pack\fR
+.fi
+.SH "SEE ALSO"
+elfshaker\-esi\-create(1), elfshaker\-esi\-list(1), elfshaker\-esi\-add(1), elfshaker\-esi\-remove(1), elfshaker\-clone(1), elfshaker\-update(1)

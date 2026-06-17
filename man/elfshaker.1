@@ -33,7 +33,7 @@ A snapshot stored as a loose index and loose objects in the data directory. The 
 A compressed file containing the data used by one or more snapshots. A companion pack index records the snapshots and files available from the pack.
 .TP
 \fBRemote index (.esi)\fR
-A small catalog of packs published by a remote source. It records where each pack can be downloaded and the checksums of the pack and its pack index. The clone and update commands fetch remote indexes and pack indexes. Pack data is downloaded only when needed.
+A small catalog of packs published by a remote source. It records where each pack can be downloaded, the checksums of the pack and its pack index, and, in v2, their sizes. The esi commands create and edit local remote\-index files. The clone and update commands fetch published remote indexes and pack indexes. Pack data is downloaded only when needed.
 .TP
 \fBHEAD\fR
 The snapshot elfshaker uses as the starting point for the next incremental extraction. The store and extract commands update HEAD.
@@ -86,7 +86,7 @@ elfshaker\-clone(1)
 Create a working directory configured from a remote index.
 .TP
 elfshaker\-esi(1)
-Creates and edits elfshaker remote indexes
+Create and edit elfshaker remote indexes
 .TP
 elfshaker\-explode(1)
 Materialize a pack\*(Aqs objects in the loose\-object store.

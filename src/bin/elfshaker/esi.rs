@@ -226,7 +226,14 @@ pub(crate) fn get_app() -> Command {
     Command::new(SUBCOMMAND)
         .subcommand_required(true)
         .arg_required_else_help(true)
-        .about("Creates and edits elfshaker remote indexes")
+        .about("Create and edit elfshaker remote indexes")
+        .long_about(
+            "Create and edit remote index (.esi) files. A remote index is a small \
+             published catalog used by clone and update. It tells clients where \
+             to find packs and how to verify them. The v1 format records checksums; \
+             v2 also records byte sizes. These commands edit explicitly named \
+             local files; they do not use an elfshaker data directory.",
+        )
         .arg(
             Arg::new("data_dir")
                 .long("data-dir")
@@ -235,7 +242,16 @@ pub(crate) fn get_app() -> Command {
         )
         .subcommand(
             Command::new("create")
-                .about("Creates an empty ESI index")
+                .about("Create an empty remote index")
+                .long_about(
+                    "Create an empty remote index at ESI_FILE. VERSION selects the \
+                     ESI wire format: v1 records pack and pack-index checksums, while \
+                     v2 also records their byte sizes. URL is the public URL of the \
+                     index and is the base for relative pack URLs.\n\n\
+                     The command refuses to replace an existing file unless --force \
+                     is present. When it replaces a file, it saves the previous \
+                     contents as ESI_FILE.bak unless --no-backup is present.",
+                )
                 .override_usage("elfshaker esi create [OPTIONS] <ESI_FILE>")
                 .arg(
                     Arg::new("meta")
@@ -243,14 +259,16 @@ pub(crate) fn get_app() -> Command {
                         .required(true)
                         .value_name("VERSION")
                         .value_parser(["v1", "v2"])
-                        .help("Wire-format version to write."),
+                        .help("ESI wire format: v1 records checksums; v2 also records byte sizes."),
                 )
                 .arg(
                     Arg::new("url")
                         .long("url")
                         .required(true)
                         .value_name("URL")
-                        .help("Public URL recorded in the index."),
+                        .help(
+                            "Public URL of this index; relative pack URLs are resolved against it.",
+                        ),
                 )
                 .arg(force_arg("Replace an existing ESI file."))
                 .arg(no_backup_arg())
@@ -264,7 +282,13 @@ pub(crate) fn get_app() -> Command {
         )
         .subcommand(
             Command::new("list")
-                .about("Lists entries in an ESI index")
+                .about("List entries in a remote index")
+                .long_about(
+                    "Print the entries in ESI_FILE, one per line and in stored order. \
+                     A v1 line contains the pack-index checksum, pack checksum, and \
+                     pack URL. A v2 line appends the pack size and pack-index size in \
+                     bytes. Fields are separated by tabs and no heading is printed.",
+                )
                 .override_usage("elfshaker esi list <ESI_FILE>")
                 .arg(
                     Arg::new("esi_file")
@@ -276,7 +300,18 @@ pub(crate) fn get_app() -> Command {
         )
         .subcommand(
             Command::new("add")
-                .about("Adds packs to one or more ESI indexes")
+                .about("Add packs to one or more remote indexes")
+                .long_about(
+                    "Add each PACK to ESI_FILE and every index named by --also. Each \
+                     pack must have an adjacent PACK.idx file. The command reads both \
+                     files, calculates their checksums and sizes, and writes the \
+                     fields required by each target index version.\n\n\
+                     The stored pack URL defaults to the percent-encoded pack \
+                     filename. Use --pack-url to provide another URL when adding one \
+                     pack. An existing URL is an error unless --force replaces it in \
+                     place. All targets are validated before any target changes, and \
+                     changed indexes are backed up unless --no-backup is present.",
+                )
                 .override_usage("elfshaker esi add [OPTIONS] <ESI_FILE> <PACK>...")
                 .arg(force_arg("Replace an entry with the same stored URL."))
                 .arg(no_backup_arg())
@@ -285,7 +320,9 @@ pub(crate) fn get_app() -> Command {
                     Arg::new("pack_url")
                         .long("pack-url")
                         .value_name("PACK_URL")
-                        .help("Stored URL for a single pack; defaults to its filename."),
+                        .help(
+                            "URL to store for one pack; defaults to its percent-encoded filename.",
+                        ),
                 )
                 .arg(
                     Arg::new("esi_file")
@@ -300,12 +337,19 @@ pub(crate) fn get_app() -> Command {
                         .index(2)
                         .num_args(1..)
                         .value_name("PACK")
-                        .help("Pack files to add, in output order."),
+                        .help("Pack files to add; each must have an adjacent PACK.idx file."),
                 ),
         )
         .subcommand(
             Command::new("remove")
-                .about("Removes pack URLs from one or more ESI indexes")
+                .about("Remove pack URLs from one or more remote indexes")
+                .long_about(
+                    "Remove entries whose stored URL exactly matches each PACK_URL \
+                     from ESI_FILE and every index named by --also. A missing URL is \
+                     an error unless --force is present. All targets are validated \
+                     before any target changes, and changed indexes are backed up \
+                     unless --no-backup is present.",
+                )
                 .override_usage("elfshaker esi remove [OPTIONS] <ESI_FILE> <PACK_URL>...")
                 .arg(force_arg("Ignore stored URLs that are not present."))
                 .arg(no_backup_arg())
@@ -339,7 +383,7 @@ fn no_backup_arg() -> Arg {
     Arg::new("no_backup")
         .long("no-backup")
         .action(ArgAction::SetTrue)
-        .help("Do not replace <ESI_FILE>.bak with the previous contents.")
+        .help("Do not write .bak copies of the previous index contents.")
 }
 
 fn also_arg() -> Arg {
@@ -347,7 +391,7 @@ fn also_arg() -> Arg {
         .long("also")
         .value_name("ESI_FILE")
         .action(ArgAction::Append)
-        .help("Apply the operation to another ESI file; may be repeated.")
+        .help("Apply the same operation to another ESI file; may be repeated.")
 }
 
 #[cfg(test)]

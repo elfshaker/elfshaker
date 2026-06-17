@@ -2,33 +2,43 @@
 .el .ds Aq '
 .TH elfshaker-esi-add 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-esi\-add \- Adds packs to one or more ESI indexes
+elfshaker\-esi\-add \- Add packs to one or more remote indexes
 .SH SYNOPSIS
 \fBelfshaker esi add\fR [OPTIONS] <ESI_FILE> <PACK>...
 .SH DESCRIPTION
-Adds packs to one or more ESI indexes
+Add each PACK to ESI_FILE and every index named by \-\-also. Each pack must have an adjacent PACK.idx file. The command reads both files, calculates their checksums and sizes, and writes the fields required by each target index version.
+.PP
+The stored pack URL defaults to the percent\-encoded pack filename. Use \-\-pack\-url to provide another URL when adding one pack. An existing URL is an error unless \-\-force replaces it in place. All targets are validated before any target changes, and changed indexes are backed up unless \-\-no\-backup is present.
 .SH OPTIONS
 .TP
 \fB\-\-force\fR
 Replace an entry with the same stored URL.
 .TP
 \fB\-\-no\-backup\fR
-Do not replace <ESI_FILE>.bak with the previous contents.
+Do not write .bak copies of the previous index contents.
 .TP
 \fB\-\-also\fR \fI<ESI_FILE>\fR
-Apply the operation to another ESI file; may be repeated.
+Apply the same operation to another ESI file; may be repeated.
 .TP
 \fB\-\-pack\-url\fR \fI<PACK_URL>\fR
-Stored URL for a single pack; defaults to its filename.
+URL to store for one pack; defaults to its percent\-encoded filename.
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIESI_FILE\fR>
 Primary ESI file to edit.
 .TP
 <\fIPACK\fR>...
-Pack files to add, in output order.
+Pack files to add; each must have an adjacent PACK.idx file.
+.SH EXAMPLES
+Add one pack to a v1 compatibility index and a v2 index in one operation:
+.PP
+.nf
+\fBelfshaker esi add \-\-also index.esi index.v2.esi release.pack\fR
+.fi
+.SH "SEE ALSO"
+elfshaker\-esi(1), elfshaker\-esi\-create(1), elfshaker\-esi\-list(1)

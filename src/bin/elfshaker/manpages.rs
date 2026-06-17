@@ -51,9 +51,10 @@ const TERMINOLOGY: &[(&str, &str)] = &[
     (
         "Remote index (.esi)",
         "A small catalog of packs published by a remote source. It records where \
-         each pack can be downloaded and the checksums of the pack and its pack \
-         index. The clone and update commands fetch remote indexes and pack \
-         indexes. Pack data is downloaded only when needed.",
+         each pack can be downloaded, the checksums of the pack and its pack \
+         index, and, in v2, their sizes. The esi commands create and edit local \
+         remote-index files. The clone and update commands fetch published remote \
+         indexes and pack indexes. Pack data is downloaded only when needed.",
     ),
     (
         "HEAD",
@@ -86,6 +87,7 @@ fn generate_command(command: &Command, output_dir: &Path) -> io::Result<()> {
     if command.get_name() == "clone" {
         append_clone_example(&output_path)?;
     }
+    append_esi_reference(&output_path)?;
     format_placeholder_list(command, &output_path)?;
     mark_variadic_positionals(command, &output_path)?;
     Ok(())
@@ -140,6 +142,68 @@ fn append_clone_example(output_path: &Path) -> io::Result<()> {
     sections.control("UR", [MANYCLANGS_PROJECT_URL]);
     sections.text([roman(MANYCLANGS_PROJECT_URL)]);
     sections.control("UE", []);
+
+    page.push_str(&sections.to_roff());
+    fs::write(output_path, page)
+}
+
+fn append_esi_reference(output_path: &Path) -> io::Result<()> {
+    let Some(filename) = output_path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+    let (introduction, commands, see_also): (&str, &[&str], &str) = match filename {
+        "elfshaker-esi.1" => (
+            "Create compatible v1 and v2 indexes, then add one pack to both:",
+            &[
+                "elfshaker esi create --meta v1 --url https://example.test/index.esi index.esi",
+                "elfshaker esi create --meta v2 --url https://example.test/index.v2.esi index.v2.esi",
+                "elfshaker esi add --also index.esi index.v2.esi release.pack",
+            ],
+            "elfshaker-esi-create(1), elfshaker-esi-list(1), elfshaker-esi-add(1), \
+             elfshaker-esi-remove(1), elfshaker-clone(1), elfshaker-update(1)",
+        ),
+        "elfshaker-esi-create.1" => (
+            "Create a v2 index whose published URL is index.v2.esi:",
+            &[
+                "elfshaker esi create --meta v2 --url https://example.test/index.v2.esi index.v2.esi",
+            ],
+            "elfshaker-esi(1), elfshaker-esi-add(1), elfshaker-clone(1)",
+        ),
+        "elfshaker-esi-list.1" => (
+            "Print the entries in a v2 index:",
+            &["elfshaker esi list index.v2.esi"],
+            "elfshaker-esi(1), elfshaker-esi-add(1), elfshaker-esi-remove(1)",
+        ),
+        "elfshaker-esi-add.1" => (
+            "Add one pack to a v1 compatibility index and a v2 index in one operation:",
+            &["elfshaker esi add --also index.esi index.v2.esi release.pack"],
+            "elfshaker-esi(1), elfshaker-esi-create(1), elfshaker-esi-list(1)",
+        ),
+        "elfshaker-esi-remove.1" => (
+            "Remove the stored release.pack URL from a v1 compatibility index and a v2 index:",
+            &["elfshaker esi remove --also index.esi index.v2.esi release.pack"],
+            "elfshaker-esi(1), elfshaker-esi-list(1), elfshaker-esi-add(1)",
+        ),
+        _ => return Ok(()),
+    };
+
+    let mut page = fs::read_to_string(output_path)?;
+    let mut sections = Roff::new();
+    sections.control("SH", ["EXAMPLES"]);
+    sections.text([roman(introduction)]);
+    sections.control("PP", []);
+    sections.control("nf", []);
+    let mut command_lines = Vec::new();
+    for (index, command) in commands.iter().enumerate() {
+        if index > 0 {
+            command_lines.push(line_break());
+        }
+        command_lines.push(bold(*command));
+    }
+    sections.text(command_lines);
+    sections.control("fi", []);
+    sections.control("SH", ["SEE ALSO"]);
+    sections.text([roman(see_also)]);
 
     page.push_str(&sections.to_roff());
     fs::write(output_path, page)

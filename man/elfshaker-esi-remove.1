@@ -2,30 +2,38 @@
 .el .ds Aq '
 .TH elfshaker-esi-remove 1  "elfshaker 1.0.0-rc1" "elfshaker Manual"
 .SH NAME
-elfshaker\-esi\-remove \- Removes pack URLs from one or more ESI indexes
+elfshaker\-esi\-remove \- Remove pack URLs from one or more remote indexes
 .SH SYNOPSIS
 \fBelfshaker esi remove\fR [OPTIONS] <ESI_FILE> <PACK_URL>...
 .SH DESCRIPTION
-Removes pack URLs from one or more ESI indexes
+Remove entries whose stored URL exactly matches each PACK_URL from ESI_FILE and every index named by \-\-also. A missing URL is an error unless \-\-force is present. All targets are validated before any target changes, and changed indexes are backed up unless \-\-no\-backup is present.
 .SH OPTIONS
 .TP
 \fB\-\-force\fR
 Ignore stored URLs that are not present.
 .TP
 \fB\-\-no\-backup\fR
-Do not replace <ESI_FILE>.bak with the previous contents.
+Do not write .bak copies of the previous index contents.
 .TP
 \fB\-\-also\fR \fI<ESI_FILE>\fR
-Apply the operation to another ESI file; may be repeated.
+Apply the same operation to another ESI file; may be repeated.
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIESI_FILE\fR>
 Primary ESI file to edit.
 .TP
 <\fIPACK_URL\fR>...
 Stored pack URLs to remove.
+.SH EXAMPLES
+Remove the stored release.pack URL from a v1 compatibility index and a v2 index:
+.PP
+.nf
+\fBelfshaker esi remove \-\-also index.esi index.v2.esi release.pack\fR
+.fi
+.SH "SEE ALSO"
+elfshaker\-esi(1), elfshaker\-esi\-list(1), elfshaker\-esi\-add(1)

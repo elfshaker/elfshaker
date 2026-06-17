@@ -17,11 +17,19 @@ _Avoid_: Repository, working directory
 **Repository**:
 A working directory and its associated data directory.
 
+**Remote index (.esi)**:
+A small published catalog of packs. It records each pack's URL and checksums
+and, in v2, its byte sizes. The `esi` commands edit local remote-index files;
+`clone` and `update` consume their published form.
+
 ## Relationships
 
 - A **Repository** has exactly one **Working directory**
 - A **Repository** has exactly one **Data directory**
 - A **Data directory** may be located outside its **Working directory**
+- A **Remote index** describes packs available from a remote source
+- Publisher-facing `esi` commands edit explicitly named **Remote index** files
+  independently of a **Data directory**
 
 ## Example dialogue
 

@@ -161,6 +161,28 @@ mod tests {
         assert!(esi_create.contains("\\fB\\-\\-meta\\fR \\fI<VERSION>\\fR"));
         assert!(esi_create.contains("\\fB\\-\\-url\\fR \\fI<URL>\\fR"));
         assert!(esi_create.contains("<\\fIESI_FILE\\fR>"));
+        assert!(esi_create.contains("v1 records checksums"));
+
+        for page in [
+            "elfshaker-esi.1",
+            "elfshaker-esi-create.1",
+            "elfshaker-esi-list.1",
+            "elfshaker-esi-add.1",
+            "elfshaker-esi-remove.1",
+        ] {
+            let contents =
+                String::from_utf8(source_pages[Path::new(page)].clone()).expect("valid UTF-8");
+            assert!(
+                contents.contains(".SH EXAMPLES\n"),
+                "{} has no examples",
+                page
+            );
+            assert!(
+                contents.contains(".SH \"SEE ALSO\"\n"),
+                "{} has no cross-references",
+                page
+            );
+        }
 
         for (page, placeholders) in [
             (

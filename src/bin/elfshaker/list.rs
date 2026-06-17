@@ -48,14 +48,14 @@ pub(crate) fn get_app() -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .default_value("%s")
-                .help(
-                    "Pretty-print each result using placeholders:\n\
-                     \t%s - fully-qualified snapshot\n\
-                     \t%t - snapshot tag\n\
-                     \t%h - human-readable size\n\
-                     \t%b - size in bytes\n\
-                     \t%n - number of files\n",
-                ),
+                .help(concat!(
+                    "Pretty-print each result using placeholders:\n",
+                    "  %s - fully-qualified snapshot\n",
+                    "  %t - snapshot tag\n",
+                    "  %h - human-readable size\n",
+                    "  %b - size in bytes\n",
+                    "  %n - number of files",
+                )),
         )
 }
 

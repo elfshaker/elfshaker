@@ -86,6 +86,7 @@ fn generate_command(command: &Command, output_dir: &Path) -> io::Result<()> {
     if command.get_name() == "clone" {
         append_clone_example(&output_path)?;
     }
+    format_placeholder_list(command, &output_path)?;
     mark_variadic_positionals(command, &output_path)?;
     Ok(())
 }
@@ -142,6 +143,60 @@ fn append_clone_example(output_path: &Path) -> io::Result<()> {
 
     page.push_str(&sections.to_roff());
     fs::write(output_path, page)
+}
+
+fn format_placeholder_list(command: &Command, output_path: &Path) -> io::Result<()> {
+    let Some(argument) = command
+        .get_arguments()
+        .find(|argument| argument.get_id() == "format")
+    else {
+        return Ok(());
+    };
+    let Some(help) = argument
+        .get_long_help()
+        .or_else(|| argument.get_help())
+        .map(ToString::to_string)
+    else {
+        return Ok(());
+    };
+
+    let mut lines = help.lines();
+    let Some(introduction) = lines.next() else {
+        return Ok(());
+    };
+    let placeholders = lines
+        .filter_map(|line| line.trim().split_once(" - "))
+        .collect::<Vec<_>>();
+    if placeholders.is_empty() {
+        return Ok(());
+    }
+
+    let mut original = Roff::new();
+    original.text([roman(&help)]);
+
+    let mut replacement = Roff::new();
+    replacement.text([roman(introduction)]);
+    replacement.control("RS", ["4"]);
+    let mut entries = Vec::new();
+    for (index, (placeholder, meaning)) in placeholders.into_iter().enumerate() {
+        if index > 0 {
+            entries.push(line_break());
+        }
+        entries.extend([bold(placeholder), roman(" - "), roman(meaning)]);
+    }
+    replacement.text(entries);
+    replacement.control("RE", []);
+
+    let page = fs::read_to_string(output_path)?;
+    let original = original.to_roff();
+    let replaced = page.replacen(&original, &replacement.to_roff(), 1);
+    if replaced == page {
+        return Err(io::Error::other(format!(
+            "could not find --format help in {}",
+            output_path.display()
+        )));
+    }
+    fs::write(output_path, replaced)
 }
 
 fn mark_variadic_positionals(command: &Command, output_path: &Path) -> io::Result<()> {

@@ -34,13 +34,13 @@ pub(crate) fn get_app() -> Command {
                 .long("format")
                 .value_name("FORMAT")
                 .default_value("%p")
-                .help(
-                    "Pretty-print each result using placeholders:\n\
-                     \t%p - pack\n\
-                     \t%h - human-readable size\n\
-                     \t%b - size in bytes\n\
-                     \t%c - number of snapshots\n",
-                ),
+                .help(concat!(
+                    "Pretty-print each result using placeholders:\n",
+                    "  %p - pack\n",
+                    "  %h - human-readable size\n",
+                    "  %b - size in bytes\n",
+                    "  %c - number of snapshots",
+                )),
         )
 }
 

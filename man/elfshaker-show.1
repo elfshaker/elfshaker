@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-show 1  "show " 
+.SH NAME
+elfshaker\-show \- Shows the contents of the files in the snapshot.
+.SH SYNOPSIS
+\fBelfshaker show\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsnapshot\fR> <\fIpath\fR> 
+.SH DESCRIPTION
+Shows the contents of the files in the snapshot.
+.SH OPTIONS
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIsnapshot\fR>
+The snapshot in which to to look for the files.
+.TP
+<\fIpath\fR>
+Specifies the path(s) to show.

@@ -59,6 +59,9 @@ naerskBuildPackage isWindows target {
   ];
 
   postInstall = ''
+    mkdir -p $out/share/man/man1
+    install -m 0444 man/*.1 $out/share/man/man1/
+
     echo "Removing references to $cratesio_sources"
     remove-references-to -t $cratesio_sources $out/bin/elfshaker${lib.optionalString isWindows ".exe"}
   '';

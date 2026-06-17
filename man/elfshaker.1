@@ -1,0 +1,60 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker 1  "elfshaker 1.0.0-rc1" 
+.SH NAME
+elfshaker
+.SH SYNOPSIS
+\fBelfshaker\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+.SH OPTIONS
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+elfshaker\-extract(1)
+Can be used to extract a snapshot.
+.TP
+elfshaker\-store(1)
+Stores the current state of the repository in a snapshot. The snapshots created in this way can later be packed in a .pack file using the pack command.
+.TP
+elfshaker\-list(1)
+Prints the list of snapshots available in the repository.
+.TP
+elfshaker\-list\-packs(1)
+Prints the list of packs available in the repository.
+.TP
+elfshaker\-list\-files(1)
+Prints the list of files available in the snapshot.
+.TP
+elfshaker\-pack(1)
+Packs the given snapshots into a pack file.
+.TP
+elfshaker\-show(1)
+Shows the contents of the files in the snapshot.
+.TP
+elfshaker\-find(1)
+Searches the repository index.
+.TP
+elfshaker\-gc(1)
+Cleanup redundant snapshots and unreferenced objects. This frees up disk space after creating a pack.
+.TP
+elfshaker\-update(1)
+Updates the remote indexes.
+.TP
+elfshaker\-clone(1)
+Clones a remote repository into a new directory
+.TP
+elfshaker\-explode(1)
+Explodes a pack into loose objects
+.SH VERSION
+v1.0.0\-rc1

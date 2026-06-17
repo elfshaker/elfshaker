@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-clone 1  "clone " 
+.SH NAME
+elfshaker\-clone \- Clones a remote repository into a new directory
+.SH SYNOPSIS
+\fBelfshaker clone\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIrepository\fR> <\fIdirectory\fR> 
+.SH DESCRIPTION
+Clones a remote repository into a new directory
+.SH OPTIONS
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIrepository\fR>
+The URL of the remote repository index (.esi) to clone.
+.TP
+<\fIdirectory\fR>
+The name of a new directory to clone into.

@@ -1,0 +1,34 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-extract 1  "extract " 
+.SH NAME
+elfshaker\-extract \- Can be used to extract a snapshot.
+.SH SYNOPSIS
+\fBelfshaker extract\fR [\fB\-\-reset\fR] [\fB\-\-verify\fR] [\fB\-\-force\fR] [\fB\-T\fR|\fB\-\-threads\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsnapshot\fR> 
+.SH DESCRIPTION
+Can be used to extract a snapshot.
+.SH OPTIONS
+.TP
+\fB\-\-reset\fR
+Specifying this ignores the current HEAD and extract all files from the snapshot. When this flag is not specified, only an incremental file update is done.
+.TP
+\fB\-\-verify\fR
+Enables SHA\-1 verification of the extracted files. This has a small performance overhead.
+.TP
+\fB\-\-force\fR
+Disables certain runtime checks that aim to detect unexpected file modification and prevent data loss.
+.TP
+\fB\-T\fR, \fB\-\-threads\fR [default: 0]
+Use the specified number of worker threads for decompression. The number of threads used is proportional to the memory needed for decompression.
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIsnapshot\fR>
+The tag of the snapshot to extract.

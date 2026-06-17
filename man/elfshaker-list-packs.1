@@ -1,0 +1,27 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-list-packs 1  "list-packs " 
+.SH NAME
+elfshaker\-list\-packs \- Prints the list of packs available in the repository.
+.SH SYNOPSIS
+\fBelfshaker list\-packs\fR [\fB\-\-format\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Prints the list of packs available in the repository.
+.SH OPTIONS
+.TP
+\fB\-\-format\fR [default: %p]
+Pretty\-print each result in the given format, where <format> is a string containing one or more of the following placeholders:
+	%p \- pack
+	%h \- human\-readable size
+	%b \- size in bytes
+	%c \- number of snapshots
+
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

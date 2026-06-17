@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-find 1  "find " 
+.SH NAME
+elfshaker\-find \- Searches the repository index.
+.SH SYNOPSIS
+\fBelfshaker find\fR [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIterm\fR> 
+.SH DESCRIPTION
+Searches the repository index.
+.SH OPTIONS
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIterm\fR> [default: ]
+The search term.

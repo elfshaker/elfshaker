@@ -1,6 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
+mod cli;
 mod clone;
 mod explode;
 mod extract;
@@ -15,7 +16,7 @@ mod store;
 mod update;
 mod utils;
 
-use clap::{Arg, ArgMatches, Command};
+use clap::{ArgMatches, Command};
 use elfshaker::log::Logger;
 use log::error;
 use std::error::Error;
@@ -28,7 +29,7 @@ fn main() {
     // For example: elfshaker find ... | head ...
     utils::silence_broken_pipe();
 
-    let mut app = get_app();
+    let mut app = cli::get_app();
     let matches = app.clone().get_matches();
     let is_verbose = matches.get_flag("verbose");
     Logger::init(if is_verbose {
@@ -65,45 +66,50 @@ fn run_subcommand(app: &mut Command, matches: ArgMatches) -> Result<(), Box<dyn 
     }
 }
 
-fn get_app() -> Command {
-    Command::new("elfshaker")
-        .override_usage("elfshaker [GLOBAL-OPTS] <SUBCOMMAND> [SUBCOMMAND-OPTS]")
-        .version(env!("CARGO_PKG_VERSION"))
-        .subcommand(extract::get_app())
-        .subcommand(store::get_app())
-        .subcommand(list::get_app())
-        .subcommand(list_packs::get_app())
-        .subcommand(list_files::get_app())
-        .subcommand(pack::get_app())
-        .subcommand(show::get_app())
-        .subcommand(find::get_app())
-        .subcommand(gc::get_app())
-        .subcommand(update::get_app())
-        .subcommand(clone::get_app())
-        .subcommand(explode::get_app())
-        .arg(
-            Arg::new("verbose")
-                .long("verbose")
-                .help("Enables verbose description of the execution process.")
-                .global(true)
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("data_dir")
-                .long("data-dir")
-                .env("ELFSHAKER_DATA")
-                .hide_env_values(true)
-                .help("Set the path to the elfshaker repository.")
-                .default_value(elfshaker::repo::REPO_DIR)
-                .global(true),
-        )
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn manpages_in(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "1"))
+            .map(|path| {
+                let name = path.file_name().unwrap().into();
+                (name, fs::read(path).unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn generated_manpages_are_current() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let generated_dir =
+            std::env::temp_dir().join(format!("elfshaker-manpages-{}-{nonce}", std::process::id()));
+        fs::create_dir(&generated_dir).unwrap();
+
+        clap_mangen::generate_to(super::cli::get_app(), &generated_dir).unwrap();
+
+        let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("man");
+        assert_eq!(
+            manpages_in(&source_dir),
+            manpages_in(&generated_dir),
+            "generated manpages differ; run `cargo run --example generate-manpages -- man`"
+        );
+
+        fs::remove_dir_all(generated_dir).unwrap();
+    }
+
     #[test]
     fn show_accepts_multiple_paths() {
-        let matches = super::get_app()
+        let matches = super::cli::get_app()
             .try_get_matches_from(["elfshaker", "show", "snapshot", "first", "second"])
             .unwrap();
         let (_, show) = matches.subcommand().unwrap();
@@ -114,7 +120,7 @@ mod tests {
 
     #[test]
     fn list_accepts_multiple_packs() {
-        let matches = super::get_app()
+        let matches = super::cli::get_app()
             .try_get_matches_from(["elfshaker", "list", "first", "second"])
             .unwrap();
         let (_, list) = matches.subcommand().unwrap();
@@ -125,7 +131,7 @@ mod tests {
 
     #[test]
     fn pack_accepts_multiple_indexes() {
-        let matches = super::get_app()
+        let matches = super::cli::get_app()
             .try_get_matches_from(["elfshaker", "pack", "combined", "first", "second"])
             .unwrap();
         let (_, pack) = matches.subcommand().unwrap();
@@ -140,7 +146,7 @@ mod tests {
 
     #[test]
     fn store_rejects_multiple_file_list_sources() {
-        let error = super::get_app()
+        let error = super::cli::get_app()
             .try_get_matches_from([
                 "elfshaker",
                 "store",
@@ -175,7 +181,9 @@ mod tests {
                     .copied()
                     .filter(|argument| !argument.is_empty()),
             );
-            let error = super::get_app().try_get_matches_from(args).unwrap_err();
+            let error = super::cli::get_app()
+                .try_get_matches_from(args)
+                .unwrap_err();
 
             assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         }

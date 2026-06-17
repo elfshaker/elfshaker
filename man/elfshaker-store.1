@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH elfshaker-store 1  "store " 
+.SH NAME
+elfshaker\-store \- Stores the current state of the repository in a snapshot. The snapshots created in this way can later be packed in a .pack file using the pack command.
+.SH SYNOPSIS
+\fBelfshaker store\fR [\fB\-\-files\-from\fR] [\fB\-\-files0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsnapshot\fR> 
+.SH DESCRIPTION
+Stores the current state of the repository in a snapshot. The snapshots created in this way can later be packed in a .pack file using the pack command.
+.SH OPTIONS
+.TP
+\fB\-\-files\-from\fR \fI<file>\fR
+Reads the list of files to include in the snapshot from the specified file. \*(Aq\-\*(Aq is taken to mean stdin.
+.TP
+\fB\-\-files0\-from\fR \fI<file>\fR
+Reads the NUL\-separated (ASCII \\0) list of files to include in the snapshot from the specified file. \*(Aq\-\*(Aq is taken to mean stdin.
+.TP
+\fB\-\-verbose\fR
+Enables verbose description of the execution process.
+.TP
+\fB\-\-data\-dir\fR [default: elfshaker_data]
+Set the path to the elfshaker repository.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIsnapshot\fR>
+The tag for the newly created snapshot.

@@ -3,6 +3,11 @@
 This directory contains scripts which make use of elfshaker, for example
 scripts to build a [manyclangs](https://github.com/elfshaker/manyclangs) pack.
 
+# Native Linux packages
+
+The [`packages`](packages/README.md) directory contains builders for native DEB
+and RPM packages.
+
 # Building manyclangs packs
 
 These scripts are used to build the packfiles hosted at
@@ -72,4 +77,3 @@ CPU time.
 * Builds happen entirely in tmpfs because the machine has enough RAM.
   * Total storage for 1 month is ~40G ccache (also in tmpfs) + a few gigabytes
     for the elfshaker dir + a few gigabytes for each incremental build.
-

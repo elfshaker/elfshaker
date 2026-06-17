@@ -223,18 +223,21 @@ pub(crate) fn get_app() -> Command {
             Arg::new("snapshots-from")
                 .long("snapshots-from")
                 .value_name("file")
+                .conflicts_with_all(["snapshots0-from", "indexes"])
                 .help("Reads the list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
         )
         .arg(
             Arg::new("snapshots0-from")
                 .long("snapshots0-from")
                 .value_name("file")
+                .conflicts_with_all(["snapshots-from", "indexes"])
                 .help("Reads the NUL-separated (ASCII \\0) list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
         )
         .arg(
             Arg::new("indexes")
                 .index(2)
                 .num_args(0..)
+                .conflicts_with_all(["snapshots-from", "snapshots0-from"])
                 .help("Specify the indexes of packs to include.")
         )
 }

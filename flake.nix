@@ -102,6 +102,25 @@
       args = { inherit naerskBuildPackage rustToolchain; };
       nativePlatform = pkgs.stdenv.buildPlatform;
       nativeArch = nativePlatform.qemuArch; # (the correct spelling)
+      cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      releaseVersion = "v${cargoToml.package.version}";
+
+      releaseBundle = ''
+        make_archive() {
+          archive="$1"
+          binary="$2"
+          installed_name="$3"
+          root="root-$(basename "$archive" .tar.gz)"
+
+          mkdir -p "$root/elfshaker"
+          cp "$binary" "$root/elfshaker/$installed_name"
+          cp ${./README.md} "$root/elfshaker/README.md"
+          cp ${./LICENSE} "$root/elfshaker/LICENSE"
+          cp ${./CONTRIBUTORS} "$root/elfshaker/CONTRIBUTORS"
+          tar czf "$archive" --directory "$root" elfshaker
+          sha256sum "$archive" > "$archive.sha256sum"
+        }
+      '';
 
 
     in {
@@ -127,23 +146,35 @@
 
       release = pkgs.runCommandNoCC "elfshaker-release" {} (
         if nativePlatform.isLinux then ''
-            tar czf elfshaker-aarch64-musl.tar.gz --directory ${packages.elfshaker-aarch64-musl}/bin elfshaker
-            sha256sum elfshaker-aarch64-musl.tar.gz > elfshaker-aarch64-musl.tar.gz.sha256sum
+            ${releaseBundle}
 
-            tar czf elfshaker-x86_64-musl.tar.gz --directory ${packages.elfshaker-x86_64-musl}/bin elfshaker
-            sha256sum elfshaker-x86_64-musl.tar.gz > elfshaker-x86_64-musl.tar.gz.sha256sum
+            make_archive \
+              elfshaker_${releaseVersion}_aarch64-unknown-linux-musl.tar.gz \
+              ${packages.elfshaker-aarch64-musl}/bin/elfshaker \
+              elfshaker
+
+            make_archive \
+              elfshaker_${releaseVersion}_x86_64-unknown-linux-musl.tar.gz \
+              ${packages.elfshaker-x86_64-musl}/bin/elfshaker \
+              elfshaker
 
             ${lib.optionalString (nativePlatform.isx86) ''
-              tar czf elfshaker-x86_64-windows.tar.gz --directory ${packages.elfshaker-x86_64-windows}/bin elfshaker.exe
-              sha256sum elfshaker-x86_64-windows.tar.gz > elfshaker-x86_64-windows.tar.gz.sha256sum
+              make_archive \
+                elfshaker_${releaseVersion}_x86_64-pc-windows-gnu.tar.gz \
+                ${packages.elfshaker-x86_64-windows}/bin/elfshaker.exe \
+                elfshaker.exe
             ''}
 
             mkdir $out
             cp *.tar.gz* $out
         ''
         else if nativePlatform.isDarwin then ''
-          tar czf elfshaker-${nativePlatform.darwinArch}-darwin${nativePlatform.darwinMinVersion}.tar.gz --directory ${packages.elfshaker}/bin elfshaker
-          sha256sum elfshaker-${nativePlatform.darwinArch}-darwin${nativePlatform.darwinMinVersion}.tar.gz > elfshaker-${nativePlatform.darwinArch}-darwin${nativePlatform.darwinMinVersion}.tar.gz.sha256sum
+          ${releaseBundle}
+
+          make_archive \
+            elfshaker_${releaseVersion}_${nativePlatform.config}.tar.gz \
+            ${packages.elfshaker}/bin/elfshaker \
+            elfshaker
 
           mkdir $out
           cp *.tar.gz* $out

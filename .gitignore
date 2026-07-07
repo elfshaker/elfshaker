@@ -1,1 +1,8 @@
 target/
+
+# Generated local data and binaries from contrib experiments.
+contrib/elfshaker-serve/commits.txt
+contrib/elfshaker-serve/elfshaker-serve
+contrib/elfshaker-serve/snapshots.txt
+contrib/elfshaker-serve/trace.log
+contrib/manyclangs-builder/manyclangs-builder

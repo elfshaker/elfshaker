@@ -4,13 +4,14 @@
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
 use crate::entrypool::{EntryPool, Handle};
+use crate::legacy_path::{LegacyPathError, LegacyWirePath};
 pub use crate::packpath::{PackPath, PackPathError};
 use crate::repo::{
     fs::{create_file, open_file},
     partition_by_u64,
 };
 
-use serde::de::{SeqAccess, Visitor};
+use serde::de::Visitor;
 use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
 use sha1::{Digest, Sha1};
 use std::borrow::Cow;
@@ -38,6 +39,10 @@ pub enum PackError {
     SerializeError(rmp_serde::encode::Error),
     BadMagic,
     BadPackVersion([u8; 4]),
+    UnknownRequiredFeatures(u64),
+    UnsupportedPathEncoding(String),
+    InvalidLogicalPath(PackPathError),
+    PathNotRepresentable(PackPath, PackPathError),
 }
 
 impl std::error::Error for PackError {}
@@ -72,8 +77,20 @@ impl std::fmt::Display for PackError {
             PackError::BadMagic => write!(f, "Bad pack magic, expected ELFS!"),
             PackError::BadPackVersion(v) => write!(
                 f,
-                "Pack version is too recent ({v:?}), please upgrade elfshaker!"
+                "Unsupported pack version {}; this elfshaker supports versions 1 through {}",
+                u32::from_be_bytes(*v),
+                PackIndex::MAX_VERSION
             ),
+            PackError::UnknownRequiredFeatures(bits) => {
+                write!(f, "Pack requires unsupported features: 0x{bits:x}")
+            }
+            PackError::UnsupportedPathEncoding(error) => {
+                write!(f, "Unsupported legacy path encoding: {error}")
+            }
+            PackError::InvalidLogicalPath(error) => write!(f, "Invalid pack path: {error}"),
+            PackError::PathNotRepresentable(path, error) => {
+                write!(f, "Pack path '{path}' is not representable: {error}")
+            }
         }
     }
 }
@@ -294,7 +311,7 @@ impl FileEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileEntryRef<'a> {
-    pub path: &'a OsStr,
+    pub path: OsString,
     pub checksum: &'a ObjectChecksum,
     pub object_metadata: &'a ObjectMetadata,
     pub file_metadata: FileMetadata,
@@ -302,7 +319,7 @@ pub struct FileEntryRef<'a> {
 
 impl<'a> FileEntryRef<'a> {
     pub fn new(
-        path: &'a OsStr,
+        path: OsString,
         checksum: &'a ObjectChecksum,
         object_metadata: &'a ObjectMetadata,
         file_metadata: FileMetadata,
@@ -319,7 +336,7 @@ impl<'a> FileEntryRef<'a> {
 impl<'a> From<FileEntryRef<'a>> for FileEntry {
     fn from(entry_ref: FileEntryRef<'a>) -> Self {
         FileEntry {
-            path: entry_ref.path.to_owned(),
+            path: entry_ref.path,
             checksum: *entry_ref.checksum,
             object_metadata: *entry_ref.object_metadata,
             file_metadata: entry_ref.file_metadata,
@@ -338,7 +355,7 @@ pub struct PackIndex {
     snapshot_tags: Vec<String>,
     snapshot_deltas: Vec<ChangeSet<FileHandle>>,
 
-    path_pool: EntryPool<OsString>,
+    path_pool: EntryPool<PackPath>,
     object_pool: EntryPool<ObjectChecksum>,
     object_metadata: BTreeMap<Handle, ObjectMetadata>,
 
@@ -425,7 +442,14 @@ impl PackIndex {
                 .path_pool
                 .lookup(handle.path)
                 .ok_or(PackError::PathNotFound(handle.path))?
-                .clone(),
+                .to_native()
+                .map_err(|error| {
+                    PackError::PathNotRepresentable(
+                        self.path_pool.lookup(handle.path).unwrap().clone(),
+                        error,
+                    )
+                })?
+                .into_os_string(),
             checksum: *self
                 .object_pool
                 .lookup(handle.object)
@@ -442,7 +466,15 @@ impl PackIndex {
             path: self
                 .path_pool
                 .lookup(handle.path)
-                .ok_or(PackError::PathNotFound(handle.path))?,
+                .ok_or(PackError::PathNotFound(handle.path))?
+                .to_native()
+                .map_err(|error| {
+                    PackError::PathNotRepresentable(
+                        self.path_pool.lookup(handle.path).unwrap().clone(),
+                        error,
+                    )
+                })?
+                .into_os_string(),
             checksum: self
                 .object_pool
                 .lookup(handle.object)
@@ -456,7 +488,10 @@ impl PackIndex {
         self.object_metadata
             .insert(object_handle, entry.object_metadata);
         Ok(FileHandle {
-            path: self.path_pool.get_or_insert(&entry.path),
+            path: self.path_pool.get_or_insert(
+                &PackPath::from_native(Path::new(&entry.path))
+                    .map_err(PackError::InvalidLogicalPath)?,
+            ),
             object: object_handle,
             file_metadata: entry.file_metadata,
         })
@@ -557,9 +592,9 @@ impl PackIndex {
         let handles = self.resolve_snapshot(snapshot)?;
         // Map FileHandle to FileEntry, which contains path and checksum
         let mut entries = self.entry_refs_from_handles(handles.iter()).ok()?;
-        entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(b.path)));
+        entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(&b.path)));
         let hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
-            hasher.update(os_str_as_bytes(entry.path));
+            hasher.update(os_str_as_bytes(&entry.path));
             hasher.update(entry.checksum);
             hasher.update(entry.file_metadata.mode.to_be_bytes());
             hasher
@@ -586,45 +621,37 @@ impl PackIndex {
 
     pub fn parse<R: Read>(rd: R) -> Result<PackIndex, PackError> {
         let mut rd = BufReader::new(rd);
-        Self::read_magic(&mut rd)?;
-
-        Ok(rmp_serde::decode::from_read(rd)?)
+        match Self::read_magic(&mut rd)? {
+            1 | 2 => Self::parse_legacy(rd, LoadMode::Full),
+            3 => Self::parse_v3(rd, LoadMode::Full),
+            version => Err(PackError::BadPackVersion(version.to_be_bytes())),
+        }
     }
 
     pub fn load_only_snapshots<P: AsRef<Path>>(p: P) -> Result<Vec<String>, PackError> {
         let rd = open_file(p.as_ref())?;
         let mut rd = BufReader::new(rd);
-        Self::read_magic(&mut rd)?;
-        Self::read_snapshot_tags(rd)
-    }
-
-    // Read the outer array header separately so listing snapshots leaves the
-    // potentially large index tables unread.
-    fn read_snapshot_tags(mut rd: impl Read) -> Result<Vec<String>, PackError> {
-        let fields =
-            rmp::decode::read_array_len(&mut rd).map_err(rmp_serde::decode::Error::from)?;
-        if fields != 5 {
-            return Err(rmp_serde::decode::Error::LengthMismatch(5).into());
-        }
-        Ok(rmp_serde::from_read(rd)?)
+        let index = match Self::read_magic(&mut rd)? {
+            1 | 2 => Self::parse_legacy(rd, LoadMode::OnlySnapshots),
+            3 => Self::parse_v3(rd, LoadMode::OnlySnapshots),
+            version => Err(PackError::BadPackVersion(version.to_be_bytes())),
+        }?;
+        Ok(index.snapshot_tags)
     }
 
     pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
         // TODO: Use AtomicCreateFile.
         let wr = create_file(p.as_ref(), None)?;
         let mut wr = BufWriter::new(wr);
-        Self::write_magic(&mut wr)?;
-
-        rmp_serde::encode::write(&mut wr, self)?;
+        self.write(&mut wr)?;
         Ok(())
     }
 
-    // Max supported version of the pack index by this version of elfshaker.
-    // It's intended to remain backwards compatible with previous packs.
-    // When changing the on-disk format it's necessary to bump this integer.
-    const MAX_VERSION: u32 = 2;
+    const MAX_VERSION: u32 = 3;
+    const WRITE_VERSION: u32 = 3;
+    const SUPPORTED_REQUIRED_FEATURES: u64 = 0;
 
-    fn read_magic(rd: &mut impl Read) -> Result<(), PackError> {
+    fn read_magic(rd: &mut impl Read) -> Result<u32, PackError> {
         let mut magic = [0; 4];
         rd.read_exact(&mut magic)?;
         if magic.ne(b"ELFS") {
@@ -632,100 +659,427 @@ impl PackIndex {
         }
         let mut version = [0; 4];
         rd.read_exact(&mut version)?;
-        if u32::from_be_bytes(version) > PackIndex::MAX_VERSION {
+        if !(1..=PackIndex::MAX_VERSION).contains(&u32::from_be_bytes(version)) {
             return Err(PackError::BadPackVersion(version));
         }
-        Ok(())
+        Ok(u32::from_be_bytes(version))
     }
 
     fn write_magic(wr: &mut impl Write) -> std::io::Result<()> {
         wr.write_all(b"ELFS")?;
-        wr.write_all(&u32::to_be_bytes(PackIndex::MAX_VERSION)[..])?;
+        wr.write_all(&u32::to_be_bytes(PackIndex::WRITE_VERSION)[..])?;
         Ok(())
     }
-}
 
-struct VisitPackIndex;
+    fn write(&self, wr: &mut impl Write) -> Result<(), PackError> {
+        Self::write_magic(wr)?;
+        rmp_serde::encode::write(wr, &V3Index::from(self))?;
+        Ok(())
+    }
 
-fn next_expecting<'de, T, V, E>(seq: &mut V) -> Result<T, E>
-where
-    T: Deserialize<'de>,
-    V: SeqAccess<'de>,
-    E: serde::de::Error + std::convert::From<<V as serde::de::SeqAccess<'de>>::Error>,
-{
-    seq.next_element::<T>()?
-        .ok_or_else(|| serde::de::Error::custom(format!("expected {}", std::any::type_name::<T>())))
-}
+    fn parse_legacy<R: Read>(mut rd: R, load_mode: LoadMode) -> Result<Self, PackError> {
+        let fields =
+            rmp::decode::read_array_len(&mut rd).map_err(rmp_serde::decode::Error::from)?;
+        if fields != 5 {
+            return Err(rmp_serde::decode::Error::LengthMismatch(5).into());
+        }
+        let snapshot_tags = rmp_serde::from_read(&mut rd)?;
+        if load_mode == LoadMode::OnlySnapshots {
+            return Ok(Self {
+                snapshot_tags,
+                ..Self::new()
+            });
+        }
+        Self::from_legacy(LegacyIndex {
+            snapshot_tags,
+            snapshot_deltas: rmp_serde::from_read(&mut rd)?,
+            path_pool: rmp_serde::from_read(&mut rd)?,
+            object_pool: rmp_serde::from_read(&mut rd)?,
+            object_metadata: rmp_serde::from_read(&mut rd)?,
+        })
+    }
 
-impl<'de> Visitor<'de> for VisitPackIndex {
-    type Value = PackIndex;
+    fn parse_v3<R: Read>(mut rd: R, load_mode: LoadMode) -> Result<Self, PackError> {
+        // Read the envelope fields directly so listing leaves index tables unread
+        // and unsupported features fail before their entry encoding is inspected.
+        let fields =
+            rmp::decode::read_array_len(&mut rd).map_err(rmp_serde::decode::Error::from)?;
+        if fields < 2 {
+            return Err(rmp_serde::decode::Error::LengthMismatch(2).into());
+        }
+        let required_features: u64 = rmp_serde::from_read(&mut rd)?;
+        let snapshot_tags = rmp_serde::from_read(&mut rd)?;
+        if load_mode == LoadMode::OnlySnapshots {
+            return Ok(Self {
+                snapshot_tags,
+                ..Self::new()
+            });
+        }
+        let unsupported = required_features & !Self::SUPPORTED_REQUIRED_FEATURES;
+        if unsupported != 0 {
+            return Err(PackError::UnknownRequiredFeatures(unsupported));
+        }
+        if fields != 7 {
+            return Err(rmp_serde::decode::Error::LengthMismatch(7).into());
+        }
+        let wire = V3WireIndex {
+            snapshot_tags,
+            snapshot_deltas: rmp_serde::from_read(&mut rd)?,
+            path_pool: rmp_serde::from_read(&mut rd)?,
+            object_pool: rmp_serde::from_read(&mut rd)?,
+            object_metadata: rmp_serde::from_read(&mut rd)?,
+        };
+        let _extensions: Vec<OptionalExtension> = rmp_serde::from_read(&mut rd)?;
+        Self::from_v3(wire)
+    }
 
-    fn visit_seq<V>(self, mut seq: V) -> Result<PackIndex, V::Error>
-    where
-        V: SeqAccess<'de>,
-    {
-        let mut result = PackIndex::new();
-        result.snapshot_tags = next_expecting(&mut seq)?;
-        result.snapshot_deltas = next_expecting(&mut seq)?;
-        result.path_pool = next_expecting(&mut seq)?;
-        result.object_pool = next_expecting(&mut seq)?;
-        let md: Vec<ObjectMetadata> = next_expecting(&mut seq)?;
-        result.object_metadata = md
+    fn from_legacy(wire: LegacyIndex) -> Result<Self, PackError> {
+        let mut path_pool = EntryPool::new();
+        for path in wire.path_pool.iter() {
+            let path = path.clone().decode().map_err(|error| match error {
+                LegacyPathError::UnsupportedWindowsUtf16(units) => {
+                    PackError::UnsupportedPathEncoding(format!("Windows UTF-16 units {units:x?}"))
+                }
+                LegacyPathError::InvalidLogicalPath(error) => PackError::InvalidLogicalPath(error),
+            })?;
+            path_pool.get_or_insert(&path);
+        }
+        Ok(Self::from_parts(
+            wire.snapshot_tags,
+            wire.snapshot_deltas,
+            path_pool,
+            wire.object_pool,
+            wire.object_metadata,
+        ))
+    }
+
+    fn from_v3(wire: V3WireIndex) -> Result<Self, PackError> {
+        let mut path_pool = EntryPool::new();
+        for path in wire.path_pool.iter() {
+            let path = PackPath::new(path.0.clone()).map_err(PackError::InvalidLogicalPath)?;
+            path_pool.get_or_insert(&path);
+        }
+        let snapshot_deltas = wire
+            .snapshot_deltas
             .into_iter()
-            .enumerate()
-            .map(|(i, md)| ((i as Handle), md))
+            .map(ChangeSet::from)
             .collect();
-
-        Ok(result)
+        Ok(Self::from_parts(
+            wire.snapshot_tags,
+            snapshot_deltas,
+            path_pool,
+            wire.object_pool,
+            wire.object_metadata,
+        ))
     }
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("PathIndex")
+
+    fn from_parts(
+        snapshot_tags: Vec<String>,
+        snapshot_deltas: Vec<ChangeSet<FileHandle>>,
+        path_pool: EntryPool<PackPath>,
+        object_pool: EntryPool<ObjectChecksum>,
+        object_metadata: Vec<ObjectMetadata>,
+    ) -> Self {
+        Self {
+            snapshot_tags,
+            snapshot_deltas,
+            path_pool,
+            object_pool,
+            object_metadata: object_metadata
+                .into_iter()
+                .enumerate()
+                .map(|(index, metadata)| (index as Handle, metadata))
+                .collect(),
+            current: HashSet::new(),
+        }
     }
 }
 
-impl<'de> Deserialize<'de> for PackIndex {
-    fn deserialize<D>(deserializer: D) -> Result<PackIndex, D::Error>
+#[derive(Clone, Copy, PartialEq)]
+enum LoadMode {
+    Full,
+    OnlySnapshots,
+}
+
+struct LegacyIndex {
+    snapshot_tags: Vec<String>,
+    snapshot_deltas: Vec<ChangeSet<FileHandle>>,
+    path_pool: EntryPool<LegacyWirePath>,
+    object_pool: EntryPool<ObjectChecksum>,
+    object_metadata: Vec<ObjectMetadata>,
+}
+
+#[derive(Serialize, Deserialize)]
+enum EntryMetadata {
+    Regular { mode: u32 },
+}
+
+#[derive(Serialize, Deserialize)]
+struct V3FileHandle {
+    path: Handle,
+    object: Handle,
+    metadata: EntryMetadata,
+}
+
+impl From<FileHandle> for V3FileHandle {
+    fn from(handle: FileHandle) -> Self {
+        Self {
+            path: handle.path,
+            object: handle.object,
+            metadata: EntryMetadata::Regular {
+                mode: handle.file_metadata.mode,
+            },
+        }
+    }
+}
+
+impl From<V3FileHandle> for FileHandle {
+    fn from(handle: V3FileHandle) -> Self {
+        let mode = match handle.metadata {
+            EntryMetadata::Regular { mode } => mode,
+        };
+        Self::new(handle.path, handle.object, FileMetadata { mode })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct V3ChangeSet<T> {
+    added: Vec<T>,
+    removed: Vec<T>,
+}
+
+impl From<&ChangeSet<FileHandle>> for V3ChangeSet<V3FileHandle> {
+    fn from(changes: &ChangeSet<FileHandle>) -> Self {
+        Self {
+            added: changes.added.iter().copied().map(Into::into).collect(),
+            removed: changes.removed.iter().copied().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<V3ChangeSet<V3FileHandle>> for ChangeSet<FileHandle> {
+    fn from(changes: V3ChangeSet<V3FileHandle>) -> Self {
+        Self {
+            added: changes.added.into_iter().map(Into::into).collect(),
+            removed: changes.removed.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct OptionalExtension {
+    kind: u32,
+    payload: Vec<u8>,
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct BinaryPath(Vec<u8>);
+
+impl<'de> Deserialize<'de> for BinaryPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(VisitPackIndex)
+        struct BinaryPathVisitor;
+
+        impl<'de> Visitor<'de> for BinaryPathVisitor {
+            type Value = BinaryPath;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a binary pack path")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E> {
+                Ok(BinaryPath(value.to_vec()))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(BinaryPath(value))
+            }
+        }
+
+        deserializer.deserialize_byte_buf(BinaryPathVisitor)
     }
 }
 
-impl Serialize for PackIndex {
+struct V3WireIndex {
+    snapshot_tags: Vec<String>,
+    snapshot_deltas: Vec<V3ChangeSet<V3FileHandle>>,
+    path_pool: EntryPool<BinaryPath>,
+    object_pool: EntryPool<ObjectChecksum>,
+    object_metadata: Vec<ObjectMetadata>,
+}
+
+struct V3Index<'a> {
+    index: &'a PackIndex,
+}
+
+impl<'a> From<&'a PackIndex> for V3Index<'a> {
+    fn from(index: &'a PackIndex) -> Self {
+        Self { index }
+    }
+}
+
+impl Serialize for V3Index<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut s = serializer.serialize_tuple(5)?;
-        s.serialize_element(&self.snapshot_tags)?;
-        s.serialize_element(&self.snapshot_deltas)?;
-        s.serialize_element(&self.path_pool)?;
-        s.serialize_element(&self.object_pool)?;
-        // Ordering comes from BTreeMap keys, so is for free.
-        s.serialize_element(
+        let mut tuple = serializer.serialize_tuple(7)?;
+        tuple.serialize_element(&0u64)?;
+        tuple.serialize_element(&self.index.snapshot_tags)?;
+        tuple.serialize_element(
             &self
+                .index
+                .snapshot_deltas
+                .iter()
+                .map(V3ChangeSet::from)
+                .collect::<Vec<_>>(),
+        )?;
+        tuple.serialize_element(&self.index.path_pool)?;
+        tuple.serialize_element(&self.index.object_pool)?;
+        tuple.serialize_element(
+            &self
+                .index
                 .object_metadata
                 .values()
-                .cloned()
-                .collect::<Vec<ObjectMetadata>>(),
+                .copied()
+                .collect::<Vec<_>>(),
         )?;
-        s.end()
+        tuple.serialize_element(&Vec::<OptionalExtension>::new())?;
+        tuple.end()
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod format_tests {
     use super::*;
+
+    fn with_v3_header(body: Vec<u8>) -> Vec<u8> {
+        let mut bytes = b"ELFS\0\0\0\x03".to_vec();
+        bytes.extend(body);
+        bytes
+    }
+
+    #[test]
+    fn v3_snapshot_listing_respects_array_length() {
+        for fields in [0, 1] {
+            let mut bytes = vec![0x90 + fields];
+            rmp_serde::encode::write(&mut bytes, &0u64).unwrap();
+            rmp_serde::encode::write(&mut bytes, &vec!["snapshot"]).unwrap();
+            assert!(PackIndex::parse_v3(bytes.as_slice(), LoadMode::OnlySnapshots).is_err());
+        }
+    }
 
     #[test]
     fn snapshot_listing_reads_index_prefix() {
+        let tags = vec!["first".to_owned(), "second".to_owned()];
+        let legacy = rmp_serde::to_vec(&(
+            &tags,
+            Vec::<()>::new(),
+            Vec::<()>::new(),
+            Vec::<()>::new(),
+            Vec::<()>::new(),
+        ))
+        .unwrap();
+        let mut reader = legacy.as_slice();
+        let listed = PackIndex::parse_legacy(&mut reader, LoadMode::OnlySnapshots).unwrap();
+        assert_eq!(listed.snapshot_tags(), tags);
+        assert!(!reader.is_empty(), "legacy index tables remain unread");
+
         let mut index = PackIndex::new();
-        index.snapshot_tags = vec!["first".into(), "second".into()];
-        let bytes = rmp_serde::to_vec(&index).unwrap();
-        let mut reader = bytes.as_slice();
-        let listed = PackIndex::read_snapshot_tags(&mut reader).unwrap();
-        assert_eq!(listed, index.snapshot_tags);
-        assert!(!reader.is_empty(), "index tables remain unread");
+        index.snapshot_tags = tags;
+        let mut bytes = Vec::new();
+        index.write(&mut bytes).unwrap();
+        let mut reader = &bytes[8..];
+        let listed = PackIndex::parse_v3(&mut reader, LoadMode::OnlySnapshots).unwrap();
+        assert_eq!(listed.snapshot_tags(), index.snapshot_tags());
+        assert!(!reader.is_empty(), "version 3 index tables remain unread");
+    }
+
+    #[test]
+    fn empty_v3_encoding_is_golden() {
+        let mut bytes = Vec::new();
+        PackIndex::new().write(&mut bytes).unwrap();
+        assert_eq!(
+            bytes,
+            [b'E', b'L', b'F', b'S', 0, 0, 0, 3, 0x97, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,]
+        );
+    }
+
+    #[test]
+    fn v3_round_trip_uses_binary_paths_and_regular_metadata() {
+        let entry = FileEntry::new(
+            OsString::from("dir/résumé"),
+            [7; 20],
+            ObjectMetadata {
+                offset: LOOSE_OBJECT_OFFSET,
+                size: 42,
+            },
+            FileMetadata { mode: 0o100640 },
+        );
+        let mut index = PackIndex::new();
+        index
+            .push_snapshot("snapshot".to_owned(), [entry.clone()])
+            .unwrap();
+
+        let mut bytes = Vec::new();
+        index.write(&mut bytes).unwrap();
+        assert_eq!(&bytes[..8], b"ELFS\0\0\0\x03");
+
+        let decoded = PackIndex::parse(bytes.as_slice()).unwrap();
+        let handles = decoded.resolve_snapshot("snapshot").unwrap();
+        assert_eq!(
+            decoded.entries_from_handles(handles.iter()).unwrap(),
+            [entry]
+        );
+    }
+
+    #[test]
+    fn required_features_fail_before_entry_decoding_but_not_snapshot_listing() {
+        let body = rmp_serde::to_vec(&(1u64, vec!["snapshot"])).unwrap();
+        let bytes = with_v3_header(body);
+        assert!(matches!(
+            PackIndex::parse(bytes.as_slice()),
+            Err(PackError::UnknownRequiredFeatures(1))
+        ));
+
+        let mut body = &bytes[8..];
+        let snapshots = PackIndex::parse_v3(&mut body, LoadMode::OnlySnapshots).unwrap();
+        assert_eq!(snapshots.snapshot_tags(), &["snapshot"]);
+    }
+
+    #[test]
+    fn unknown_optional_extensions_are_ignored() {
+        let body = rmp_serde::to_vec(&(
+            0u64,
+            vec!["snapshot"],
+            Vec::<V3ChangeSet<V3FileHandle>>::new(),
+            Vec::<PackPath>::new(),
+            Vec::<ObjectChecksum>::new(),
+            Vec::<ObjectMetadata>::new(),
+            vec![OptionalExtension {
+                kind: 77,
+                payload: vec![1, 2, 3],
+            }],
+        ))
+        .unwrap();
+        let index = PackIndex::parse(with_v3_header(body).as_slice()).unwrap();
+        assert_eq!(index.snapshot_tags(), &["snapshot"]);
+    }
+
+    #[test]
+    fn version_three_is_rejected_by_the_legacy_header_rule() {
+        let mut bytes = Vec::new();
+        PackIndex::new().write(&mut bytes).unwrap();
+        let version = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        assert!(version > 2);
+    }
+    #[test]
+    fn version_zero_is_rejected_without_dispatching() {
+        assert!(matches!(
+            PackIndex::parse(b"ELFS\0\0\0\0".as_slice()),
+            Err(PackError::BadPackVersion([0, 0, 0, 0]))
+        ));
     }
 }

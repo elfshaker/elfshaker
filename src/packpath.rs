@@ -6,6 +6,9 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
+use serde::de::{Error as DeError, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 /// A canonical path inside an elfshaker snapshot.
 ///
 /// Components are separated by `/`. Component bytes are otherwise preserved.
@@ -133,6 +136,48 @@ impl TryFrom<&str> for PackPath {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::new(value.as_bytes())
+    }
+}
+
+impl Serialize for PackPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(self.as_bytes())
+    }
+}
+
+impl<'de> Deserialize<'de> for PackPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PackPathVisitor;
+
+        impl<'de> Visitor<'de> for PackPathVisitor {
+            type Value = PackPath;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a canonical binary pack path")
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
+            where
+                E: DeError,
+            {
+                PackPath::new(value).map_err(E::custom)
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: DeError,
+            {
+                PackPath::new(value).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_byte_buf(PackPathVisitor)
     }
 }
 

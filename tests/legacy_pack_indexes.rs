@@ -80,3 +80,22 @@ fn snapshot_only_reads_do_not_decode_legacy_paths() {
         assert!(!tags.is_empty(), "{} has no snapshot tags", name);
     }
 }
+
+#[test]
+fn all_legacy_fixtures_load_as_regular_file_snapshots() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy");
+    for name in [
+        "linux-v1.pack.idx",
+        "windows-v1.pack.idx",
+        "linux-v2.pack.idx",
+        "windows-v2.pack.idx",
+    ] {
+        let index = PackIndex::load(directory.join(name)).unwrap();
+        let tag = index.snapshot_tags().first().unwrap();
+        let handles = index.resolve_snapshot(tag).unwrap();
+        assert!(!index
+            .entries_from_handles(handles.iter())
+            .unwrap()
+            .is_empty());
+    }
+}

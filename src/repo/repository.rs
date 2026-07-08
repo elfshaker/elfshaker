@@ -35,7 +35,10 @@ use crate::{
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
 };
 use crate::{
-    packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath},
+    packidx::{
+        EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath,
+        SymlinkTargetEncoding, SymlinkTargetKind,
+    },
     repo::fs::create_empty,
 };
 use sha1::{Digest, Sha1};
@@ -711,9 +714,31 @@ impl Repository {
         let threads = num_cpus::get();
 
         let pack_entries = run_in_parallel(threads, files.into_iter(), |(file_path, pack_path)| {
-            let mut fd = match File::open(&file_path) {
+            let source_path = self.path.join(&file_path);
+            let metadata = fs::symlink_metadata(&source_path)?;
+            if metadata.file_type().is_symlink() {
+                let target = fs::read_link(&source_path)?;
+                let (buf, target_encoding) = encode_symlink_target(&target)?;
+                let target_kind = symlink_target_kind(&source_path, &metadata);
+                let checksum: [u8; 20] = Sha1::digest(&buf).into();
+                self.write_loose_object(&*buf, &temp_dir, &checksum)?;
+                return Ok(FileEntry::new(
+                    pack_path,
+                    checksum,
+                    ObjectMetadata {
+                        offset: LOOSE_OBJECT_OFFSET,
+                        size: buf.len() as u64,
+                    },
+                    EntryMetadata::Symlink {
+                        target_encoding,
+                        target_kind,
+                    },
+                ));
+            }
+
+            let mut fd = match File::open(&source_path) {
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                    let md = fs::metadata(&file_path)?;
+                    let md = fs::metadata(&source_path)?;
                     if md.len() != 0 {
                         return Err(e);
                     }
@@ -1737,7 +1762,7 @@ where
                 format!("duplicate snapshot path {:?}", path),
             ));
         }
-        reject_symlink_components(repo_dir, &path)?;
+        reject_symlink_ancestors(repo_dir, &path)?;
         cleaned.push(path);
     }
 
@@ -1775,21 +1800,95 @@ fn normalize_relative_path(path: &Path) -> io::Result<PathBuf> {
     Ok(normalized)
 }
 
-fn reject_symlink_components(repo_dir: &Path, path: &Path) -> io::Result<()> {
+fn reject_symlink_ancestors(repo_dir: &Path, path: &Path) -> io::Result<()> {
     let mut candidate = repo_dir.to_owned();
-    for component in path.components() {
+    for component in path.parent().into_iter().flat_map(Path::components) {
         candidate.push(component);
         if fs::symlink_metadata(&candidate)?.file_type().is_symlink() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "symbolic link input '{}' is not supported until symlink entries are enabled",
+                    "snapshot path '{}' traverses a symbolic link",
                     path.display()
                 ),
             ));
         }
     }
     Ok(())
+}
+
+fn encode_symlink_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
+    if let Some(portable) = portable_symlink_target(target) {
+        return Ok((portable, SymlinkTargetEncoding::PortableUtf8));
+    }
+    encode_native_symlink_target(target)
+}
+
+fn portable_symlink_target(target: &Path) -> Option<Vec<u8>> {
+    let text = target.to_str()?;
+    if text.is_empty() || target.is_absolute() {
+        return None;
+    }
+
+    #[cfg(windows)]
+    let text = text.replace('\\', "/");
+    #[cfg(not(windows))]
+    let text = {
+        if text.contains('\\') {
+            return None;
+        }
+        text.to_owned()
+    };
+
+    let bytes = text.as_bytes();
+    let windows_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if text.starts_with('/') || windows_prefix {
+        None
+    } else {
+        Some(bytes.to_vec())
+    }
+}
+
+#[cfg(unix)]
+fn encode_native_symlink_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok((
+        target.as_os_str().as_bytes().to_vec(),
+        SymlinkTargetEncoding::UnixBytes,
+    ))
+}
+
+#[cfg(windows)]
+fn encode_native_symlink_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
+    use std::os::windows::ffi::OsStrExt;
+    let bytes = target
+        .as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    Ok((bytes, SymlinkTargetEncoding::WindowsUtf16Le))
+}
+
+#[cfg(unix)]
+fn symlink_target_kind(path: &Path, _metadata: &fs::Metadata) -> SymlinkTargetKind {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => SymlinkTargetKind::Directory,
+        Ok(_) => SymlinkTargetKind::File,
+        Err(_) => SymlinkTargetKind::Unknown,
+    }
+}
+
+#[cfg(windows)]
+fn symlink_target_kind(_path: &Path, metadata: &fs::Metadata) -> SymlinkTargetKind {
+    use std::os::windows::fs::FileTypeExt;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink_dir() {
+        SymlinkTargetKind::Directory
+    } else if file_type.is_symlink_file() {
+        SymlinkTargetKind::File
+    } else {
+        SymlinkTargetKind::Unknown
+    }
 }
 
 #[cfg(test)]
@@ -1854,7 +1953,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn clean_file_list_rejects_symlink_inputs_and_ancestors() {
+    fn clean_file_list_accepts_symlink_entries_but_rejects_symlink_ancestors() {
         use std::os::unix::fs::symlink;
 
         let root = temp_tree("target");
@@ -1864,7 +1963,12 @@ mod tests {
         symlink("directory", root.join("linked-directory")).unwrap();
         let data_dir = root.join("elfshaker_data");
 
-        assert!(clean_file_list(&root, &data_dir, [PathBuf::from("link")].iter()).is_err());
+        assert_eq!(
+            clean_file_list(&root, &data_dir, [PathBuf::from("link")].iter())
+                .unwrap()
+                .collect::<Vec<_>>(),
+            [PathBuf::from("link")]
+        );
         assert!(clean_file_list(
             &root,
             &data_dir,
@@ -1872,6 +1976,69 @@ mod tests {
         )
         .is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_snapshot_stores_symlink_targets_as_objects() -> Result<(), Error> {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_tree("target");
+        symlink("target", root.join("link"))?;
+        symlink("missing", root.join("dangling"))?;
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+
+        let mut repo = Repository::open_with_data_dir(&root, &data_dir)?;
+        let snapshot = SnapshotId::new(PackId::for_loose_snapshot("links")?, "links")?;
+        repo.create_snapshot(
+            &snapshot,
+            [PathBuf::from("link"), PathBuf::from("dangling")].iter(),
+        )?;
+
+        let index = repo.load_index(snapshot.pack())?;
+        let handles = index.resolve_snapshot("links").unwrap();
+        let mut entries = index.entries_from_handles(handles.iter())?;
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            fs::read(repo.loose_object_path(&entries[0].checksum))?,
+            b"missing"
+        );
+        assert_eq!(
+            entries[0].metadata,
+            EntryMetadata::Symlink {
+                target_encoding: SymlinkTargetEncoding::PortableUtf8,
+                target_kind: SymlinkTargetKind::Unknown,
+            }
+        );
+        assert_eq!(
+            fs::read(repo.loose_object_path(&entries[1].checksum))?,
+            b"target"
+        );
+        assert_eq!(
+            entries[1].metadata,
+            EntryMetadata::Symlink {
+                target_encoding: SymlinkTargetEncoding::PortableUtf8,
+                target_kind: SymlinkTargetKind::File,
+            }
+        );
+
+        drop(repo);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_unix_symlink_targets_retain_their_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let target = Path::new(std::ffi::OsStr::from_bytes(b"native-\xff"));
+        assert_eq!(
+            encode_symlink_target(target).unwrap(),
+            (b"native-\xff".to_vec(), SymlinkTargetEncoding::UnixBytes)
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use clap::{Arg, ArgMatches, Command};
 use std::error::Error;
 
 use super::utils::{format_size, open_repo_from_cwd};
-use elfshaker::packidx::{ObjectChecksum, PackPath};
+use elfshaker::packidx::{EntryMetadata, ObjectChecksum, PackPath};
 use elfshaker::repo::{Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "list-files";
@@ -53,7 +53,8 @@ pub(crate) fn get_app() -> Command {
                     "  %f - file name\n",
                     "  %h - human-readable size\n",
                     "  %b - size in bytes\n",
-                    "  %p - permissions",
+                    "  %p - permissions, or - for a symbolic link\n",
+                    "  %k - entry kind: file or symlink",
                 )),
         )
 }
@@ -63,14 +64,19 @@ fn format_file_row(
     checksum: &ObjectChecksum,
     file_name: &PackPath,
     size: u64,
-    file_mode: u32,
+    metadata: EntryMetadata,
 ) -> String {
+    let (kind, permissions) = match metadata {
+        EntryMetadata::Regular { mode } => ("file", format!("{mode:o}")),
+        EntryMetadata::Symlink { .. } => ("symlink", "-".to_owned()),
+    };
     fmt.to_owned()
         .replace("%o", &hex::encode(checksum))
         .replace("%f", &file_name.escaped())
         .replace("%h", &format_size(size))
         .replace("%b", &size.to_string())
-        .replace("%p", &format!("{:o}", file_mode))
+        .replace("%p", &permissions)
+        .replace("%k", kind)
 }
 
 fn print_files(
@@ -92,7 +98,7 @@ fn print_files(
                 &entry.checksum,
                 &entry.path,
                 entry.object_metadata.size,
-                entry.metadata.regular_mode(),
+                entry.metadata,
             )
         })
         .collect();
@@ -114,12 +120,42 @@ mod tests {
     fn file_rows_preserve_utf8_and_escape_other_bytes() {
         let checksum = [0; 20];
         let utf8 = PackPath::new("目录/résumé".as_bytes()).unwrap();
-        assert!(format_file_row("%f", &checksum, &utf8, 0, 0).contains("目录/résumé"));
+        assert!(format_file_row(
+            "%f",
+            &checksum,
+            &utf8,
+            0,
+            EntryMetadata::Regular { mode: 0 }
+        )
+        .contains("目录/résumé"));
 
         let binary = PackPath::new(b"dir/control\n/non-utf8-\xff".to_vec()).unwrap();
         assert_eq!(
-            format_file_row("%f", &checksum, &binary, 0, 0),
+            format_file_row(
+                "%f",
+                &checksum,
+                &binary,
+                0,
+                EntryMetadata::Regular { mode: 0 }
+            ),
             "dir/control%0A/non-utf8-%FF"
         );
+    }
+
+    #[test]
+    fn file_rows_expose_symlink_kind_without_permissions() {
+        let checksum = [0; 20];
+        let path = PackPath::new(b"link".to_vec()).unwrap();
+        let row = format_file_row(
+            "%k %p %f",
+            &checksum,
+            &path,
+            6,
+            EntryMetadata::Symlink {
+                target_encoding: elfshaker::packidx::SymlinkTargetEncoding::PortableUtf8,
+                target_kind: elfshaker::packidx::SymlinkTargetKind::Unknown,
+            },
+        );
+        assert_eq!(row, "symlink - link");
     }
 }

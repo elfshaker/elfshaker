@@ -664,6 +664,62 @@ impl Repository {
         self.extract_entries_preflighted(pack_id, entries, path, opts)
     }
 
+    pub fn read_entry_objects(
+        &mut self,
+        pack_id: &PackId,
+        entries: &[FileEntry],
+        num_workers: u32,
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        let objects = if self.is_pack_loose(pack_id) {
+            entries
+                .iter()
+                .cloned()
+                .map(|entry| {
+                    if entry.object_metadata.size == 0
+                        && matches!(entry.metadata, EntryMetadata::Regular { .. })
+                    {
+                        Ok((entry, Vec::new()))
+                    } else {
+                        fs::read(self.loose_object_path(&entry.checksum))
+                            .map(|object| (entry, object))
+                    }
+                })
+                .collect::<io::Result<Vec<_>>>()?
+        } else {
+            let pack = match self.open_pack(pack_id) {
+                Ok(pack) => pack,
+                Err(_) => {
+                    self.update_remote_pack(pack_id)?;
+                    self.open_pack(pack_id)?
+                }
+            };
+            pack.read_entry_objects(entries, num_workers)?
+        };
+
+        let objects = objects
+            .into_iter()
+            .map(|(entry, object)| {
+                if entry.object_metadata.size != 0 || entry.metadata.is_symlink() {
+                    let checksum: ObjectChecksum = Sha1::digest(&object).into();
+                    if checksum != entry.checksum {
+                        return Err(PackError::ChecksumMismatch(entry.checksum, checksum));
+                    }
+                }
+                Ok(((entry.path, entry.checksum, entry.metadata), object))
+            })
+            .collect::<Result<HashMap<_, _>, PackError>>()?;
+
+        entries
+            .iter()
+            .map(|entry| {
+                objects
+                    .get(&(entry.path.clone(), entry.checksum, entry.metadata))
+                    .cloned()
+                    .ok_or_else(|| PackError::ObjectNotFound.into())
+            })
+            .collect()
+    }
+
     fn extract_entries_preflighted(
         &mut self,
         pack_id: &PackId,

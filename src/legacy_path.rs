@@ -25,7 +25,7 @@ impl fmt::Display for LegacyPathError {
 
 impl std::error::Error for LegacyPathError {}
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub(crate) enum LegacyWirePath {
     Unix(Vec<u8>),
     Windows(Vec<u16>),

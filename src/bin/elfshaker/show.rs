@@ -2,13 +2,10 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{builder::OsStringValueParser, Arg, ArgMatches, Command};
-use rand::Rng;
 use std::{collections::HashMap, error::Error, ffi::OsString, path::Path};
 
 use super::utils::open_repo_from_cwd;
 use elfshaker::packidx::PackPath;
-use elfshaker::repo::fs::open_file;
-use elfshaker::repo::ExtractOptions;
 
 pub(crate) const SUBCOMMAND: &str = "show";
 
@@ -47,30 +44,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         None => return Err("Some of the paths did not match files in the snapshot!".into()),
     };
 
-    let temp_dir = {
-        let mut bytes = [0u8; 32];
-        rand::rng().fill_bytes(&mut bytes);
-        hex::encode(bytes)
-    };
-    let temp_dir = std::env::temp_dir().join(temp_dir);
-
-    let mut do_extract = || -> Result<(), Box<dyn Error>> {
-        let mut opts = ExtractOptions::default();
-        opts.set_verify(true);
-
-        repo.extract_entries(snapshot.pack(), &selected_entries, &temp_dir, opts)?;
-
-        // Dump the contents of all entries to stdout.
-        for e in &selected_entries {
-            let path = temp_dir.join(e.path.to_native()?);
-            std::io::copy(&mut open_file(path)?, &mut std::io::stdout())?;
-        }
-        Ok(())
-    };
-
-    let extract_result = do_extract();
-    std::fs::remove_dir_all(temp_dir)?;
-    extract_result?;
+    let objects = repo.read_entry_objects(snapshot.pack(), &selected_entries, 1)?;
+    let mut stdout = std::io::stdout().lock();
+    for object in objects {
+        std::io::Write::write_all(&mut stdout, &object)?;
+    }
 
     Ok(())
 }

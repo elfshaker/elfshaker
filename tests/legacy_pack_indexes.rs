@@ -1,5 +1,8 @@
 use sha1::{Digest, Sha1};
 use std::convert::TryInto;
+use std::path::Path;
+
+use elfshaker::packidx::PackIndex;
 
 struct Fixture {
     index: &'static [u8],
@@ -61,5 +64,19 @@ fn legacy_fixture_contents_are_stable() {
     for fixture in FIXTURES {
         assert_eq!(sha1(fixture.index), fixture.index_sha1);
         assert_eq!(sha1(fixture.pack), fixture.pack_sha1);
+    }
+}
+
+#[test]
+fn snapshot_only_reads_do_not_decode_legacy_paths() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy");
+    for name in [
+        "linux-v1.pack.idx",
+        "windows-v1.pack.idx",
+        "linux-v2.pack.idx",
+        "windows-v2.pack.idx",
+    ] {
+        let tags = PackIndex::load_only_snapshots(directory.join(name)).unwrap();
+        assert!(!tags.is_empty(), "{} has no snapshot tags", name);
     }
 }

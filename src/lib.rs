@@ -5,6 +5,7 @@ pub mod atomicfile;
 pub mod batch;
 pub mod entrypool;
 pub mod esi;
+mod legacy_path;
 pub mod log;
 pub mod packidx;
 pub mod packpath;

@@ -114,7 +114,7 @@ fn read_files_list(mut reader: impl io::Read, separator: u8) -> io::Result<Vec<P
 
 fn find_files() -> Vec<PathBuf> {
     WalkDir::new(".")
-        .follow_links(true)
+        .follow_links(false)
         .into_iter()
         .filter_entry(|p| {
             p.path()

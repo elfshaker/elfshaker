@@ -24,7 +24,7 @@ jobs:
     steps:
     - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
       with:
-        # Include PR parents and the pinned pre-v2 history needed below.
+        # Retain the pinned legacy reader and both PR merge parents.
         fetch-depth: 0
     - name: Decide whether to run Nix
       id: nix-policy
@@ -55,6 +55,16 @@ jobs:
         cargo build --release --manifest-path /tmp/elfshaker-pre-v2/Cargo.toml --target-dir /tmp/elfshaker-pre-v2-target
     - name: Run ESI compatibility checks
       run: ./test-scripts/check-esi.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack /tmp/elfshaker-pre-v2-target/release/elfshaker
+    - name: Verify pre-v2 elfshaker rejects version 3
+      run: |
+        temp_dir=$(mktemp -d)
+        cd "$temp_dir"
+        printf 'version three\n' > file
+        "$GITHUB_WORKSPACE/target/release/elfshaker" store snapshot
+        if /tmp/elfshaker-pre-v2-target/release/elfshaker list; then
+          echo 'pre-v2 elfshaker accepted a version 3 index'
+          exit 1
+        fi
     - name: Generate random pack
       run: |
         pack=$(contrib/create-test-pack ./target/release/elfshaker 5 64)
@@ -119,4 +129,16 @@ jobs:
     steps:
     - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
     - name: Run unit tests
+      run: cargo test --verbose
+
+  portable-pack-hosts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+    - name: Run portable pack tests
       run: cargo test --verbose

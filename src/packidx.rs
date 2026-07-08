@@ -4,6 +4,7 @@
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
 use crate::entrypool::{EntryPool, Handle};
+pub use crate::packpath::{PackPath, PackPathError};
 use crate::repo::{
     fs::{create_file, open_file},
     partition_by_u64,

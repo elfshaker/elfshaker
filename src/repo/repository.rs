@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use super::{constants::*, fs::set_file_mode, pack::IdError};
+use super::{constants::*, pack::IdError};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -22,7 +22,7 @@ use super::constants::REPO_DIR;
 use super::error::Error;
 use super::fs::{
     create_file, create_temp_path, ensure_dir, get_last_modified, open_file, remove_empty_dirs,
-    write_file_atomic, write_file_atomic_or_existing, EmptyDirectoryCleanupQueue, FileMode,
+    write_file_atomic, write_file_atomic_or_existing, EmptyDirectoryCleanupQueue,
     MetadataFileModeExt,
 };
 use super::pack::{
@@ -30,17 +30,13 @@ use super::pack::{
 };
 use super::remote;
 use super::symlink;
+use crate::packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath};
+#[cfg(test)]
+use crate::packidx::{SymlinkTargetEncoding, SymlinkTargetKind};
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
-};
-use crate::{
-    packidx::{
-        EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath,
-        SymlinkTargetEncoding, SymlinkTargetKind,
-    },
-    repo::fs::create_empty,
 };
 use sha1::{Digest, Sha1};
 use unicode_normalization::UnicodeNormalization;
@@ -541,6 +537,13 @@ impl Repository {
             removed.sort();
             (updated, removed)
         };
+        let removable_ancestors = removed_paths
+            .iter()
+            .map(|path| {
+                path.to_native()
+                    .map_err(|error| PackError::PathNotRepresentable((*path).clone(), error))
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
         // Logical compatibility concerns the complete target snapshot. Filesystem
         // traversal concerns only paths this checkout will mutate.
         preflight_destination_ancestors(
@@ -549,6 +552,7 @@ impl Repository {
                 .iter()
                 .map(|entry| &entry.path)
                 .chain(removed_paths.iter().copied()),
+            &removable_ancestors,
         )?;
         symlink::probe(
             &self.path,
@@ -576,7 +580,7 @@ impl Repository {
                         PackError::PathNotRepresentable(entry.path.clone(), error)
                     })?,
                 );
-                self.check_changed_since(head_time.unwrap(), &path_buf)?;
+                self.check_entry_unchanged_since(entry, head_time.unwrap(), &path_buf)?;
             }
         }
 
@@ -587,7 +591,14 @@ impl Repository {
             path_buf.push(&self.path);
             path_buf.push(path);
             // Delete the file
-            match fs::remove_file(&path_buf) {
+            let is_symlink = fs::symlink_metadata(&path_buf)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false);
+            match if is_symlink {
+                symlink::remove_leaf(&path_buf)
+            } else {
+                fs::remove_file(&path_buf)
+            } {
                 // Nothing to remove.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 // It's a directory, delete recursively.
@@ -637,7 +648,11 @@ impl Repository {
             entries.iter().map(|entry| &entry.path),
             TargetPlatform::current(),
         )?;
-        preflight_destination_ancestors(path, entries.iter().map(|entry| &entry.path))?;
+        preflight_destination_ancestors(
+            path,
+            entries.iter().map(|entry| &entry.path),
+            &HashSet::new(),
+        )?;
         symlink::probe(
             path,
             entries.iter().filter_map(|entry| match entry.metadata {
@@ -779,8 +794,8 @@ impl Repository {
             let metadata = fs::symlink_metadata(&source_path)?;
             if metadata.file_type().is_symlink() {
                 let target = fs::read_link(&source_path)?;
-                let (buf, target_encoding) = encode_symlink_target(&target)?;
-                let target_kind = symlink_target_kind(&source_path, &metadata);
+                let (buf, target_encoding) = symlink::encode_target(&target)?;
+                let target_kind = symlink::target_kind(&source_path, &metadata);
                 let checksum: [u8; 20] = Sha1::digest(&buf).into();
                 self.write_loose_object(&*buf, &temp_dir, &checksum)?;
                 return Ok(FileEntry::new(
@@ -1405,26 +1420,27 @@ impl Repository {
                             target_kind,
                             &dest_path,
                         )?;
+                        if verify {
+                            symlink::verify_materialized(
+                                &entry.path,
+                                &dest_path,
+                                target_encoding,
+                                target_kind,
+                                &entry.checksum,
+                            )?;
+                        }
                         return Ok(None);
                     }
                     EntryMetadata::Regular { mode } => {
                         if entry.object_metadata.size == 0 {
-                            // Special case empty files, which aren't represented in
-                            // the store and have extra handling for missing permissions.
-                            create_empty(&dest_path, mode)?;
-                            return Ok(Some((dest_path, entry.checksum)));
+                            symlink::materialize_regular(io::empty(), &dest_path, mode)?;
+                        } else {
+                            symlink::materialize_regular(
+                                open_file(&object_path)?,
+                                &dest_path,
+                                mode,
+                            )?;
                         }
-                        fs::copy(&object_path, &dest_path).map_err(|e| {
-                            io::Error::new(
-                                e.kind(),
-                                format!(
-                                    "couldn't copy loose object {} to {}",
-                                    object_path.display(),
-                                    dest_path.display()
-                                ),
-                            )
-                        })?;
-                        set_file_mode(&dest_path, FileMode(mode))?;
                     }
                 }
                 Ok(Some((dest_path, entry.checksum)))
@@ -1507,18 +1523,39 @@ impl Repository {
         (added, removed)
     }
 
-    fn check_changed_since(&self, head_time: SystemTime, path: &Path) -> Result<(), Error> {
-        let last_modified = fs::metadata(path)
-            // The modification date of the file is unknown, there is no other
-            // option to fallback on, so we mark the directory as dirty.
-            .map_err(|_| {
-                warn!("Expected file {:?} to be present!", path);
-                // If the file is missing that also means it has been modified!
-                Error::DirtyWorkDir
-            })
-            // If the modification date of the file is unknown, there is no
-            // other option to fallback on, so we mark the directory as dirty.
-            .and_then(|metadata| get_last_modified(metadata).ok_or(Error::DirtyWorkDir))?;
+    fn check_entry_unchanged_since(
+        &self,
+        entry: &FileEntry,
+        head_time: SystemTime,
+        path: &Path,
+    ) -> Result<(), Error> {
+        let metadata = fs::symlink_metadata(path).map_err(|_| {
+            warn!("Expected entry {:?} to be present!", path);
+            Error::DirtyWorkDir
+        })?;
+        let kind_matches = match entry.metadata {
+            EntryMetadata::Regular { .. } => metadata.is_file(),
+            EntryMetadata::Symlink {
+                target_encoding,
+                target_kind,
+            } => {
+                metadata.file_type().is_symlink()
+                    && symlink::verify_materialized(
+                        &entry.path,
+                        path,
+                        target_encoding,
+                        target_kind,
+                        &entry.checksum,
+                    )
+                    .is_ok()
+            }
+        };
+        if !kind_matches {
+            warn!("Entry {} has changed kind or symlink target", entry.path);
+            return Err(Error::DirtyWorkDir);
+        }
+
+        let last_modified = get_last_modified(metadata).ok_or(Error::DirtyWorkDir)?;
 
         if head_time < last_modified {
             warn!(
@@ -1691,12 +1728,13 @@ impl TargetPlatform {
 fn preflight_destination_ancestors<'a>(
     destination: &Path,
     paths: impl IntoIterator<Item = &'a PackPath>,
+    removable_ancestors: &HashSet<PathBuf>,
 ) -> Result<(), Error> {
     for path in paths {
         let native = path
             .to_native()
             .map_err(|error| PackError::PathNotRepresentable(path.clone(), error))?;
-        check_destination_ancestors(destination, &native)?;
+        check_destination_ancestors(destination, &native, removable_ancestors)?;
     }
     Ok(())
 }
@@ -1796,13 +1834,21 @@ fn is_component_prefix(prefix: &[Vec<u8>], path: &[Vec<u8>]) -> bool {
     prefix.len() < path.len() && path.starts_with(prefix)
 }
 
-fn check_destination_ancestors(destination: &Path, relative: &Path) -> Result<(), PackError> {
-    let components = relative.components().collect::<Vec<_>>();
+fn check_destination_ancestors(
+    destination: &Path,
+    relative: &Path,
+    removable_ancestors: &HashSet<PathBuf>,
+) -> Result<(), PackError> {
     let mut current = destination.to_owned();
-    for component in components {
+    let mut current_relative = PathBuf::new();
+    for component in relative.parent().into_iter().flat_map(Path::components) {
         current.push(component.as_os_str());
+        current_relative.push(component.as_os_str());
         match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    && !removable_ancestors.contains(&current_relative) =>
+            {
                 return Err(PackError::SymlinkedDestination(current));
             }
             Ok(_) => {}
@@ -1906,80 +1952,6 @@ fn reject_symlink_ancestors(repo_dir: &Path, path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-fn encode_symlink_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
-    if let Some(portable) = portable_symlink_target(target) {
-        return Ok((portable, SymlinkTargetEncoding::PortableUtf8));
-    }
-    encode_native_symlink_target(target)
-}
-
-fn portable_symlink_target(target: &Path) -> Option<Vec<u8>> {
-    let text = target.to_str()?;
-    if text.is_empty() || target.is_absolute() {
-        return None;
-    }
-
-    #[cfg(windows)]
-    let text = text.replace('\\', "/");
-    #[cfg(not(windows))]
-    let text = {
-        if text.contains('\\') {
-            return None;
-        }
-        text.to_owned()
-    };
-
-    let bytes = text.as_bytes();
-    let windows_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    if text.starts_with('/') || windows_prefix {
-        None
-    } else {
-        Some(bytes.to_vec())
-    }
-}
-
-#[cfg(unix)]
-fn encode_native_symlink_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
-    use std::os::unix::ffi::OsStrExt;
-    Ok((
-        target.as_os_str().as_bytes().to_vec(),
-        SymlinkTargetEncoding::UnixBytes,
-    ))
-}
-
-#[cfg(windows)]
-fn encode_native_symlink_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
-    use std::os::windows::ffi::OsStrExt;
-    let bytes = target
-        .as_os_str()
-        .encode_wide()
-        .flat_map(u16::to_le_bytes)
-        .collect();
-    Ok((bytes, SymlinkTargetEncoding::WindowsUtf16Le))
-}
-
-#[cfg(unix)]
-fn symlink_target_kind(path: &Path, _metadata: &fs::Metadata) -> SymlinkTargetKind {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => SymlinkTargetKind::Directory,
-        Ok(_) => SymlinkTargetKind::File,
-        Err(_) => SymlinkTargetKind::Unknown,
-    }
-}
-
-#[cfg(windows)]
-fn symlink_target_kind(_path: &Path, metadata: &fs::Metadata) -> SymlinkTargetKind {
-    use std::os::windows::fs::FileTypeExt;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink_dir() {
-        SymlinkTargetKind::Directory
-    } else if file_type.is_symlink_file() {
-        SymlinkTargetKind::File
-    } else {
-        SymlinkTargetKind::Unknown
-    }
 }
 
 #[cfg(test)]
@@ -2140,9 +2112,139 @@ mod tests {
 
         let target = Path::new(std::ffi::OsStr::from_bytes(b"native-\xff"));
         assert_eq!(
-            encode_symlink_target(target).unwrap(),
+            symlink::encode_target(target).unwrap(),
             (b"native-\xff".to_vec(), SymlinkTargetEncoding::UnixBytes)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incremental_extraction_handles_file_link_and_directory_transitions() -> Result<(), Error> {
+        use std::ops::ControlFlow;
+        use std::os::unix::fs::symlink;
+
+        let root = temp_tree("target");
+        let data_dir = root.join(REPO_DIR);
+        fs::create_dir_all(&data_dir)?;
+        let mut source = Repository::open_with_data_dir(&root, &data_dir)?;
+
+        let make_snapshot = |tag: &str| -> Result<SnapshotId, Error> {
+            Ok(SnapshotId::new(PackId::for_loose_snapshot(tag)?, tag)?)
+        };
+        let regular = make_snapshot("regular")?;
+        fs::write(root.join("node"), b"regular")?;
+        source.create_snapshot(&regular, [PathBuf::from("node")].iter())?;
+
+        let link = make_snapshot("link")?;
+        fs::remove_file(root.join("node"))?;
+        symlink("target", root.join("node"))?;
+        source.create_snapshot(&link, [PathBuf::from("node")].iter())?;
+
+        let directory = make_snapshot("directory")?;
+        fs::remove_file(root.join("node"))?;
+        fs::create_dir(root.join("node"))?;
+        fs::write(root.join("node/child"), b"child")?;
+        source.create_snapshot(&directory, [PathBuf::from("node/child")].iter())?;
+
+        let regular_again = make_snapshot("regular-again")?;
+        fs::remove_file(root.join("node/child"))?;
+        fs::remove_dir(root.join("node"))?;
+        fs::write(root.join("node"), b"again")?;
+        source.create_snapshot(&regular_again, [PathBuf::from("node")].iter())?;
+
+        let mut packed_index = PackIndex::new();
+        for snapshot in [&regular, &link, &directory, &regular_again] {
+            let index = source.load_index(snapshot.pack())?;
+            let result = index.for_each_snapshot(|tag, entries| {
+                match packed_index.push_snapshot(tag.to_owned(), entries.clone()) {
+                    Ok(()) => ControlFlow::Continue(()),
+                    Err(error) => ControlFlow::Break(Err(error)),
+                }
+            })?;
+            if let Some(result) = result {
+                result?;
+            }
+        }
+        let packed = PackId::Pack("transitions".to_owned());
+        source.create_pack(
+            &packed,
+            packed_index,
+            &PackOptions {
+                compression_window_log: 20,
+                compression_level: 1,
+                num_workers: 1,
+                num_frames: 1,
+            },
+            &ProgressReporter::dummy(),
+        )?;
+        drop(source);
+
+        for (name, snapshots) in [
+            (
+                "loose",
+                [
+                    regular.clone(),
+                    link.clone(),
+                    directory.clone(),
+                    regular_again.clone(),
+                ],
+            ),
+            (
+                "packed",
+                [
+                    SnapshotId::new(packed.clone(), "regular")?,
+                    SnapshotId::new(packed.clone(), "link")?,
+                    SnapshotId::new(packed.clone(), "directory")?,
+                    SnapshotId::new(packed.clone(), "regular-again")?,
+                ],
+            ),
+        ] {
+            let checkout_root = root.join(format!("checkout-{name}"));
+            fs::create_dir(&checkout_root)?;
+            let mut checkout = Repository::open_with_data_dir(&checkout_root, &data_dir)?;
+            let mut reset = ExtractOptions::default();
+            reset.set_reset(true);
+            reset.set_force(true);
+            checkout.extract_snapshot(snapshots[0].clone(), reset)?;
+            assert_eq!(fs::read(checkout_root.join("node"))?, b"regular");
+
+            checkout.extract_snapshot(snapshots[1].clone(), ExtractOptions::default())?;
+            assert_eq!(
+                fs::read_link(checkout_root.join("node"))?,
+                Path::new("target")
+            );
+
+            fs::remove_file(checkout_root.join("node"))?;
+            symlink("changed", checkout_root.join("node"))?;
+            assert!(matches!(
+                checkout.extract_snapshot(snapshots[2].clone(), ExtractOptions::default()),
+                Err(Error::DirtyWorkDir)
+            ));
+
+            let mut force = ExtractOptions::default();
+            force.set_force(true);
+            checkout.extract_snapshot(snapshots[2].clone(), force)?;
+            assert_eq!(fs::read(checkout_root.join("node/child"))?, b"child");
+
+            checkout.extract_snapshot(snapshots[3].clone(), ExtractOptions::default())?;
+            assert_eq!(fs::read(checkout_root.join("node"))?, b"again");
+            checkout.extract_snapshot(snapshots[1].clone(), ExtractOptions::default())?;
+            assert_eq!(
+                fs::read_link(checkout_root.join("node"))?,
+                Path::new("target")
+            );
+            checkout.extract_snapshot(snapshots[0].clone(), ExtractOptions::default())?;
+            assert_eq!(fs::read(checkout_root.join("node"))?, b"regular");
+            drop(checkout);
+            fs::remove_file(checkout_root.join("node"))?;
+            fs::remove_dir(checkout_root)?;
+        }
+
+        fs::remove_file(root.join("node"))?;
+        fs::remove_file(root.join("target"))?;
+        fs::remove_dir_all(data_dir)?;
+        fs::remove_dir(root)?;
+        Ok(())
     }
 
     #[test]
@@ -2211,7 +2313,8 @@ mod tests {
         let root = temp_tree("target");
         symlink(".", root.join("linked-directory")).unwrap();
         let paths = [pack_path("linked-directory/output")];
-        let error = preflight_destination_ancestors(&root, paths.iter()).unwrap_err();
+        let error =
+            preflight_destination_ancestors(&root, paths.iter(), &HashSet::new()).unwrap_err();
         assert!(matches!(
             error,
             Error::PackError(PackError::SymlinkedDestination(_))

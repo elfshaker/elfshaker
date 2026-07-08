@@ -1,11 +1,142 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::packidx::{PackError, PackPath, SymlinkTargetEncoding, SymlinkTargetKind};
 
-use super::fs::create_temp_path;
+use super::fs::{create_file, create_temp_path, FileMode};
+
+pub(crate) fn encode_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
+    if let Some(portable) = portable_native_target(target) {
+        return Ok((portable, SymlinkTargetEncoding::PortableUtf8));
+    }
+    encode_native_target(target)
+}
+
+pub(crate) fn encode_target_as(
+    entry_path: &PackPath,
+    target: &Path,
+    encoding: SymlinkTargetEncoding,
+) -> Result<Vec<u8>, PackError> {
+    match encoding {
+        SymlinkTargetEncoding::PortableUtf8 => portable_native_target(target).ok_or_else(|| {
+            PackError::InvalidSymlinkTarget(
+                entry_path.clone(),
+                "materialized target is not portable",
+            )
+        }),
+        SymlinkTargetEncoding::UnixBytes => encode_unix_native_target(entry_path, target),
+        SymlinkTargetEncoding::WindowsUtf16Le => encode_windows_native_target(entry_path, target),
+    }
+}
+
+fn portable_native_target(target: &Path) -> Option<Vec<u8>> {
+    let text = target.to_str()?;
+    if text.is_empty() || target.is_absolute() {
+        return None;
+    }
+
+    #[cfg(windows)]
+    let text = text.replace('\\', "/");
+    #[cfg(not(windows))]
+    let text = {
+        if text.contains('\\') {
+            return None;
+        }
+        text.to_owned()
+    };
+
+    let bytes = text.as_bytes();
+    let windows_prefix = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if text.starts_with('/') || windows_prefix {
+        None
+    } else {
+        Some(bytes.to_vec())
+    }
+}
+
+#[cfg(unix)]
+fn encode_native_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok((
+        target.as_os_str().as_bytes().to_vec(),
+        SymlinkTargetEncoding::UnixBytes,
+    ))
+}
+
+#[cfg(windows)]
+fn encode_native_target(target: &Path) -> io::Result<(Vec<u8>, SymlinkTargetEncoding)> {
+    Ok((
+        windows_target_bytes(target),
+        SymlinkTargetEncoding::WindowsUtf16Le,
+    ))
+}
+
+#[cfg(unix)]
+fn encode_unix_native_target(_entry_path: &PackPath, target: &Path) -> Result<Vec<u8>, PackError> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(target.as_os_str().as_bytes().to_vec())
+}
+
+#[cfg(not(unix))]
+fn encode_unix_native_target(entry_path: &PackPath, _target: &Path) -> Result<Vec<u8>, PackError> {
+    Err(PackError::UnsupportedSymlinkTargetEncoding(
+        entry_path.clone(),
+        SymlinkTargetEncoding::UnixBytes,
+    ))
+}
+
+#[cfg(windows)]
+fn windows_target_bytes(target: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    target
+        .as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+#[cfg(windows)]
+fn encode_windows_native_target(
+    _entry_path: &PackPath,
+    target: &Path,
+) -> Result<Vec<u8>, PackError> {
+    Ok(windows_target_bytes(target))
+}
+
+#[cfg(not(windows))]
+fn encode_windows_native_target(
+    entry_path: &PackPath,
+    _target: &Path,
+) -> Result<Vec<u8>, PackError> {
+    Err(PackError::UnsupportedSymlinkTargetEncoding(
+        entry_path.clone(),
+        SymlinkTargetEncoding::WindowsUtf16Le,
+    ))
+}
+
+#[cfg(unix)]
+pub(crate) fn target_kind(path: &Path, _metadata: &fs::Metadata) -> SymlinkTargetKind {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => SymlinkTargetKind::Directory,
+        Ok(_) => SymlinkTargetKind::File,
+        Err(_) => SymlinkTargetKind::Unknown,
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn target_kind(_path: &Path, metadata: &fs::Metadata) -> SymlinkTargetKind {
+    use std::os::windows::fs::FileTypeExt;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink_dir() {
+        SymlinkTargetKind::Directory
+    } else if file_type.is_symlink_file() {
+        SymlinkTargetKind::File
+    } else {
+        SymlinkTargetKind::Unknown
+    }
+}
 
 pub(crate) fn decode_target(
     entry_path: &PackPath,
@@ -107,11 +238,132 @@ pub(crate) fn materialize(
     create_native(&target, &temporary, kind).map_err(|error| {
         PackError::SymlinkCreationUnsupported(destination.to_owned(), error.to_string())
     })?;
-    if let Err(error) = fs::rename(&temporary, destination) {
+    if let Err(error) = replace(&temporary, destination) {
         let _ = fs::remove_file(&temporary);
         return Err(PackError::IOError(error));
     }
     Ok(())
+}
+
+pub(crate) fn materialize_regular(
+    mut reader: impl Read,
+    destination: &Path,
+    mode: u32,
+) -> io::Result<()> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;
+    fs::create_dir_all(parent)?;
+    let temporary = create_temp_path(parent);
+    let mut file = create_file(&temporary, Some(FileMode(mode)))?;
+    if let Err(error) = io::copy(&mut reader, &mut file) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = replace(&temporary, destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace(temporary: &Path, destination: &Path) -> io::Result<()> {
+    match fs::rename(temporary, destination) {
+        Ok(()) => Ok(()),
+        Err(_error) if fs::symlink_metadata(destination).is_ok() => {
+            remove_leaf(destination)?;
+            fs::rename(temporary, destination)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+fn replace(temporary: &Path, destination: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(destination) {
+        Ok(_) => remove_leaf(destination)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::rename(temporary, destination)
+}
+
+pub(crate) fn remove_leaf(path: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        remove_native_symlink(path, &file_type)
+    } else if file_type.is_dir() {
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+#[cfg(unix)]
+fn remove_native_symlink(path: &Path, _file_type: &fs::FileType) -> io::Result<()> {
+    fs::remove_file(path)
+}
+
+#[cfg(windows)]
+fn remove_native_symlink(path: &Path, file_type: &fs::FileType) -> io::Result<()> {
+    use std::os::windows::fs::FileTypeExt;
+    if file_type.is_symlink_dir() {
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+pub(crate) fn verify_materialized(
+    entry_path: &PackPath,
+    destination: &Path,
+    encoding: SymlinkTargetEncoding,
+    kind: SymlinkTargetKind,
+    expected_checksum: &[u8; 20],
+) -> Result<(), PackError> {
+    use sha1::{Digest, Sha1};
+
+    let target = fs::read_link(destination).map_err(PackError::IOError)?;
+    let bytes = encode_target_as(entry_path, &target, encoding)?;
+    let actual: [u8; 20] = Sha1::digest(&bytes).into();
+    if &actual != expected_checksum {
+        return Err(PackError::ChecksumMismatch(*expected_checksum, actual));
+    }
+    verify_native_kind(destination, kind)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn verify_native_kind(_destination: &Path, _kind: SymlinkTargetKind) -> Result<(), PackError> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn verify_native_kind(destination: &Path, kind: SymlinkTargetKind) -> Result<(), PackError> {
+    use std::os::windows::fs::FileTypeExt;
+    let file_type = fs::symlink_metadata(destination)
+        .map_err(PackError::IOError)?
+        .file_type();
+    let matches = match kind {
+        SymlinkTargetKind::File => file_type.is_symlink_file(),
+        SymlinkTargetKind::Directory => file_type.is_symlink_dir(),
+        SymlinkTargetKind::Unknown => false,
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(PackError::SymlinkCreationUnsupported(
+            destination.to_owned(),
+            "materialized link has the wrong Windows target kind".to_owned(),
+        ))
+    }
 }
 
 pub(crate) fn probe(
@@ -132,7 +384,7 @@ pub(crate) fn probe(
                 PackError::SymlinkCreationUnsupported(destination.to_owned(), error.to_string())
             },
         )?;
-        fs::remove_file(&probe).map_err(PackError::IOError)?;
+        remove_leaf(&probe).map_err(PackError::IOError)?;
     }
     Ok(())
 }

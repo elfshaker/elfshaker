@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     fs::File,
-    fs::{self},
     io,
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -22,14 +21,11 @@ use zstd::Decoder;
 
 use super::constants::{DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC};
 use super::error::Error;
-use super::fs::{create_file, open_file, FileMode};
+use super::fs::{open_file, FileMode};
 use super::symlink;
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
+use crate::packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
-use crate::{
-    packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError},
-    repo::fs::create_empty,
-};
 
 pub(super) fn append_path_suffix(mut path: PathBuf, suffix: &str) -> PathBuf {
     path.as_mut_os_string().push(suffix);
@@ -596,10 +592,8 @@ fn verify_object(buf: &[u8], exp_checksum: &ObjectChecksum) -> Result<(), Error>
 /// Writes the object to the specified path, taking care
 /// of adjusting file permissions.
 fn write_object(buf: &[u8], path: &Path, file_mode: Option<FileMode>) -> Result<(), Error> {
-    fs::create_dir_all(path.parent().unwrap())?;
-    let mut f = create_file(path, file_mode)?;
-    f.write_all(buf)?;
-    Ok(())
+    let mode = file_mode.unwrap_or(FileMode(0o100664));
+    symlink::materialize_regular(buf, path, mode.0).map_err(Into::into)
 }
 
 /// Returns a list of the frame offsets, computed
@@ -777,7 +771,7 @@ fn extract_files(
                         // the pack and have extra handling for missing
                         // permissions.
                         if entry.object_metadata.size == 0 {
-                            create_empty(&path_buf, mode)?;
+                            symlink::materialize_regular(io::empty(), &path_buf, mode)?;
                             return Ok(());
                         }
                         write_object(&buf[..], &path_buf, Some(FileMode(mode)))
@@ -785,14 +779,25 @@ fn extract_files(
                     EntryMetadata::Symlink {
                         target_encoding,
                         target_kind,
-                    } => symlink::materialize(
-                        &entry.path,
-                        &buf,
-                        target_encoding,
-                        target_kind,
-                        &path_buf,
-                    )
-                    .map_err(Into::into),
+                    } => {
+                        symlink::materialize(
+                            &entry.path,
+                            &buf,
+                            target_encoding,
+                            target_kind,
+                            &path_buf,
+                        )?;
+                        if verify {
+                            symlink::verify_materialized(
+                                &entry.path,
+                                &path_buf,
+                                target_encoding,
+                                target_kind,
+                                &entry.checksum,
+                            )?;
+                        }
+                        Ok(())
+                    }
                 }
             })?
             .0
@@ -836,6 +841,7 @@ fn read_objects(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn pack_path(value: &str) -> crate::packidx::PackPath {
         crate::packidx::PackPath::new(value.as_bytes()).unwrap()

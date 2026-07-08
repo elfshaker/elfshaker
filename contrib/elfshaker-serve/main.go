@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,7 +45,8 @@ var (
 	argMaxQueueTime      = flag.Duration("max-time-in-q", 5*time.Second, "maximum time a client can wait before sending retryAfter")
 	argPackMode          = flag.String("pack-project", "clang", "project type to pack [currently only clang is supported, affects tarball creation]")
 	argRetryAfter        = flag.String("retry-after", "5", "value for retry-after header to send to clients in case of too many requests in flight")
-	argSnapshotsFilename = flag.String("snapshots-filename", "snapshots.txt", "path to list of snapshots, one per line")
+	argSnapshotsFilename = flag.String("snapshots-filename", "snapshots.txt", "path to list of snapshots, one per line (elfshaker list > snapshots.txt)")
+	argCommitsFilename   = flag.String("commits-filename", "commits.txt", "path to list of commits (TZ=UTC GIT_DIR=path/to/llvm-project/.git git log --date=iso-strict-local --format='%h %cd %an | %s' > commits.txt)")
 	argEncoderLevel      = flag.Int("zstd-encoder-level", 1, "zstd compression level for tarballs")
 	argServeWellKnown    = flag.String("well-known", "", "path to .well-knwon directory, if specified")
 )
@@ -58,6 +61,7 @@ func main() {
 	}
 
 	http.HandleFunc("/c/", h.handleCommit)
+	http.HandleFunc("/search/", h.handleSearch)
 
 	if *argServeWellKnown != "" {
 		http.Handle("/.well-known/", http.StripPrefix("/.well-known/", http.FileServerFS(os.DirFS(*argServeWellKnown))))
@@ -109,6 +113,8 @@ type Handler struct {
 	// snapshots is a btree of snapshots ordered on commit sha.
 	// This is used for lookup of matching commits by any-length prefix of a sha.
 	snapshots *btree.BTreeG[snapshot]
+	commits Commits // List of all commits, mapped onto snapshots.
+	commitText []string // List of commit text used for fuzzy search.
 
 	s3Client        *s3.Client
 	s3UploadMgr     *manager.Uploader
@@ -123,9 +129,20 @@ func NewHandler() (h *Handler, err error) {
 		requestSemaphore: make(chan struct{}, *argMaxInFlight),
 	}
 
-	h.snapshots, err = loadBTree(*argSnapshotsFilename)
+	var snapshotCommits []string
+	h.snapshots, snapshotCommits, err = loadBTree(*argSnapshotsFilename)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to load btree: %w", err)
+	}
+
+	h.commits, err = loadCommits(*argCommitsFilename, snapshotCommits)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to load commits: %w", err)
+	}
+
+	h.commitText = make([]string, 0, len(h.commits))
+	for _, commit := range h.commits {
+		h.commitText = append(h.commitText, commit.Text)
 	}
 
 	err = h.configureAWS()
@@ -144,6 +161,54 @@ func (h *Handler) configureAWS() error {
 	h.s3UploadMgr = manager.NewUploader(h.s3Client)
 	h.s3PresignClient = s3.NewPresignClient(h.s3Client)
 	return nil
+}
+
+func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
+	queryString := strings.TrimPrefix(r.URL.Path, "/search/")
+	if queryString == "" {
+		http.Error(w, "No search query provided", http.StatusBadRequest)
+		return
+	}
+	start := time.Now()
+	defer func() {
+		log.Printf("Search for %q took %v", queryString, time.Since(start).Truncate(1*time.Millisecond))
+	}()
+	
+	queryFields := strings.Fields(queryString)
+
+	results := make([]int, 0, 10)
+
+	outer:
+	for id, commit := range slices.Backward(h.commits) {
+		for _, field := range queryFields {
+			if strings.Contains(commit.Text, field) {
+				results = append(results, id)
+				if len(results) >= 10 {
+					break outer // Limit to 10 results.
+				}
+				break // No need to check other fields for this commit.
+			}
+		}
+	}
+
+	// Send back commits as json
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	resultsJSON := make([]*Commit, 0, len(results))
+	for _, id := range results {
+		if id < 0 || id >= len(h.commits) {
+			http.Error(w, fmt.Sprintf("Invalid commit ID: %d", id), http.StatusInternalServerError)
+			log.Printf("Invalid commit ID: %d", id)
+			return
+		}
+		resultsJSON = append(resultsJSON, &h.commits[id])
+	}
+
+	if err := enc.Encode(resultsJSON); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode results: %v", err), http.StatusInternalServerError)
+		log.Printf("Failed to encode search results: %v", err)
+		return
+	}
 }
 
 // handleCommit is the HTTP handler for commits: it sends the binaries back to the client.
@@ -356,22 +421,26 @@ func getCommitBinary(uri string) (commit string, binary string, ok bool) {
 	return strings.Cut(uri, "/")
 }
 
-// Read the btree in from list.txt.
-func loadBTree(snapshotListFilename string) (*btree.BTreeG[snapshot], error) {
+// Read the btree in from snapshots.txt.
+func loadBTree(snapshotListFilename string) (*btree.BTreeG[snapshot], []string, error) {
 	bt := btree.NewG(2, snapshot{}.Less)
 	fd, err := os.Open(snapshotListFilename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load btree: %w", err)
+		return nil, nil, fmt.Errorf("failed to load btree: %w", err)
 	}
+	snapshotCommits := make([]string, 0, 200000)
+
 	scanner := bufio.NewScanner(fd)
 	for scanner.Scan() {
 		commit := rightOfLastDash(scanner.Text())
 		bt.ReplaceOrInsert(snapshot{commit, scanner.Text()})
+		snapshotCommits = append(snapshotCommits, commit)
 	}
 	if err = scanner.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return bt, nil
+	log.Println("Loaded", len(snapshotCommits), "snapshots from", snapshotListFilename)
+	return bt, snapshotCommits, nil
 }
 
 func rightOfLastDash(s string) string {

@@ -17,8 +17,9 @@ literal percent sign, control bytes, and invalid UTF-8 bytes as `%XX`; ordinary
 UTF-8 names remain unchanged.
 
 Store normalizes input paths lexically. It rejects absolute paths, parent
-escapes, duplicate logical paths, and symbolic links. Directory links are not
-traversed. The repository data directory is excluded on a component boundary.
+escapes, and duplicate logical paths. Symbolic links are entries in their own
+right, and directory links are not traversed. The repository data directory is
+excluded on a component boundary.
 
 ## Legacy indexes
 
@@ -42,6 +43,10 @@ New indexes use version 3. The MessagePack envelope contains required feature
 bits, snapshot tags and deltas, a binary path pool, the object pool, object
 metadata, and optional extension records. Regular entries carry an explicit
 metadata tag and mode.
+
+Symlink entries carry a target encoding and target-kind hint. Their object
+contains the link target. Portable relative UTF-8 targets work across hosts;
+Unix-byte and Windows-UTF-16LE targets require the matching platform family.
 
 Unknown required features stop a full read before entry decoding. Unknown
 optional extensions are skipped. Older readers reject version 3 from the

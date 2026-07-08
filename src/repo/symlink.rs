@@ -441,6 +441,34 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn rejects_windows_native_targets_on_unix() {
+        assert!(matches!(
+            decode_target(
+                &pack_path(),
+                &[b't', 0, b'a', 0, b'r', 0, b'g', 0, b'e', 0, b't', 0],
+                SymlinkTargetEncoding::WindowsUtf16Le,
+            ),
+            Err(PackError::UnsupportedSymlinkTargetEncoding(
+                _,
+                SymlinkTargetEncoding::WindowsUtf16Le
+            ))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_unix_native_targets_on_windows() {
+        assert!(matches!(
+            decode_target(&pack_path(), b"target", SymlinkTargetEncoding::UnixBytes),
+            Err(PackError::UnsupportedSymlinkTargetEncoding(
+                _,
+                SymlinkTargetEncoding::UnixBytes
+            ))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn materializes_a_dangling_link_without_following_it() {
         use std::os::unix::ffi::OsStrExt;
 

@@ -2420,6 +2420,54 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn invalid_symlink_target_fails_before_destination_mutation() {
+        let root = temp_tree("sentinel");
+        let data_dir = root.join("elfshaker_data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut repo = Repository::open_with_data_dir(&root, &data_dir).unwrap();
+        let target = b"/not-portable";
+        let checksum: ObjectChecksum = Sha1::digest(target).into();
+        let temp_dir = repo.temp_dir();
+        fs::create_dir_all(&temp_dir).unwrap();
+        repo.write_loose_object(&target[..], &temp_dir, &checksum)
+            .unwrap();
+        let entry = FileEntry::new(
+            pack_path("link"),
+            checksum,
+            ObjectMetadata {
+                offset: LOOSE_OBJECT_OFFSET,
+                size: target.len() as u64,
+            },
+            EntryMetadata::Symlink {
+                target_encoding: SymlinkTargetEncoding::PortableUtf8,
+                target_kind: SymlinkTargetKind::File,
+            },
+        );
+        let pack_id = PackId::for_loose_snapshot("invalid-target").unwrap();
+        let mut index = PackIndex::new();
+        index
+            .push_snapshot("invalid-target".to_owned(), [entry.clone()])
+            .unwrap();
+        let index_path = repo.get_pack_index_path(&pack_id);
+        fs::create_dir_all(index_path.parent().unwrap()).unwrap();
+        index.save(index_path).unwrap();
+
+        let result = repo.extract_entries(&pack_id, &[entry], &root, ExtractOptions::default());
+        assert!(
+            matches!(
+                result,
+                Err(Error::PackError(PackError::InvalidSymlinkTarget(_, _)))
+            ),
+            "unexpected result: {:?}",
+            result
+        );
+        assert_eq!(fs::read(root.join("sentinel")).unwrap(), b"sentinel");
+        assert!(!root.join("link").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     static EXAMPLE_MD: ObjectMetadata = ObjectMetadata {
         size: 1,
         offset: LOOSE_OBJECT_OFFSET,

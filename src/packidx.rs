@@ -154,14 +154,61 @@ pub struct FileHandle {
 
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum EntryMetadata {
-    Regular { mode: u32 },
+    Regular {
+        mode: u32,
+    },
+    Symlink {
+        target_encoding: SymlinkTargetEncoding,
+        target_kind: SymlinkTargetKind,
+    },
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub enum SymlinkTargetEncoding {
+    PortableUtf8,
+    UnixBytes,
+    WindowsUtf16Le,
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub enum SymlinkTargetKind {
+    File,
+    Directory,
+    Unknown,
+}
+
+impl SymlinkTargetEncoding {
+    fn identity_tag(self) -> u8 {
+        match self {
+            Self::PortableUtf8 => 0,
+            Self::UnixBytes => 1,
+            Self::WindowsUtf16Le => 2,
+        }
+    }
+}
+
+impl SymlinkTargetKind {
+    fn identity_tag(self) -> u8 {
+        match self {
+            Self::File => 0,
+            Self::Directory => 1,
+            Self::Unknown => 2,
+        }
+    }
 }
 
 impl EntryMetadata {
     pub fn regular_mode(self) -> u32 {
         match self {
             Self::Regular { mode } => mode,
+            Self::Symlink { .. } => {
+                panic!("symlink entries do not carry regular-file permissions")
+            }
         }
+    }
+
+    pub fn is_symlink(self) -> bool {
+        matches!(self, Self::Symlink { .. })
     }
 }
 
@@ -608,6 +655,15 @@ impl PackIndex {
                     hasher.update(entry.checksum);
                     hasher.update(mode.to_be_bytes());
                 }
+                EntryMetadata::Symlink {
+                    target_encoding,
+                    target_kind,
+                } => {
+                    hasher.update([1]);
+                    hasher.update(entry.checksum);
+                    hasher.update([target_encoding.identity_tag()]);
+                    hasher.update([target_kind.identity_tag()]);
+                }
             }
             hasher
         });
@@ -651,7 +707,21 @@ impl PackIndex {
 
     const MAX_VERSION: u32 = 3;
     const WRITE_VERSION: u32 = 3;
-    const SUPPORTED_REQUIRED_FEATURES: u64 = 0;
+    const FEATURE_SYMLINKS: u64 = 1 << 0;
+    const SUPPORTED_REQUIRED_FEATURES: u64 = Self::FEATURE_SYMLINKS;
+
+    fn required_features(&self) -> u64 {
+        let has_symlinks = self
+            .snapshot_deltas
+            .iter()
+            .flat_map(|delta| delta.added.iter().chain(&delta.removed))
+            .any(|handle| handle.metadata.is_symlink());
+        if has_symlinks {
+            Self::FEATURE_SYMLINKS
+        } else {
+            0
+        }
+    }
 
     fn read_magic(rd: &mut impl Read) -> Result<u32, PackError> {
         let mut magic = [0; 4];
@@ -876,7 +946,7 @@ impl Serialize for V3Index<'_> {
         S: Serializer,
     {
         let mut tuple = serializer.serialize_tuple(7)?;
-        tuple.serialize_element(&0u64)?;
+        tuple.serialize_element(&self.index.required_features())?;
         tuple.serialize_element(&self.index.snapshot_tags)?;
         tuple.serialize_element(&self.index.snapshot_deltas)?;
         tuple.serialize_element(&self.index.path_pool)?;
@@ -1004,12 +1074,43 @@ mod format_tests {
     }
 
     #[test]
+    fn v3_symlink_metadata_round_trips_and_sets_its_required_feature() {
+        let entry = FileEntry::new(
+            PackPath::new(b"bin/tool".to_vec()).unwrap(),
+            [8; 20],
+            ObjectMetadata {
+                offset: LOOSE_OBJECT_OFFSET,
+                size: 7,
+            },
+            EntryMetadata::Symlink {
+                target_encoding: SymlinkTargetEncoding::PortableUtf8,
+                target_kind: SymlinkTargetKind::File,
+            },
+        );
+        let mut index = PackIndex::new();
+        index
+            .push_snapshot("snapshot".to_owned(), [entry.clone()])
+            .unwrap();
+        assert_eq!(index.required_features(), PackIndex::FEATURE_SYMLINKS);
+
+        let mut bytes = Vec::new();
+        index.write(&mut bytes).unwrap();
+        let decoded = PackIndex::parse(bytes.as_slice()).unwrap();
+        let handles = decoded.resolve_snapshot("snapshot").unwrap();
+        assert_eq!(
+            decoded.entries_from_handles(handles.iter()).unwrap(),
+            [entry]
+        );
+    }
+
+    #[test]
     fn required_features_fail_before_entry_decoding_but_not_snapshot_listing() {
-        let body = rmp_serde::to_vec(&(1u64, vec!["snapshot"])).unwrap();
+        let unknown_feature = 1u64 << 63;
+        let body = rmp_serde::to_vec(&(unknown_feature, vec!["snapshot"])).unwrap();
         let bytes = with_v3_header(body);
         assert!(matches!(
             PackIndex::parse(bytes.as_slice()),
-            Err(PackError::UnknownRequiredFeatures(1))
+            Err(PackError::UnknownRequiredFeatures(bits)) if bits == unknown_feature
         ));
 
         let mut body = &bytes[8..];
@@ -1116,12 +1217,62 @@ mod format_tests {
         index.compute_snapshot_checksum("snapshot").unwrap()
     }
 
+    fn symlink_identity(
+        checksum: ObjectChecksum,
+        target_encoding: SymlinkTargetEncoding,
+        target_kind: SymlinkTargetKind,
+    ) -> ObjectChecksum {
+        let mut index = PackIndex::new();
+        index
+            .push_snapshot(
+                "snapshot".to_owned(),
+                [FileEntry::new(
+                    PackPath::new(b"path".to_vec()).unwrap(),
+                    checksum,
+                    ObjectMetadata { offset: 0, size: 1 },
+                    EntryMetadata::Symlink {
+                        target_encoding,
+                        target_kind,
+                    },
+                )],
+            )
+            .unwrap();
+        index.compute_snapshot_checksum("snapshot").unwrap()
+    }
+
     #[test]
     fn snapshot_identity_preserves_path_content_and_mode_distinctions() {
         let baseline = identity("path", [1; 20], 0o100644);
         assert_ne!(baseline, identity("Path", [1; 20], 0o100644));
         assert_ne!(baseline, identity("path", [2; 20], 0o100644));
         assert_ne!(baseline, identity("path", [1; 20], 0o100755));
+    }
+
+    #[test]
+    fn snapshot_identity_preserves_symlink_metadata_distinctions() {
+        let regular = identity("path", [1; 20], 0o100644);
+        let portable = symlink_identity(
+            [1; 20],
+            SymlinkTargetEncoding::PortableUtf8,
+            SymlinkTargetKind::File,
+        );
+        assert_ne!(regular, portable);
+        assert_ne!(
+            portable,
+            symlink_identity(
+                [1; 20],
+                SymlinkTargetEncoding::UnixBytes,
+                SymlinkTargetKind::File,
+            )
+        );
+        assert_ne!(
+            portable,
+            symlink_identity(
+                [1; 20],
+                SymlinkTargetEncoding::PortableUtf8,
+                SymlinkTargetKind::Directory,
+            )
+        );
     }
 
     #[test]

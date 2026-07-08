@@ -23,10 +23,11 @@ use zstd::Decoder;
 use super::constants::{DEFAULT_WINDOW_LOG_MAX, PACKS_DIR, PACK_EXTENSION, PACK_HEADER_MAGIC};
 use super::error::Error;
 use super::fs::{create_file, open_file, FileMode};
+use super::symlink;
 use super::{algo::run_in_parallel, constants::DOT_PACK_INDEX_EXTENSION};
 use crate::{log::measure_ok, packidx::ObjectMetadata};
 use crate::{
-    packidx::{FileEntry, ObjectChecksum, PackError},
+    packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError},
     repo::fs::create_empty,
 };
 
@@ -287,6 +288,8 @@ pub fn write_skippable_frame(mut writer: impl Write, buf: &[u8]) -> io::Result<u
 /// The unidirectional stream of data stored in the pack.
 enum PackReader {
     Compressed(Decoder<'static, BufReader<File>>),
+    #[cfg(test)]
+    Raw(io::Cursor<Vec<u8>>),
 }
 
 impl PackReader {
@@ -296,12 +299,16 @@ impl PackReader {
             Self::Compressed(decoder) => {
                 io::copy(&mut decoder.by_ref().take(bytes), &mut io::sink()).map(|_| {})
             }
+            #[cfg(test)]
+            Self::Raw(reader) => io::copy(&mut reader.take(bytes), &mut io::sink()).map(|_| {}),
         }
     }
     // Reads the exact number of bytes into `buf`.
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
         match self {
             Self::Compressed(decoder) => decoder.read_exact(buf),
+            #[cfg(test)]
+            Self::Raw(reader) => reader.read_exact(buf),
         }
     }
 }
@@ -548,6 +555,30 @@ impl Pack {
         );
         Ok(())
     }
+
+    pub(crate) fn read_entry_objects(
+        self,
+        entries: &[FileEntry],
+        num_workers: u32,
+    ) -> Result<Vec<(FileEntry, Vec<u8>)>, Error> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+        let frame_to_entries = assign_to_frames(&self.header.frames, entries)?;
+        let tasks = self
+            .frame_readers
+            .into_iter()
+            .zip(frame_to_entries)
+            .filter(|(_, entries)| !entries.is_empty())
+            .collect::<Vec<_>>();
+        let workers = std::cmp::min(num_workers.max(1), tasks.len() as u32) as usize;
+        run_in_parallel(workers, tasks.into_iter(), |(reader, entries)| {
+            read_objects(reader, &entries)
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|frames| frames.into_iter().flatten().collect())
+    }
 }
 
 /// Verifies that the object has the expected checksum.
@@ -709,13 +740,13 @@ fn extract_files(
         for entry in entries {
             let metadata = &entry.object_metadata;
             // Seek forward
-            let discard_bytes = metadata.offset - pos;
             // Check if we need to read a new object.
             // The current position in stream can be AFTER the object offset only
             // if the previous and this object are the same. This is because the objects
             // are sorted by offset, and the current position is set to the offset at the
             // end of each object, after that object is consumed.
             if pos <= metadata.offset {
+                let discard_bytes = metadata.offset - pos;
                 stats.seek_time += measure_ok(|| reader.seek(discard_bytes))?.0.as_secs_f64();
                 // Resize buf
                 buf.resize(metadata.size as usize, 0);
@@ -740,15 +771,29 @@ fn extract_files(
                     .map_err(|error| PackError::PathNotRepresentable(entry.path.clone(), error))?,
             );
             stats.write_time += measure_ok(|| {
-                let file_mode = entry.metadata.regular_mode();
-                // Special case empty files, which aren't represented in
-                // the pack and have extra handling for missing
-                // permissions.
-                if entry.object_metadata.size == 0 {
-                    create_empty(&path_buf, file_mode)?;
-                    return Ok(());
+                match entry.metadata {
+                    EntryMetadata::Regular { mode } => {
+                        // Special case empty files, which aren't represented in
+                        // the pack and have extra handling for missing
+                        // permissions.
+                        if entry.object_metadata.size == 0 {
+                            create_empty(&path_buf, mode)?;
+                            return Ok(());
+                        }
+                        write_object(&buf[..], &path_buf, Some(FileMode(mode)))
+                    }
+                    EntryMetadata::Symlink {
+                        target_encoding,
+                        target_kind,
+                    } => symlink::materialize(
+                        &entry.path,
+                        &buf,
+                        target_encoding,
+                        target_kind,
+                        &path_buf,
+                    )
+                    .map_err(Into::into),
                 }
-                write_object(&buf[..], &path_buf, Some(FileMode(file_mode)))
             })?
             .0
             .as_secs_f64();
@@ -760,6 +805,32 @@ fn extract_files(
     stats.total_time = total_time.as_secs_f64();
 
     Ok(stats)
+}
+
+fn read_objects(
+    mut reader: PackReader,
+    entries: &[FileEntry],
+) -> Result<Vec<(FileEntry, Vec<u8>)>, Error> {
+    let mut entries = entries.to_vec();
+    entries.sort_by_key(|entry| entry.object_metadata.offset);
+    let mut objects = Vec::with_capacity(entries.len());
+    let mut buf = Vec::new();
+    let mut pos = 0;
+    for entry in entries {
+        let metadata = entry.object_metadata;
+        if metadata.size == 0 {
+            objects.push((entry, Vec::new()));
+            continue;
+        }
+        if pos <= metadata.offset {
+            reader.seek(metadata.offset - pos)?;
+            buf.resize(metadata.size as usize, 0);
+            reader.read_exact(&mut buf)?;
+            pos = metadata.offset + metadata.size;
+        }
+        objects.push((entry, buf.clone()));
+    }
+    Ok(objects)
 }
 
 #[cfg(test)]
@@ -964,5 +1035,47 @@ mod tests {
         assert_eq!(2, result.len());
         assert_eq!(&frame_1_entries, result[0].as_slice());
         assert_eq!(&frame_2_entries, result[1].as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packed_symlink_objects_materialize_as_links() {
+        use crate::packidx::{EntryMetadata, SymlinkTargetEncoding, SymlinkTargetKind};
+
+        let target = b"../missing".to_vec();
+        let checksum: ObjectChecksum = Sha1::digest(&target).into();
+        let entry = FileEntry::new(
+            pack_path("dir/link"),
+            checksum,
+            ObjectMetadata {
+                offset: 0,
+                size: target.len() as u64,
+            },
+            EntryMetadata::Symlink {
+                target_encoding: SymlinkTargetEncoding::PortableUtf8,
+                target_kind: SymlinkTargetKind::Unknown,
+            },
+        );
+        let root = std::env::temp_dir().join(format!(
+            "elfshaker-packed-symlink-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        extract_files(
+            PackReader::Raw(io::Cursor::new(target)),
+            &[entry],
+            &root,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_link(root.join("dir/link")).unwrap(),
+            Path::new("../missing")
+        );
+
+        fs::remove_file(root.join("dir/link")).unwrap();
+        fs::remove_dir(root.join("dir")).unwrap();
+        fs::remove_dir(root).unwrap();
     }
 }

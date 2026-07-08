@@ -29,6 +29,7 @@ use super::pack::{
     append_path_suffix, write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId,
 };
 use super::remote;
+use super::symlink;
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
@@ -549,6 +550,14 @@ impl Repository {
                 .map(|entry| &entry.path)
                 .chain(removed_paths.iter().copied()),
         )?;
+        symlink::probe(
+            &self.path,
+            new_entries.iter().filter_map(|entry| match entry.metadata {
+                EntryMetadata::Symlink { target_kind, .. } => Some(target_kind),
+                EntryMetadata::Regular { .. } => None,
+            }),
+        )?;
+        self.preflight_symlink_targets(snapshot_id.pack(), &new_entries, opts.num_workers())?;
         let removed_paths = removed_paths
             .into_iter()
             .map(|path| {
@@ -629,6 +638,14 @@ impl Repository {
             TargetPlatform::current(),
         )?;
         preflight_destination_ancestors(path, entries.iter().map(|entry| &entry.path))?;
+        symlink::probe(
+            path,
+            entries.iter().filter_map(|entry| match entry.metadata {
+                EntryMetadata::Symlink { target_kind, .. } => Some(target_kind),
+                EntryMetadata::Regular { .. } => None,
+            }),
+        )?;
+        self.preflight_symlink_targets(pack_id, entries, opts.num_workers())?;
         self.extract_entries_preflighted(pack_id, entries, path, opts)
     }
 
@@ -650,6 +667,50 @@ impl Repository {
                 pack.extract_entries(entries, path, opts.verify(), opts.num_workers())
             })
         }
+    }
+
+    fn preflight_symlink_targets(
+        &mut self,
+        pack_id: &PackId,
+        entries: &[FileEntry],
+        num_workers: u32,
+    ) -> Result<(), Error> {
+        let symlinks = entries
+            .iter()
+            .filter(|entry| entry.metadata.is_symlink())
+            .cloned()
+            .collect::<Vec<_>>();
+        if symlinks.is_empty() {
+            return Ok(());
+        }
+
+        let targets = if self.is_pack_loose(pack_id) {
+            symlinks
+                .into_iter()
+                .map(|entry| {
+                    fs::read(self.loose_object_path(&entry.checksum)).map(|target| (entry, target))
+                })
+                .collect::<io::Result<Vec<_>>>()?
+        } else {
+            let pack = match self.open_pack(pack_id) {
+                Ok(pack) => pack,
+                Err(_) => {
+                    self.update_remote_pack(pack_id)?;
+                    self.open_pack(pack_id)?
+                }
+            };
+            pack.read_entry_objects(&symlinks, num_workers)?
+        };
+
+        for (entry, target) in targets {
+            if let EntryMetadata::Symlink {
+                target_encoding, ..
+            } = entry.metadata
+            {
+                symlink::decode_target(&entry.path, &target, target_encoding)?;
+            }
+        }
+        Ok(())
     }
 
     fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
@@ -1310,48 +1371,78 @@ impl Repository {
         verify: bool,
         nthread: u32,
     ) -> Result<(), Error> {
-        let dest_paths =
-            run_in_parallel(
-                nthread as usize,
-                entries.iter(),
-                |entry| -> Result<_, Error> {
-                    let mut dest_path = PathBuf::new();
-                    dest_path.push(path);
-                    dest_path.push(entry.path.to_native().map_err(|error| {
+        let regular_destinations = run_in_parallel(
+            nthread as usize,
+            entries.iter(),
+            |entry| -> Result<_, Error> {
+                let mut dest_path = PathBuf::new();
+                dest_path.push(path);
+                dest_path.push(
+                    entry.path.to_native().map_err(|error| {
                         PackError::PathNotRepresentable(entry.path.clone(), error)
-                    })?);
-                    fs::create_dir_all(dest_path.parent().unwrap())?;
-                    let object_path = self.loose_object_path(&entry.checksum);
-                    if entry.object_metadata.size == 0 {
-                        // Special case empty files, which aren't represented in
-                        // the store and have extra handling for missing permissions.
-                        create_empty(&dest_path, entry.metadata.regular_mode())?;
-                        return Ok(dest_path);
+                    })?,
+                );
+                fs::create_dir_all(dest_path.parent().unwrap())?;
+                let object_path = self.loose_object_path(&entry.checksum);
+                match entry.metadata {
+                    EntryMetadata::Symlink {
+                        target_encoding,
+                        target_kind,
+                    } => {
+                        let target = fs::read(&object_path)?;
+                        if verify {
+                            let checksum: ObjectChecksum = Sha1::digest(&target).into();
+                            if checksum != entry.checksum {
+                                return Err(
+                                    PackError::ChecksumMismatch(entry.checksum, checksum).into()
+                                );
+                            }
+                        }
+                        symlink::materialize(
+                            &entry.path,
+                            &target,
+                            target_encoding,
+                            target_kind,
+                            &dest_path,
+                        )?;
+                        return Ok(None);
                     }
-                    fs::copy(&object_path, &dest_path).map_err(|e| {
-                        io::Error::new(
-                            e.kind(),
-                            format!(
-                                "couldn't copy loose object {} to {}",
-                                object_path.display(),
-                                dest_path.display()
-                            ),
-                        )
-                    })?;
-                    let file_mode = FileMode(entry.metadata.regular_mode());
-                    set_file_mode(&dest_path, file_mode)?;
-                    Ok(dest_path)
-                },
-            )
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?;
+                    EntryMetadata::Regular { mode } => {
+                        if entry.object_metadata.size == 0 {
+                            // Special case empty files, which aren't represented in
+                            // the store and have extra handling for missing permissions.
+                            create_empty(&dest_path, mode)?;
+                            return Ok(Some((dest_path, entry.checksum)));
+                        }
+                        fs::copy(&object_path, &dest_path).map_err(|e| {
+                            io::Error::new(
+                                e.kind(),
+                                format!(
+                                    "couldn't copy loose object {} to {}",
+                                    object_path.display(),
+                                    dest_path.display()
+                                ),
+                            )
+                        })?;
+                        set_file_mode(&dest_path, FileMode(mode))?;
+                    }
+                }
+                Ok(Some((dest_path, entry.checksum)))
+            },
+        )
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
 
         if verify {
+            let (dest_paths, expected_checksums): (Vec<_>, Vec<_>) =
+                regular_destinations.into_iter().unzip();
             let checksums = batch::compute_checksums(&dest_paths)?;
-            let expected_checksums = entries.iter().map(|e| &e.checksum);
-            for (expected, actual) in expected_checksums.zip(checksums) {
-                if *expected != actual {
-                    return Err(PackError::ChecksumMismatch(*expected, actual).into());
+            for (expected, actual) in expected_checksums.into_iter().zip(checksums) {
+                if expected != actual {
+                    return Err(PackError::ChecksumMismatch(expected, actual).into());
                 }
             }
         }
@@ -2023,6 +2114,19 @@ mod tests {
                 target_kind: SymlinkTargetKind::File,
             }
         );
+
+        let extracted = root.join("extracted");
+        repo.extract_entries(
+            snapshot.pack(),
+            &entries,
+            &extracted,
+            ExtractOptions::default(),
+        )?;
+        assert_eq!(
+            fs::read_link(extracted.join("dangling"))?,
+            Path::new("missing")
+        );
+        assert_eq!(fs::read_link(extracted.join("link"))?, Path::new("target"));
 
         drop(repo);
         fs::remove_dir_all(root)?;

@@ -10,6 +10,7 @@ pub mod fs;
 mod pack;
 mod remote;
 mod repository;
+mod symlink;
 
 #[doc(hidden)]
 pub use algo::{partition_by_u64, run_in_parallel};

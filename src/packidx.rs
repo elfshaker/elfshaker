@@ -18,7 +18,7 @@ use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::iter::FromIterator;
 use std::ops::ControlFlow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Error type used in the packidx module.
 #[derive(Debug)]
@@ -39,6 +39,10 @@ pub enum PackError {
     UnsupportedPathEncoding(String),
     InvalidLogicalPath(PackPathError),
     PathNotRepresentable(PackPath, PackPathError),
+    DuplicateLogicalPath(PackPath),
+    PathPrefixConflict(PackPath, PackPath),
+    TargetPathCollision(PackPath, PackPath),
+    SymlinkedDestination(PathBuf),
 }
 
 impl std::error::Error for PackError {}
@@ -87,6 +91,22 @@ impl std::fmt::Display for PackError {
             PackError::PathNotRepresentable(path, error) => {
                 write!(f, "Pack path '{path}' is not representable: {error}")
             }
+            PackError::DuplicateLogicalPath(path) => {
+                write!(f, "Pack contains duplicate path '{path}'")
+            }
+            PackError::PathPrefixConflict(parent, child) => write!(
+                f,
+                "Pack paths '{parent}' and '{child}' conflict as a file and directory"
+            ),
+            PackError::TargetPathCollision(first, second) => write!(
+                f,
+                "Pack paths '{first}' and '{second}' name the same destination path"
+            ),
+            PackError::SymlinkedDestination(path) => write!(
+                f,
+                "Destination path '{}' is or traverses a symbolic link",
+                path.display()
+            ),
         }
     }
 }

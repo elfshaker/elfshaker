@@ -43,6 +43,9 @@ pub enum PackError {
     PathPrefixConflict(PackPath, PackPath),
     TargetPathCollision(PackPath, PackPath),
     SymlinkedDestination(PathBuf),
+    UnsupportedSymlinkTargetEncoding(PackPath, SymlinkTargetEncoding),
+    InvalidSymlinkTarget(PackPath, &'static str),
+    SymlinkCreationUnsupported(PathBuf, String),
 }
 
 impl std::error::Error for PackError {}
@@ -105,6 +108,19 @@ impl std::fmt::Display for PackError {
             PackError::SymlinkedDestination(path) => write!(
                 f,
                 "Destination path '{}' is or traverses a symbolic link",
+                path.display()
+            ),
+            PackError::UnsupportedSymlinkTargetEncoding(path, encoding) => write!(
+                f,
+                "Symlink '{}' uses target encoding {encoding:?}, which is not supported on this platform",
+                path
+            ),
+            PackError::InvalidSymlinkTarget(path, reason) => {
+                write!(f, "Symlink '{path}' has an invalid target: {reason}")
+            }
+            PackError::SymlinkCreationUnsupported(path, reason) => write!(
+                f,
+                "Cannot create symbolic links at '{}': {reason}",
                 path.display()
             ),
         }

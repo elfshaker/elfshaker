@@ -7,7 +7,7 @@
     # version used.
     fenix.url = "github:nix-community/fenix";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   };
 
   outputs = { self, nixpkgs, naersk, fenix }: let
@@ -94,7 +94,7 @@
           export HOME=$WINEPREFIX
           export FONTCONFIG_PATH=${pkgs.buildPackages.fontconfig.out}/etc/fonts/
           mkdir -p $WINEPREFIX
-          exec ${pkgs.buildPackages.wine64}/bin/wine64 "$@"
+          exec ${pkgs.buildPackages.wine64}/bin/wine "$@"
         '';
       });
 

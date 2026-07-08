@@ -35,7 +35,7 @@ let
       export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all
       export HOME=$WINEPREFIX FONTCONFIG_PATH=${nativePackages.fontconfig.out}/etc/fonts/
       mkdir -p $WINEPREFIX
-      exec ${nativePackages.wine64}/bin/wine64 "''${ELFSHAKER_BIN}.exe" "$@"
+      exec ${nativePackages.wine64}/bin/wine "''${ELFSHAKER_BIN}.exe" "$@"
   # '';
 
   maybeWindows = lib.optionalString isWindows "SKIP_BAD_WINDOWS_TESTS=1";

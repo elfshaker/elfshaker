@@ -594,13 +594,21 @@ impl PackIndex {
     /// Computes the checksum of the contents of the snapshot.
     pub fn compute_snapshot_checksum(&self, snapshot: &str) -> Option<ObjectChecksum> {
         let handles = self.resolve_snapshot(snapshot)?;
-        // Map FileHandle to FileEntry, which contains path and checksum
         let mut entries = self.entry_refs_from_handles(handles.iter()).ok()?;
-        entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(b.path)));
-        let hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
+        entries.sort_by(|left, right| left.path.cmp(right.path));
+        let mut hasher = Sha1::new();
+        hasher.update(b"elfshaker-snapshot-identity\0v3\0");
+        hasher.update((entries.len() as u64).to_be_bytes());
+        let hasher = entries.into_iter().fold(hasher, |mut hasher, entry| {
+            hasher.update((entry.path.as_bytes().len() as u64).to_be_bytes());
             hasher.update(entry.path.as_bytes());
-            hasher.update(entry.checksum);
-            hasher.update(entry.metadata.regular_mode().to_be_bytes());
+            match entry.metadata {
+                EntryMetadata::Regular { mode } => {
+                    hasher.update([0]);
+                    hasher.update(entry.checksum);
+                    hasher.update(mode.to_be_bytes());
+                }
+            }
             hasher
         });
         Some(hasher.finalize().into())
@@ -890,6 +898,31 @@ impl Serialize for V3Index<'_> {
 mod format_tests {
     use super::*;
 
+    #[derive(Serialize)]
+    enum EncodedLegacyPath {
+        Unix(Vec<u8>),
+        Windows(Vec<u16>),
+    }
+
+    #[derive(Serialize)]
+    struct LegacyV1Handle {
+        path: Handle,
+        object: Handle,
+    }
+
+    #[derive(Serialize)]
+    struct LegacyV2Handle {
+        path: Handle,
+        object: Handle,
+        file_metadata: LegacyFileMetadata,
+    }
+
+    #[derive(Serialize)]
+    struct EncodedChangeSet<T> {
+        added: Vec<T>,
+        removed: Vec<T>,
+    }
+
     fn with_v3_header(body: Vec<u8>) -> Vec<u8> {
         let mut bytes = b"ELFS\0\0\0\x03".to_vec();
         bytes.extend(body);
@@ -1017,5 +1050,102 @@ mod format_tests {
             PackIndex::parse(b"ELFS\0\0\0\0".as_slice()),
             Err(PackError::BadPackVersion([0, 0, 0, 0]))
         ));
+    }
+
+    #[test]
+    fn equivalent_legacy_unix_and_windows_snapshots_have_the_same_identity() {
+        let checksum = [9; 20];
+        let metadata = ObjectMetadata {
+            offset: 0,
+            size: 12,
+        };
+        let unix = rmp_serde::to_vec(&(
+            vec!["snapshot"],
+            vec![EncodedChangeSet {
+                added: vec![LegacyV1Handle { path: 0, object: 0 }],
+                removed: Vec::<LegacyV1Handle>::new(),
+            }],
+            vec![EncodedLegacyPath::Unix(b"dir/file".to_vec())],
+            vec![checksum],
+            vec![metadata],
+        ))
+        .unwrap();
+        let windows = rmp_serde::to_vec(&(
+            vec!["snapshot"],
+            vec![EncodedChangeSet {
+                added: vec![LegacyV2Handle {
+                    path: 0,
+                    object: 0,
+                    file_metadata: LegacyFileMetadata::default(),
+                }],
+                removed: Vec::<LegacyV2Handle>::new(),
+            }],
+            vec![EncodedLegacyPath::Windows(
+                r"dir\file".encode_utf16().collect(),
+            )],
+            vec![checksum],
+            vec![metadata],
+        ))
+        .unwrap();
+
+        let mut unix_index = b"ELFS\0\0\0\x01".to_vec();
+        unix_index.extend(unix);
+        let mut windows_index = b"ELFS\0\0\0\x02".to_vec();
+        windows_index.extend(windows);
+        let unix = PackIndex::parse(unix_index.as_slice()).unwrap();
+        let windows = PackIndex::parse(windows_index.as_slice()).unwrap();
+        assert_eq!(
+            unix.compute_snapshot_checksum("snapshot"),
+            windows.compute_snapshot_checksum("snapshot")
+        );
+    }
+
+    fn identity(path: &str, checksum: ObjectChecksum, mode: u32) -> ObjectChecksum {
+        let mut index = PackIndex::new();
+        index
+            .push_snapshot(
+                "snapshot".to_owned(),
+                [FileEntry::new(
+                    PackPath::new(path.as_bytes()).unwrap(),
+                    checksum,
+                    ObjectMetadata { offset: 0, size: 1 },
+                    EntryMetadata::Regular { mode },
+                )],
+            )
+            .unwrap();
+        index.compute_snapshot_checksum("snapshot").unwrap()
+    }
+
+    #[test]
+    fn snapshot_identity_preserves_path_content_and_mode_distinctions() {
+        let baseline = identity("path", [1; 20], 0o100644);
+        assert_ne!(baseline, identity("Path", [1; 20], 0o100644));
+        assert_ne!(baseline, identity("path", [2; 20], 0o100644));
+        assert_ne!(baseline, identity("path", [1; 20], 0o100755));
+    }
+
+    #[test]
+    fn snapshot_identity_does_not_depend_on_entry_insertion_order() {
+        let make_index = |entries: [FileEntry; 2]| {
+            let mut index = PackIndex::new();
+            index.push_snapshot("snapshot".to_owned(), entries).unwrap();
+            index.compute_snapshot_checksum("snapshot").unwrap()
+        };
+        let first = FileEntry::new(
+            PackPath::new(b"a".to_vec()).unwrap(),
+            [1; 20],
+            ObjectMetadata { offset: 0, size: 1 },
+            EntryMetadata::default(),
+        );
+        let second = FileEntry::new(
+            PackPath::new(b"b".to_vec()).unwrap(),
+            [2; 20],
+            ObjectMetadata { offset: 1, size: 1 },
+            EntryMetadata::default(),
+        );
+        assert_eq!(
+            make_index([first.clone(), second.clone()]),
+            make_index([second, first])
+        );
     }
 }

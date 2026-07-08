@@ -1522,41 +1522,82 @@ fn clean_file_list<P>(
 where
     P: AsRef<Path>,
 {
-    let data_dir_is_subdir = data_dir.starts_with(repo_dir);
-    let stripped_data_dir = data_dir
-        .components()
-        .skip(repo_dir.components().count())
-        .collect::<PathBuf>();
+    let data_dir = data_dir
+        .strip_prefix(repo_dir)
+        .ok()
+        .map(normalize_relative_path)
+        .transpose()?;
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
 
-    let files = files
-        .flat_map(|p| {
-            if p.as_ref().is_relative() {
-                Ok(p)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Expected a relative path, got {:?}!", p.as_ref()),
-                ))
-            }
-        })
-        .map(|p| {
-            Ok(p.as_ref()
-                .canonicalize()?
-                .components()
-                .skip(repo_dir.components().count())
-                .collect::<PathBuf>())
-        })
-        .filter(|p| {
-            !data_dir_is_subdir
-                || match p {
-                    Ok(p) => !p.starts_with(&stripped_data_dir),
-                    _ => false,
+    for input in files {
+        let input = input.as_ref();
+        let path = normalize_relative_path(input)?;
+        if data_dir
+            .as_ref()
+            .map_or(false, |data_dir| path.starts_with(data_dir))
+        {
+            continue;
+        }
+        if !seen.insert(path.clone()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("duplicate snapshot path {:?}", path),
+            ));
+        }
+        reject_symlink_components(repo_dir, &path)?;
+        cleaned.push(path);
+    }
+
+    Ok(cleaned.into_iter())
+}
+
+fn normalize_relative_path(path: &Path) -> io::Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(component) => normalized.push(component),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("snapshot path {:?} escapes the repository", path),
+                    ));
                 }
-        })
-        .collect::<io::Result<Vec<PathBuf>>>()?
-        .into_iter();
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("expected a relative snapshot path, got {:?}", path),
+                ));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("snapshot path {:?} has no file component", path),
+        ));
+    }
+    Ok(normalized)
+}
 
-    Ok(files)
+fn reject_symlink_components(repo_dir: &Path, path: &Path) -> io::Result<()> {
+    let mut candidate = repo_dir.to_owned();
+    for component in path.components() {
+        candidate.push(component);
+        if fs::symlink_metadata(&candidate)?.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "symbolic link input '{}' is not supported until symlink entries are enabled",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1565,6 +1606,80 @@ mod tests {
 
     fn pack_path(value: &str) -> PackPath {
         PackPath::new(value.as_bytes()).unwrap()
+    }
+
+    fn temp_tree(name: &str) -> PathBuf {
+        let root = create_temp_path(&std::env::temp_dir());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(name), name.as_bytes()).unwrap();
+        root
+    }
+
+    #[test]
+    fn clean_file_list_normalizes_lexically_and_rejects_escapes() {
+        let root = temp_tree("result");
+        let data_dir = root.join("elfshaker_data");
+        let cleaned = clean_file_list(&root, &data_dir, [PathBuf::from("dir/../result")].iter())
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(cleaned, [PathBuf::from("result")]);
+
+        assert!(clean_file_list(&root, &data_dir, [PathBuf::from("../result")].iter()).is_err());
+        assert!(clean_file_list(&root, &data_dir, [root.join("result")].iter()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clean_file_list_excludes_data_by_component_and_rejects_duplicates() {
+        let root = temp_tree("ordinary");
+        let data_dir = root.join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("inside"), b"data").unwrap();
+        fs::create_dir_all(root.join("data-other")).unwrap();
+        fs::write(root.join("data-other/file"), b"other").unwrap();
+
+        let cleaned = clean_file_list(
+            &root,
+            &data_dir,
+            [
+                PathBuf::from("data/inside"),
+                PathBuf::from("data-other/file"),
+            ]
+            .iter(),
+        )
+        .unwrap()
+        .collect::<Vec<_>>();
+        assert_eq!(cleaned, [PathBuf::from("data-other/file")]);
+
+        assert!(clean_file_list(
+            &root,
+            &data_dir,
+            [PathBuf::from("ordinary"), PathBuf::from("./ordinary")].iter(),
+        )
+        .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clean_file_list_rejects_symlink_inputs_and_ancestors() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_tree("target");
+        fs::create_dir(root.join("directory")).unwrap();
+        fs::write(root.join("directory/file"), b"file").unwrap();
+        symlink("target", root.join("link")).unwrap();
+        symlink("directory", root.join("linked-directory")).unwrap();
+        let data_dir = root.join("elfshaker_data");
+
+        assert!(clean_file_list(&root, &data_dir, [PathBuf::from("link")].iter()).is_err());
+        assert!(clean_file_list(
+            &root,
+            &data_dir,
+            [PathBuf::from("linked-directory/file")].iter()
+        )
+        .is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     static EXAMPLE_MD: ObjectMetadata = ObjectMetadata {

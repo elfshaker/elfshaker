@@ -1,12 +1,12 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{Arg, ArgMatches, Command};
+use clap::{builder::OsStringValueParser, Arg, ArgMatches, Command};
 use rand::Rng;
-use std::ffi::OsString;
-use std::{collections::HashMap, error::Error};
+use std::{collections::HashMap, error::Error, ffi::OsString, path::Path};
 
 use super::utils::open_repo_from_cwd;
+use elfshaker::packidx::PackPath;
 use elfshaker::repo::fs::open_file;
 use elfshaker::repo::ExtractOptions;
 
@@ -15,7 +15,7 @@ pub(crate) const SUBCOMMAND: &str = "show";
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
     let snapshot = matches.get_one::<String>("snapshot").unwrap().as_str();
-    let paths: Vec<_> = matches.get_many::<String>("path").unwrap().collect();
+    let paths: Vec<_> = matches.get_many::<OsString>("path").unwrap().collect();
 
     let mut repo = open_repo_from_cwd(data_dir)?;
     let snapshot = repo.find_snapshot(snapshot)?;
@@ -35,7 +35,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     // Attempt to find all entries by the paths specified on the command line.
     let selected_entries: Option<Vec<_>> = paths
         .iter()
-        .map(|p| entries.get(OsString::from(p).as_os_str()).cloned())
+        .map(|path| {
+            PackPath::from_native(Path::new(path))
+                .ok()
+                .and_then(|path| entries.get(&path).cloned())
+        })
         .collect();
     // And fail-fast if any are missing.
     let selected_entries = match selected_entries {
@@ -58,7 +62,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
         // Dump the contents of all entries to stdout.
         for e in &selected_entries {
-            let path = temp_dir.join(&e.path);
+            let path = temp_dir.join(e.path.to_native()?);
             std::io::copy(&mut open_file(path)?, &mut std::io::stdout())?;
         }
         Ok(())
@@ -92,6 +96,7 @@ pub(crate) fn get_app() -> Command {
                 .required(true)
                 .index(2)
                 .num_args(1..)
+                .value_parser(OsStringValueParser::new())
                 .value_name("PATH")
                 .help("Path within the snapshot to write."),
         )

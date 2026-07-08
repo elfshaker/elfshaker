@@ -2,10 +2,10 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{Arg, ArgMatches, Command};
-use std::{error::Error, ffi::OsStr};
+use std::error::Error;
 
 use super::utils::{format_size, open_repo_from_cwd};
-use elfshaker::packidx::ObjectChecksum;
+use elfshaker::packidx::{ObjectChecksum, PackPath};
 use elfshaker::repo::{Repository, SnapshotId};
 
 pub(crate) const SUBCOMMAND: &str = "list-files";
@@ -61,13 +61,13 @@ pub(crate) fn get_app() -> Command {
 fn format_file_row(
     fmt: &str,
     checksum: &ObjectChecksum,
-    file_name: &OsStr,
+    file_name: &PackPath,
     size: u64,
     file_mode: u32,
 ) -> String {
     fmt.to_owned()
         .replace("%o", &hex::encode(checksum))
-        .replace("%f", &file_name.to_string_lossy())
+        .replace("%f", &file_name.escaped())
         .replace("%h", &format_size(size))
         .replace("%b", &size.to_string())
         .replace("%p", &format!("{:o}", file_mode))
@@ -92,7 +92,7 @@ fn print_files(
                 &entry.checksum,
                 &entry.path,
                 entry.object_metadata.size,
-                entry.file_metadata.mode,
+                entry.metadata.regular_mode(),
             )
         })
         .collect();
@@ -104,4 +104,22 @@ fn print_files(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_rows_preserve_utf8_and_escape_other_bytes() {
+        let checksum = [0; 20];
+        let utf8 = PackPath::new("目录/résumé".as_bytes()).unwrap();
+        assert!(format_file_row("%f", &checksum, &utf8, 0, 0).contains("目录/résumé"));
+
+        let binary = PackPath::new(b"dir/control\n/non-utf8-\xff".to_vec()).unwrap();
+        assert_eq!(
+            format_file_row("%f", &checksum, &binary, 0, 0),
+            "dir/control%0A/non-utf8-%FF"
+        );
+    }
 }

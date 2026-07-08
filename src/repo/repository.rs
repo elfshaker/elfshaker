@@ -35,7 +35,7 @@ use crate::{
     packidx::{ObjectMetadata, LOOSE_OBJECT_OFFSET},
 };
 use crate::{
-    packidx::{FileEntry, FileMetadata, ObjectChecksum, PackError, PackIndex},
+    packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath},
     repo::fs::create_empty,
 };
 use sha1::{Digest, Sha1};
@@ -538,7 +538,11 @@ impl Repository {
             for entry in &old_entries {
                 path_buf.clear();
                 path_buf.push(&self.path);
-                path_buf.push(&entry.path);
+                path_buf.push(
+                    entry.path.to_native().map_err(|error| {
+                        PackError::PathNotRepresentable(entry.path.clone(), error)
+                    })?,
+                );
                 self.check_changed_since(head_time.unwrap(), &path_buf)?;
             }
         }
@@ -548,7 +552,10 @@ impl Repository {
         for path in &removed_paths {
             path_buf.clear();
             path_buf.push(&self.path);
-            path_buf.push(path);
+            path_buf.push(
+                path.to_native()
+                    .map_err(|error| PackError::PathNotRepresentable((*path).clone(), error))?,
+            );
             // Delete the file
             match fs::remove_file(&path_buf) {
                 // Nothing to remove.
@@ -649,8 +656,18 @@ impl Repository {
         I: Iterator<Item = P>,
         P: AsRef<Path>,
     {
-        let files =
-            clean_file_list(self.path.as_ref(), self.data_dir(), files)?.collect::<Vec<_>>();
+        let files = clean_file_list(self.path.as_ref(), self.data_dir(), files)?
+            .map(|native| {
+                PackPath::from_native(&native)
+                    .map(|logical| (native, logical))
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid snapshot path: {error}"),
+                        )
+                    })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
         info!("Computing checksums for {} files...", files.len());
 
         let temp_dir = self.temp_dir();
@@ -658,7 +675,7 @@ impl Repository {
 
         let threads = num_cpus::get();
 
-        let pack_entries = run_in_parallel(threads, files.into_iter(), |file_path| {
+        let pack_entries = run_in_parallel(threads, files.into_iter(), |(file_path, pack_path)| {
             let mut fd = match File::open(&file_path) {
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                     let md = fs::metadata(&file_path)?;
@@ -669,13 +686,13 @@ impl Repository {
                     // permission to read. We can still represent this,
                     // and it has uses (e.g. for testing)
                     return Ok(FileEntry::new(
-                        file_path.into(),
+                        pack_path,
                         [0; 20],
                         ObjectMetadata {
                             offset: LOOSE_OBJECT_OFFSET,
                             size: 0,
                         },
-                        FileMetadata {
+                        EntryMetadata::Regular {
                             mode: md.file_mode().0,
                         },
                     ));
@@ -694,13 +711,13 @@ impl Repository {
             self.write_loose_object(&*buf, &temp_dir, &checksum)?;
 
             Ok(FileEntry::new(
-                file_path.into(),
+                pack_path,
                 checksum,
                 ObjectMetadata {
                     offset: LOOSE_OBJECT_OFFSET,
                     size: buf.len() as u64,
                 },
-                FileMetadata { mode: mode.0 },
+                EntryMetadata::Regular { mode: mode.0 },
             ))
         })
         .into_iter()
@@ -895,19 +912,30 @@ impl Repository {
             .object_checksums()
             .map(|checksum| {
                 let object_metadata = index.object_metadata(checksum);
-                let path = self.loose_object_path(checksum);
+                let checksum_hex = hex::encode(checksum);
+                let path = PackPath::new(
+                    format!(
+                        "{}/{}/{}",
+                        &checksum_hex[..2],
+                        &checksum_hex[2..4],
+                        &checksum_hex[4..]
+                    )
+                    .into_bytes(),
+                )
+                .expect("checksum paths are valid pack paths");
                 FileEntry::new(
-                    path.into(),
+                    path,
                     *checksum,
                     *object_metadata,
-                    FileMetadata { mode: 0o644 },
+                    EntryMetadata::Regular { mode: 0o644 },
                 )
             })
             .collect::<Vec<_>>();
         let mut opts = ExtractOptions::default();
         opts.set_verify(false);
         opts.set_num_workers(8);
-        self.extract_entries(pack_id, &entries, "exploded", opts)?;
+        let loose_dir = self.data_dir().join(LOOSE_DIR);
+        self.extract_entries(pack_id, &entries, loose_dir, opts)?;
 
         Ok(())
     }
@@ -1222,38 +1250,41 @@ impl Repository {
         verify: bool,
         nthread: u32,
     ) -> Result<(), Error> {
-        let dest_paths = run_in_parallel(
-            nthread as usize,
-            entries.iter(),
-            |entry| -> Result<_, Error> {
-                let mut dest_path = PathBuf::new();
-                dest_path.push(path);
-                dest_path.push(&entry.path);
-                fs::create_dir_all(dest_path.parent().unwrap())?;
-                let object_path = self.loose_object_path(&entry.checksum);
-                if entry.object_metadata.size == 0 {
-                    // Special case empty files, which aren't represented in
-                    // the store and have extra handling for missing permissions.
-                    create_empty(&dest_path, entry.file_metadata.mode)?;
-                    return Ok(dest_path);
-                }
-                fs::copy(&object_path, &dest_path).map_err(|e| {
-                    io::Error::new(
-                        e.kind(),
-                        format!(
-                            "couldn't copy loose object {} to {}",
-                            object_path.display(),
-                            dest_path.display()
-                        ),
-                    )
-                })?;
-                let file_mode = FileMode(entry.file_metadata.mode);
-                set_file_mode(&dest_path, file_mode)?;
-                Ok(dest_path)
-            },
-        )
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
+        let dest_paths =
+            run_in_parallel(
+                nthread as usize,
+                entries.iter(),
+                |entry| -> Result<_, Error> {
+                    let mut dest_path = PathBuf::new();
+                    dest_path.push(path);
+                    dest_path.push(entry.path.to_native().map_err(|error| {
+                        PackError::PathNotRepresentable(entry.path.clone(), error)
+                    })?);
+                    fs::create_dir_all(dest_path.parent().unwrap())?;
+                    let object_path = self.loose_object_path(&entry.checksum);
+                    if entry.object_metadata.size == 0 {
+                        // Special case empty files, which aren't represented in
+                        // the store and have extra handling for missing permissions.
+                        create_empty(&dest_path, entry.metadata.regular_mode())?;
+                        return Ok(dest_path);
+                    }
+                    fs::copy(&object_path, &dest_path).map_err(|e| {
+                        io::Error::new(
+                            e.kind(),
+                            format!(
+                                "couldn't copy loose object {} to {}",
+                                object_path.display(),
+                                dest_path.display()
+                            ),
+                        )
+                    })?;
+                    let file_mode = FileMode(entry.metadata.regular_mode());
+                    set_file_mode(&dest_path, file_mode)?;
+                    Ok(dest_path)
+                },
+            )
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
 
         if verify {
             let checksums = batch::compute_checksums(&dest_paths)?;
@@ -1299,11 +1330,11 @@ impl Repository {
         // but not, for example, the offset of the object in the pack file.
         let from_lookup: HashMap<_, _> = from_entries
             .iter()
-            .map(|e| ((&e.path, &e.checksum, &e.file_metadata), e))
+            .map(|e| ((&e.path, &e.checksum, &e.metadata), e))
             .collect();
         let to_lookup: HashMap<_, _> = to_entries
             .iter()
-            .map(|e| ((&e.path, &e.checksum, &e.file_metadata), e))
+            .map(|e| ((&e.path, &e.checksum, &e.metadata), e))
             .collect();
 
         let mut added = vec![];
@@ -1531,6 +1562,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pack_path(value: &str) -> PackPath {
+        PackPath::new(value.as_bytes()).unwrap()
+    }
 
     static EXAMPLE_MD: ObjectMetadata = ObjectMetadata {
         size: 1,
@@ -1858,17 +1893,17 @@ mod tests {
 
     #[test]
     fn compute_entry_diff_finds_updates() {
-        let path = "/path/to/A";
+        let path = pack_path("path/to/A");
         let old_checksum = [0; 20];
         let new_checksum = [1; 20];
         let old_entries = [FileEntry::new(
-            path.into(),
+            path.clone(),
             old_checksum,
             EXAMPLE_MD,
             Default::default(),
         )];
         let new_entries = [FileEntry::new(
-            path.into(),
+            path.clone(),
             new_checksum,
             EXAMPLE_MD,
             Default::default(),
@@ -1882,27 +1917,27 @@ mod tests {
 
     #[test]
     fn compute_entry_diff_finds_update_of_duplicated() {
-        let path_a = "/path/to/A";
+        let path_a = pack_path("path/to/A");
         let path_a_old_checksum = [0; 20];
-        let path_b = "/path/to/B";
+        let path_b = pack_path("path/to/B");
         let path_b_old_checksum = [0; 20];
         let path_a_new_checksum = [1; 20];
         let old_entries = [
             FileEntry::new(
-                path_a.into(),
+                path_a.clone(),
                 path_a_old_checksum,
                 EXAMPLE_MD,
                 Default::default(),
             ),
             FileEntry::new(
-                path_b.into(),
+                path_b.clone(),
                 path_b_old_checksum,
                 EXAMPLE_MD,
                 Default::default(),
             ),
         ];
         let new_entries = [FileEntry::new(
-            path_a.into(),
+            path_a.clone(),
             path_a_new_checksum,
             EXAMPLE_MD,
             Default::default(),
@@ -1917,21 +1952,21 @@ mod tests {
 
     #[test]
     fn compute_entry_diff_path_switch() {
-        let path_a = "/path/to/A";
+        let path_a = pack_path("path/to/A");
         let path_a_old_checksum = [0; 20];
         let path_a_new_checksum = [1; 20];
-        let path_b = "/path/to/B";
+        let path_b = pack_path("path/to/B");
         let path_b_old_checksum = [1; 20];
         let path_b_new_checksum = [0; 20];
         let old_entries = [
             FileEntry::new(
-                path_a.into(),
+                path_a.clone(),
                 path_a_old_checksum,
                 EXAMPLE_MD,
                 Default::default(),
             ),
             FileEntry::new(
-                path_b.into(),
+                path_b.clone(),
                 path_b_old_checksum,
                 EXAMPLE_MD,
                 Default::default(),
@@ -1939,13 +1974,13 @@ mod tests {
         ];
         let new_entries = [
             FileEntry::new(
-                path_a.into(),
+                path_a.clone(),
                 path_a_new_checksum,
                 EXAMPLE_MD,
                 Default::default(),
             ),
             FileEntry::new(
-                path_b.into(),
+                path_b.clone(),
                 path_b_new_checksum,
                 EXAMPLE_MD,
                 Default::default(),

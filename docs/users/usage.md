@@ -46,6 +46,11 @@ elfshaker store build-003 --files-from paths.txt
 Use `--files0-from` for a NUL-delimited list. Pass `-` as the filename to read
 the list from standard input.
 
+Stored paths are relative to the working directory. Elfshaker preserves Unix
+filename bytes and stores Windows names as UTF-8. It rejects absolute paths,
+paths that escape through `..`, duplicate paths, and symbolic links. Symlink
+storage is not part of the regular-file pack format yet.
+
 Snapshot tags consist of one or more `/`-separated components. Dots, visible
 Unicode characters, punctuation, and internal ASCII spaces are accepted.
 Components cannot be empty, `.` or `..`, begin or end with a space, or end with
@@ -56,6 +61,10 @@ Loose snapshot index paths mirror their tags beneath
 and path-length limits therefore apply. A loose data directory that relies on
 case or normalization distinctions may not copy safely to another filesystem.
 Pack snapshots before sharing them between systems.
+
+Pack indexes written by this version use the portable version 3 path format.
+They can be listed and inspected on Linux, macOS, and Windows. Version 1 and 2
+indexes from Linux or Windows remain readable.
 
 ## Pack loose snapshots
 
@@ -96,6 +105,9 @@ List files in a snapshot:
 elfshaker list-files builds:build-002
 ```
 
+Ordinary UTF-8 names print unchanged. `%XX` escapes represent control bytes,
+literal percent signs, and filename bytes that are not valid UTF-8.
+
 ## Extract a snapshot
 
 Restore a snapshot into the working directory:
@@ -117,6 +129,12 @@ left alone.
 Use `--reset` to ignore `HEAD` and write every file in the selected snapshot.
 It does not remove unrelated paths. Use `--force` only when you intend to
 bypass checks for unexpected working-directory modifications.
+
+Before changing snapshot entries, elfshaker checks whether the destination can
+represent the complete path set. Extraction fails without partial snapshot
+changes for reserved names, case or Unicode aliases, file/directory prefix
+conflicts, and symbolic-link ancestors. A pack may therefore be portable for
+listing while containing a name that one destination cannot extract.
 
 ## Write snapshot files to standard output
 

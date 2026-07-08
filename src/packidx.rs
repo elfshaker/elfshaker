@@ -11,13 +11,9 @@ use crate::repo::{
     partition_by_u64,
 };
 
-use serde::de::Visitor;
-use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{ser::SerializeTuple, Deserialize, Serialize, Serializer};
 use sha1::{Digest, Sha1};
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
-use std::ffi::{OsStr, OsString};
-use std::fmt;
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::iter::FromIterator;
@@ -133,19 +129,25 @@ pub const LOOSE_OBJECT_OFFSET: u64 = u64::MAX;
 pub struct FileHandle {
     pub path: Handle,   // offset into path_pool
     pub object: Handle, // offset into object_pool
-    #[serde(default)] // New in PackIndex version 2, default None.
-    pub file_metadata: FileMetadata,
+    pub metadata: EntryMetadata,
 }
 
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-pub struct FileMetadata {
-    pub mode: u32,
+pub enum EntryMetadata {
+    Regular { mode: u32 },
 }
 
-/// Format version 1 packs will use a default file metadata.
-impl Default for FileMetadata {
+impl EntryMetadata {
+    pub fn regular_mode(self) -> u32 {
+        match self {
+            Self::Regular { mode } => mode,
+        }
+    }
+}
+
+impl Default for EntryMetadata {
     fn default() -> Self {
-        Self {
+        Self::Regular {
             // The default mode bits are owner can rw, everyone else can read,
             // which is the same behaviour as in version 1 of the pack format.
             mode: 0o100664,
@@ -156,11 +158,11 @@ impl Default for FileMetadata {
 impl Eq for FileHandle {}
 
 impl FileHandle {
-    pub fn new(path: Handle, object: Handle, file_metadata: FileMetadata) -> Self {
+    pub fn new(path: Handle, object: Handle, metadata: EntryMetadata) -> Self {
         Self {
             path,
             object,
-            file_metadata,
+            metadata,
         }
     }
 }
@@ -287,48 +289,48 @@ impl Snapshot {
 /// the object metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileEntry {
-    pub path: OsString,
+    pub path: PackPath,
     pub checksum: ObjectChecksum,
     pub object_metadata: ObjectMetadata,
-    pub file_metadata: FileMetadata,
+    pub metadata: EntryMetadata,
 }
 
 impl FileEntry {
     pub fn new(
-        path: OsString,
+        path: PackPath,
         checksum: ObjectChecksum,
         object_metadata: ObjectMetadata,
-        file_metadata: FileMetadata,
+        metadata: EntryMetadata,
     ) -> Self {
         Self {
             path,
             checksum,
             object_metadata,
-            file_metadata,
+            metadata,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FileEntryRef<'a> {
-    pub path: OsString,
+    pub path: &'a PackPath,
     pub checksum: &'a ObjectChecksum,
     pub object_metadata: &'a ObjectMetadata,
-    pub file_metadata: FileMetadata,
+    pub metadata: EntryMetadata,
 }
 
 impl<'a> FileEntryRef<'a> {
     pub fn new(
-        path: OsString,
+        path: &'a PackPath,
         checksum: &'a ObjectChecksum,
         object_metadata: &'a ObjectMetadata,
-        file_metadata: FileMetadata,
+        metadata: EntryMetadata,
     ) -> Self {
         Self {
             path,
             checksum,
             object_metadata,
-            file_metadata,
+            metadata,
         }
     }
 }
@@ -336,10 +338,10 @@ impl<'a> FileEntryRef<'a> {
 impl<'a> From<FileEntryRef<'a>> for FileEntry {
     fn from(entry_ref: FileEntryRef<'a>) -> Self {
         FileEntry {
-            path: entry_ref.path,
+            path: entry_ref.path.clone(),
             checksum: *entry_ref.checksum,
             object_metadata: *entry_ref.object_metadata,
-            file_metadata: entry_ref.file_metadata,
+            metadata: entry_ref.metadata,
         }
     }
 }
@@ -442,20 +444,13 @@ impl PackIndex {
                 .path_pool
                 .lookup(handle.path)
                 .ok_or(PackError::PathNotFound(handle.path))?
-                .to_native()
-                .map_err(|error| {
-                    PackError::PathNotRepresentable(
-                        self.path_pool.lookup(handle.path).unwrap().clone(),
-                        error,
-                    )
-                })?
-                .into_os_string(),
+                .clone(),
             checksum: *self
                 .object_pool
                 .lookup(handle.object)
                 .ok_or(PackError::ObjectNotFound)?,
             object_metadata: *self.object_metadata.get(&handle.object).unwrap(),
-            file_metadata: handle.file_metadata,
+            metadata: handle.metadata,
         })
     }
     pub fn handle_to_entry_ref<'a>(
@@ -466,21 +461,13 @@ impl PackIndex {
             path: self
                 .path_pool
                 .lookup(handle.path)
-                .ok_or(PackError::PathNotFound(handle.path))?
-                .to_native()
-                .map_err(|error| {
-                    PackError::PathNotRepresentable(
-                        self.path_pool.lookup(handle.path).unwrap().clone(),
-                        error,
-                    )
-                })?
-                .into_os_string(),
+                .ok_or(PackError::PathNotFound(handle.path))?,
             checksum: self
                 .object_pool
                 .lookup(handle.object)
                 .ok_or(PackError::ObjectNotFound)?,
             object_metadata: self.object_metadata.get(&handle.object).unwrap(),
-            file_metadata: handle.file_metadata,
+            metadata: handle.metadata,
         })
     }
     pub fn entry_to_handle(&mut self, entry: &FileEntry) -> Result<FileHandle, PackError> {
@@ -488,12 +475,9 @@ impl PackIndex {
         self.object_metadata
             .insert(object_handle, entry.object_metadata);
         Ok(FileHandle {
-            path: self.path_pool.get_or_insert(
-                &PackPath::from_native(Path::new(&entry.path))
-                    .map_err(PackError::InvalidLogicalPath)?,
-            ),
+            path: self.path_pool.get_or_insert(&entry.path),
             object: object_handle,
-            file_metadata: entry.file_metadata,
+            metadata: entry.metadata,
         })
     }
 
@@ -592,25 +576,15 @@ impl PackIndex {
         let handles = self.resolve_snapshot(snapshot)?;
         // Map FileHandle to FileEntry, which contains path and checksum
         let mut entries = self.entry_refs_from_handles(handles.iter()).ok()?;
-        entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(&b.path)));
+        entries.sort_by(|a, b| a.checksum.cmp(b.checksum).then(a.path.cmp(b.path)));
         let hasher = entries.into_iter().fold(Sha1::new(), |mut hasher, entry| {
-            hasher.update(os_str_as_bytes(&entry.path));
+            hasher.update(entry.path.as_bytes());
             hasher.update(entry.checksum);
-            hasher.update(entry.file_metadata.mode.to_be_bytes());
+            hasher.update(entry.metadata.regular_mode().to_be_bytes());
             hasher
         });
         Some(hasher.finalize().into())
     }
-}
-
-#[cfg(unix)]
-fn os_str_as_bytes(os_str: &OsStr) -> Cow<'_, [u8]> {
-    Cow::Borrowed(std::os::unix::ffi::OsStrExt::as_bytes(os_str))
-}
-
-#[cfg(not(unix))]
-fn os_str_as_bytes(os_str: &OsStr) -> Cow<[u8]> {
-    Cow::Owned(os_str.to_string_lossy().as_bytes().into())
 }
 
 impl PackIndex {
@@ -730,7 +704,7 @@ impl PackIndex {
             object_metadata: rmp_serde::from_read(&mut rd)?,
         };
         let _extensions: Vec<OptionalExtension> = rmp_serde::from_read(&mut rd)?;
-        Self::from_v3(wire)
+        Ok(Self::from_v3(wire))
     }
 
     fn from_legacy(wire: LegacyIndex) -> Result<Self, PackError> {
@@ -742,21 +716,6 @@ impl PackIndex {
                 }
                 LegacyPathError::InvalidLogicalPath(error) => PackError::InvalidLogicalPath(error),
             })?;
-            path_pool.get_or_insert(&path);
-        }
-        Ok(Self::from_parts(
-            wire.snapshot_tags,
-            wire.snapshot_deltas,
-            path_pool,
-            wire.object_pool,
-            wire.object_metadata,
-        ))
-    }
-
-    fn from_v3(wire: V3WireIndex) -> Result<Self, PackError> {
-        let mut path_pool = EntryPool::new();
-        for path in wire.path_pool.iter() {
-            let path = PackPath::new(path.0.clone()).map_err(PackError::InvalidLogicalPath)?;
             path_pool.get_or_insert(&path);
         }
         let snapshot_deltas = wire
@@ -771,6 +730,16 @@ impl PackIndex {
             wire.object_pool,
             wire.object_metadata,
         ))
+    }
+
+    fn from_v3(wire: V3WireIndex) -> Self {
+        Self::from_parts(
+            wire.snapshot_tags,
+            wire.snapshot_deltas,
+            wire.path_pool,
+            wire.object_pool,
+            wire.object_metadata,
+        )
     }
 
     fn from_parts(
@@ -803,62 +772,45 @@ enum LoadMode {
 
 struct LegacyIndex {
     snapshot_tags: Vec<String>,
-    snapshot_deltas: Vec<ChangeSet<FileHandle>>,
+    snapshot_deltas: Vec<ChangeSet<LegacyFileHandle>>,
     path_pool: EntryPool<LegacyWirePath>,
     object_pool: EntryPool<ObjectChecksum>,
     object_metadata: Vec<ObjectMetadata>,
 }
 
-#[derive(Serialize, Deserialize)]
-enum EntryMetadata {
-    Regular { mode: u32 },
-}
-
-#[derive(Serialize, Deserialize)]
-struct V3FileHandle {
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+struct LegacyFileHandle {
     path: Handle,
     object: Handle,
-    metadata: EntryMetadata,
+    #[serde(default)]
+    file_metadata: LegacyFileMetadata,
 }
 
-impl From<FileHandle> for V3FileHandle {
-    fn from(handle: FileHandle) -> Self {
-        Self {
-            path: handle.path,
-            object: handle.object,
-            metadata: EntryMetadata::Regular {
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+struct LegacyFileMetadata {
+    mode: u32,
+}
+
+impl Default for LegacyFileMetadata {
+    fn default() -> Self {
+        Self { mode: 0o100664 }
+    }
+}
+
+impl From<LegacyFileHandle> for FileHandle {
+    fn from(handle: LegacyFileHandle) -> Self {
+        Self::new(
+            handle.path,
+            handle.object,
+            EntryMetadata::Regular {
                 mode: handle.file_metadata.mode,
             },
-        }
+        )
     }
 }
 
-impl From<V3FileHandle> for FileHandle {
-    fn from(handle: V3FileHandle) -> Self {
-        let mode = match handle.metadata {
-            EntryMetadata::Regular { mode } => mode,
-        };
-        Self::new(handle.path, handle.object, FileMetadata { mode })
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct V3ChangeSet<T> {
-    added: Vec<T>,
-    removed: Vec<T>,
-}
-
-impl From<&ChangeSet<FileHandle>> for V3ChangeSet<V3FileHandle> {
-    fn from(changes: &ChangeSet<FileHandle>) -> Self {
-        Self {
-            added: changes.added.iter().copied().map(Into::into).collect(),
-            removed: changes.removed.iter().copied().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<V3ChangeSet<V3FileHandle>> for ChangeSet<FileHandle> {
-    fn from(changes: V3ChangeSet<V3FileHandle>) -> Self {
+impl From<ChangeSet<LegacyFileHandle>> for ChangeSet<FileHandle> {
+    fn from(changes: ChangeSet<LegacyFileHandle>) -> Self {
         Self {
             added: changes.added.into_iter().map(Into::into).collect(),
             removed: changes.removed.into_iter().map(Into::into).collect(),
@@ -872,40 +824,10 @@ struct OptionalExtension {
     payload: Vec<u8>,
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-struct BinaryPath(Vec<u8>);
-
-impl<'de> Deserialize<'de> for BinaryPath {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct BinaryPathVisitor;
-
-        impl<'de> Visitor<'de> for BinaryPathVisitor {
-            type Value = BinaryPath;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a binary pack path")
-            }
-
-            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E> {
-                Ok(BinaryPath(value.to_vec()))
-            }
-
-            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E> {
-                Ok(BinaryPath(value))
-            }
-        }
-
-        deserializer.deserialize_byte_buf(BinaryPathVisitor)
-    }
-}
-
 struct V3WireIndex {
     snapshot_tags: Vec<String>,
-    snapshot_deltas: Vec<V3ChangeSet<V3FileHandle>>,
-    path_pool: EntryPool<BinaryPath>,
+    snapshot_deltas: Vec<ChangeSet<FileHandle>>,
+    path_pool: EntryPool<PackPath>,
     object_pool: EntryPool<ObjectChecksum>,
     object_metadata: Vec<ObjectMetadata>,
 }
@@ -928,14 +850,7 @@ impl Serialize for V3Index<'_> {
         let mut tuple = serializer.serialize_tuple(7)?;
         tuple.serialize_element(&0u64)?;
         tuple.serialize_element(&self.index.snapshot_tags)?;
-        tuple.serialize_element(
-            &self
-                .index
-                .snapshot_deltas
-                .iter()
-                .map(V3ChangeSet::from)
-                .collect::<Vec<_>>(),
-        )?;
+        tuple.serialize_element(&self.index.snapshot_deltas)?;
         tuple.serialize_element(&self.index.path_pool)?;
         tuple.serialize_element(&self.index.object_pool)?;
         tuple.serialize_element(
@@ -1010,13 +925,13 @@ mod format_tests {
     #[test]
     fn v3_round_trip_uses_binary_paths_and_regular_metadata() {
         let entry = FileEntry::new(
-            OsString::from("dir/résumé"),
+            PackPath::new("dir/résumé".as_bytes()).unwrap(),
             [7; 20],
             ObjectMetadata {
                 offset: LOOSE_OBJECT_OFFSET,
                 size: 42,
             },
-            FileMetadata { mode: 0o100640 },
+            EntryMetadata::Regular { mode: 0o100640 },
         );
         let mut index = PackIndex::new();
         index
@@ -1054,7 +969,7 @@ mod format_tests {
         let body = rmp_serde::to_vec(&(
             0u64,
             vec!["snapshot"],
-            Vec::<V3ChangeSet<V3FileHandle>>::new(),
+            Vec::<ChangeSet<FileHandle>>::new(),
             Vec::<PackPath>::new(),
             Vec::<ObjectChecksum>::new(),
             Vec::<ObjectMetadata>::new(),
@@ -1075,6 +990,7 @@ mod format_tests {
         let version = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         assert!(version > 2);
     }
+
     #[test]
     fn version_zero_is_rejected_without_dispatching() {
         assert!(matches!(

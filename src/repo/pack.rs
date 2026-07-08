@@ -621,7 +621,7 @@ fn assign_to_frames(
                 offset: local_offset, // Replace global offset -> local offset
                 size: entry.object_metadata.size,
             },
-            entry.file_metadata,
+            entry.metadata,
         );
         frames[frame_index].push(local_entry);
     }
@@ -733,9 +733,14 @@ fn extract_files(
             // Output path
             path_buf.clear();
             path_buf.push(&output_dir);
-            path_buf.push(&entry.path);
+            path_buf.push(
+                entry
+                    .path
+                    .to_native()
+                    .map_err(|error| PackError::PathNotRepresentable(entry.path.clone(), error))?,
+            );
             stats.write_time += measure_ok(|| {
-                let file_mode = entry.file_metadata.mode;
+                let file_mode = entry.metadata.regular_mode();
                 // Special case empty files, which aren't represented in
                 // the pack and have extra handling for missing
                 // permissions.
@@ -760,6 +765,10 @@ fn extract_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pack_path(value: &str) -> crate::packidx::PackPath {
+        crate::packidx::PackPath::new(value.as_bytes()).unwrap()
+    }
 
     fn make_md(offset: u64, size: u64) -> ObjectMetadata {
         ObjectMetadata { offset, size }
@@ -900,8 +909,8 @@ mod tests {
             decompressed_size: 1000,
         }];
         let entries = [
-            FileEntry::new("A".into(), [0; 20], make_md(50, 1), Default::default()),
-            FileEntry::new("B".into(), [1; 20], make_md(50, 1), Default::default()),
+            FileEntry::new(pack_path("A"), [0; 20], make_md(50, 1), Default::default()),
+            FileEntry::new(pack_path("B"), [1; 20], make_md(50, 1), Default::default()),
         ];
         let result = assign_to_frames(&frames, &entries).unwrap();
         assert_eq!(1, result.len());
@@ -920,16 +929,36 @@ mod tests {
             },
         ];
         let entries = [
-            FileEntry::new("A".into(), [0; 20], make_md(800, 200), Default::default()),
-            FileEntry::new("B".into(), [1; 20], make_md(1200, 200), Default::default()),
+            FileEntry::new(
+                pack_path("A"),
+                [0; 20],
+                make_md(800, 200),
+                Default::default(),
+            ),
+            FileEntry::new(
+                pack_path("B"),
+                [1; 20],
+                make_md(1200, 200),
+                Default::default(),
+            ),
         ];
         let frame_1_entries = [
             // Offset is same
-            FileEntry::new("A".into(), [0; 20], make_md(800, 200), Default::default()),
+            FileEntry::new(
+                pack_path("A"),
+                [0; 20],
+                make_md(800, 200),
+                Default::default(),
+            ),
         ];
         let frame_2_entries = [
             // Offset 1200 -> 200
-            FileEntry::new("B".into(), [1; 20], make_md(200, 200), Default::default()),
+            FileEntry::new(
+                pack_path("B"),
+                [1; 20],
+                make_md(200, 200),
+                Default::default(),
+            ),
         ];
         let result = assign_to_frames(&frames, &entries).unwrap();
         assert_eq!(2, result.len());

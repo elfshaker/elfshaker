@@ -222,9 +222,19 @@ mod tests {
             .try_get_matches_from(["elfshaker", "show", "snapshot", "first", "second"])
             .unwrap();
         let (_, show) = matches.subcommand().unwrap();
-        let paths: Vec<_> = show.get_many::<String>("path").unwrap().cloned().collect();
+        let paths: Vec<_> = show
+            .get_many::<std::ffi::OsString>("path")
+            .unwrap()
+            .cloned()
+            .collect();
 
-        assert_eq!(paths, ["first", "second"]);
+        assert_eq!(
+            paths,
+            [
+                std::ffi::OsString::from("first"),
+                std::ffi::OsString::from("second")
+            ]
+        );
     }
 
     #[test]

@@ -7,5 +7,6 @@ pub mod entrypool;
 pub mod esi;
 pub mod log;
 pub mod packidx;
+pub mod packpath;
 pub mod progress;
 pub mod repo;

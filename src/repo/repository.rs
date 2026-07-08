@@ -39,6 +39,7 @@ use crate::{
     repo::fs::create_empty,
 };
 use sha1::{Digest, Sha1};
+use unicode_normalization::UnicodeNormalization;
 
 fn logical_pack_id_path(path: &Path) -> Result<String, Error> {
     path.components()
@@ -482,6 +483,10 @@ impl Repository {
             .resolve_snapshot(snapshot_id.tag())
             .expect("failed to resolve snapshot"); // TODO: Temporary.
         let entries = source_index.entries_from_handles(entries.iter())?;
+        preflight_path_policy(
+            entries.iter().map(|entry| &entry.path),
+            TargetPlatform::current(),
+        )?;
 
         let (new_entries, old_entries) = if opts.reset || head.is_none() {
             // Extract all, remove nothing
@@ -532,6 +537,22 @@ impl Repository {
             removed.sort();
             (updated, removed)
         };
+        // Logical compatibility concerns the complete target snapshot. Filesystem
+        // traversal concerns only paths this checkout will mutate.
+        preflight_destination_ancestors(
+            &self.path,
+            new_entries
+                .iter()
+                .map(|entry| &entry.path)
+                .chain(removed_paths.iter().copied()),
+        )?;
+        let removed_paths = removed_paths
+            .into_iter()
+            .map(|path| {
+                path.to_native()
+                    .map_err(|error| PackError::PathNotRepresentable(path.clone(), error).into())
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
 
         let mut path_buf = PathBuf::new();
         if !opts.force() {
@@ -552,10 +573,7 @@ impl Repository {
         for path in &removed_paths {
             path_buf.clear();
             path_buf.push(&self.path);
-            path_buf.push(
-                path.to_native()
-                    .map_err(|error| PackError::PathNotRepresentable((*path).clone(), error))?,
-            );
+            path_buf.push(path);
             // Delete the file
             match fs::remove_file(&path_buf) {
                 // Nothing to remove.
@@ -573,7 +591,8 @@ impl Repository {
         // Process the enqueued directories.
         dir_queue.process()?;
 
-        self.extract_entries(snapshot_id.pack(), &new_entries, self.path.clone(), opts)?;
+        let repository_path = self.path.clone();
+        self.extract_entries_preflighted(snapshot_id.pack(), &new_entries, &repository_path, opts)?;
         self.update_head(&snapshot_id)?;
 
         Ok(ExtractResult {
@@ -601,15 +620,31 @@ impl Repository {
     where
         P: AsRef<Path>,
     {
+        let path = path.as_ref();
+        preflight_path_policy(
+            entries.iter().map(|entry| &entry.path),
+            TargetPlatform::current(),
+        )?;
+        preflight_destination_ancestors(path, entries.iter().map(|entry| &entry.path))?;
+        self.extract_entries_preflighted(pack_id, entries, path, opts)
+    }
+
+    fn extract_entries_preflighted(
+        &mut self,
+        pack_id: &PackId,
+        entries: &[FileEntry],
+        path: &Path,
+        opts: ExtractOptions,
+    ) -> Result<(), Error> {
         if self.is_pack_loose(pack_id) {
-            self.copy_loose_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
+            self.copy_loose_entries(entries, path, opts.verify(), opts.num_workers())
         } else if let Ok(pack) = self.open_pack(pack_id) {
-            pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
+            pack.extract_entries(entries, path, opts.verify(), opts.num_workers())
         } else {
             info!("Pack not available locally! Fetching from remote...");
             self.update_remote_pack(pack_id)?;
             self.open_pack(pack_id).and_then(|pack| {
-                pack.extract_entries(entries, path.as_ref(), opts.verify(), opts.num_workers())
+                pack.extract_entries(entries, path, opts.verify(), opts.num_workers())
             })
         }
     }
@@ -1512,6 +1547,163 @@ impl Repository {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // All variants are exercised by host-independent policy tests.
+enum TargetPlatform {
+    Unix,
+    Windows,
+    MacOs,
+}
+
+impl TargetPlatform {
+    fn current() -> Self {
+        #[cfg(windows)]
+        {
+            Self::Windows
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::MacOs
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            Self::Unix
+        }
+    }
+}
+
+fn preflight_destination_ancestors<'a>(
+    destination: &Path,
+    paths: impl IntoIterator<Item = &'a PackPath>,
+) -> Result<(), Error> {
+    for path in paths {
+        let native = path
+            .to_native()
+            .map_err(|error| PackError::PathNotRepresentable(path.clone(), error))?;
+        check_destination_ancestors(destination, &native)?;
+    }
+    Ok(())
+}
+
+fn preflight_path_policy<'a>(
+    paths: impl IntoIterator<Item = &'a PackPath>,
+    platform: TargetPlatform,
+) -> Result<(), PackError> {
+    let mut exact = HashSet::new();
+    let mut target_paths = Vec::new();
+
+    for path in paths {
+        if !exact.insert(path) {
+            return Err(PackError::DuplicateLogicalPath(path.clone()));
+        }
+        target_paths.push((target_path_key(path, platform)?, path));
+    }
+
+    target_paths.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    for pair in target_paths.windows(2) {
+        let (left, left_path) = &pair[0];
+        let (right, right_path) = &pair[1];
+        if left == right {
+            return Err(PackError::TargetPathCollision(
+                (*left_path).clone(),
+                (*right_path).clone(),
+            ));
+        }
+        if is_component_prefix(left, right) {
+            return Err(PackError::PathPrefixConflict(
+                (*left_path).clone(),
+                (*right_path).clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn target_path_key(path: &PackPath, platform: TargetPlatform) -> Result<Vec<Vec<u8>>, PackError> {
+    path.components()
+        .map(|component| match platform {
+            TargetPlatform::Unix => Ok(component.to_vec()),
+            TargetPlatform::Windows => {
+                let component = target_utf8_component(path, component)?;
+                validate_windows_component(path, component)?;
+                Ok(component.to_lowercase().into_bytes())
+            }
+            TargetPlatform::MacOs => {
+                let component = target_utf8_component(path, component)?;
+                Ok(component
+                    .nfd()
+                    .flat_map(char::to_lowercase)
+                    .collect::<String>()
+                    .into_bytes())
+            }
+        })
+        .collect()
+}
+
+fn target_utf8_component<'a>(path: &PackPath, component: &'a [u8]) -> Result<&'a str, PackError> {
+    std::str::from_utf8(component).map_err(|_| {
+        PackError::PathNotRepresentable(
+            path.clone(),
+            crate::packpath::PackPathError::UnrepresentableComponent(component.to_vec()),
+        )
+    })
+}
+
+fn validate_windows_component(path: &PackPath, component: &str) -> Result<(), PackError> {
+    let invalid_character = component
+        .chars()
+        .any(|character| character <= '\u{1f}' || r#"<>:"/\|?*"#.contains(character));
+    let trailing = component.ends_with(['.', ' ']);
+    let stem = component.split('.').next().unwrap().to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || stem
+            .strip_prefix("COM")
+            .or_else(|| stem.strip_prefix("LPT"))
+            .is_some_and(is_windows_device_suffix);
+    if invalid_character || trailing || reserved {
+        return Err(PackError::PathNotRepresentable(
+            path.clone(),
+            crate::packpath::PackPathError::UnrepresentableComponent(component.as_bytes().to_vec()),
+        ));
+    }
+    Ok(())
+}
+
+fn is_windows_device_suffix(suffix: &str) -> bool {
+    matches!(
+        suffix,
+        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+    )
+}
+
+fn is_component_prefix(prefix: &[Vec<u8>], path: &[Vec<u8>]) -> bool {
+    prefix.len() < path.len() && path.starts_with(prefix)
+}
+
+fn check_destination_ancestors(destination: &Path, relative: &Path) -> Result<(), PackError> {
+    let components = relative.components().collect::<Vec<_>>();
+    let mut current = destination.to_owned();
+    for component in components {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(PackError::SymlinkedDestination(current));
+            }
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                break
+            }
+            Err(error) => return Err(PackError::IOError(error)),
+        }
+    }
+    Ok(())
+}
+
 /// Cleans the list of file paths relative to the repository root,
 /// and skips any paths pointing into the repository data directory.
 fn clean_file_list<P>(
@@ -1535,7 +1727,7 @@ where
         let path = normalize_relative_path(input)?;
         if data_dir
             .as_ref()
-            .map_or(false, |data_dir| path.starts_with(data_dir))
+            .is_some_and(|data_dir| path.starts_with(data_dir))
         {
             continue;
         }
@@ -1679,6 +1871,121 @@ mod tests {
             [PathBuf::from("linked-directory/file")].iter()
         )
         .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn destination_policy_rejects_duplicates_and_prefix_conflicts() {
+        let duplicate = [pack_path("same"), pack_path("same")];
+        assert!(matches!(
+            preflight_path_policy(duplicate.iter(), TargetPlatform::Unix),
+            Err(PackError::DuplicateLogicalPath(_))
+        ));
+
+        let prefix = [
+            pack_path("unrelated"),
+            pack_path("file/child"),
+            pack_path("file"),
+        ];
+        assert!(matches!(
+            preflight_path_policy(prefix.iter(), TargetPlatform::Unix),
+            Err(PackError::PathPrefixConflict(_, _))
+        ));
+    }
+
+    #[test]
+    fn destination_policy_applies_windows_name_and_collision_rules() {
+        for invalid in [
+            "CON",
+            "dir/aux.txt",
+            "trailing.",
+            "trailing ",
+            "a:b",
+            r"a\b",
+            "COM¹",
+            "com².txt",
+            "LPT³",
+        ] {
+            assert!(matches!(
+                preflight_path_policy([pack_path(invalid)].iter(), TargetPlatform::Windows),
+                Err(PackError::PathNotRepresentable(_, _))
+            ));
+        }
+
+        assert!(matches!(
+            preflight_path_policy(
+                [pack_path("Dir/File"), pack_path("dir/file")].iter(),
+                TargetPlatform::Windows
+            ),
+            Err(PackError::TargetPathCollision(_, _))
+        ));
+    }
+
+    #[test]
+    fn destination_policy_applies_conservative_macos_alias_rules() {
+        assert!(matches!(
+            preflight_path_policy(
+                [pack_path("Résumé"), pack_path("re\u{301}sume\u{301}")].iter(),
+                TargetPlatform::MacOs
+            ),
+            Err(PackError::TargetPathCollision(_, _))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn destination_preflight_rejects_existing_symlink_ancestors() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_tree("target");
+        symlink(".", root.join("linked-directory")).unwrap();
+        let paths = [pack_path("linked-directory/output")];
+        let error = preflight_destination_ancestors(&root, paths.iter()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::PackError(PackError::SymlinkedDestination(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_destination_preflight_does_not_mutate_the_destination() {
+        let root = temp_tree("sentinel");
+        let data_dir = root.join("elfshaker_data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut repo = Repository::open_with_data_dir(&root, &data_dir).unwrap();
+        let entries = [
+            FileEntry::new(
+                pack_path("file"),
+                [0; 20],
+                ObjectMetadata {
+                    offset: LOOSE_OBJECT_OFFSET,
+                    size: 0,
+                },
+                EntryMetadata::default(),
+            ),
+            FileEntry::new(
+                pack_path("file/child"),
+                [0; 20],
+                ObjectMetadata {
+                    offset: LOOSE_OBJECT_OFFSET,
+                    size: 0,
+                },
+                EntryMetadata::default(),
+            ),
+        ];
+        let result = repo.extract_entries(
+            &PackId::Pack("missing".to_owned()),
+            &entries,
+            &root,
+            ExtractOptions::default(),
+        );
+        assert!(matches!(
+            result,
+            Err(Error::PackError(PackError::PathPrefixConflict(_, _)))
+        ));
+        assert_eq!(fs::read(root.join("sentinel")).unwrap(), b"sentinel");
+        assert!(!root.join("file").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

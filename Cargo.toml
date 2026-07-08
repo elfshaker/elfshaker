@@ -41,6 +41,7 @@ rand = "0.10.3"
 fs2 = "0.4.3"
 winapi = { version = "0.3.9", features = ["everything"] }
 unicode-general-category = "1.1.0"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 clap_mangen = "0.3.0"

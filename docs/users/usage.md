@@ -48,8 +48,9 @@ the list from standard input.
 
 Stored paths are relative to the working directory. Elfshaker preserves Unix
 filename bytes and stores Windows names as UTF-8. It rejects absolute paths,
-paths that escape through `..`, duplicate paths, and symbolic links. Symlink
-storage is not part of the regular-file pack format yet.
+paths that escape through `..`, and duplicate paths. Symbolic links are stored
+as links without reading the files or directories they name. Directory links
+are not traversed.
 
 Snapshot tags consist of one or more `/`-separated components. Dots, visible
 Unicode characters, punctuation, and internal ASCII spaces are accepted.
@@ -107,6 +108,8 @@ elfshaker list-files builds:build-002
 
 Ordinary UTF-8 names print unchanged. `%XX` escapes represent control bytes,
 literal percent signs, and filename bytes that are not valid UTF-8.
+`list-files --format "%k %p %f"` prints each entry's kind, permissions, and
+path. The kind is `file` or `symlink`; links have `-` in the permissions field.
 
 ## Extract a snapshot
 
@@ -136,6 +139,15 @@ changes for reserved names, case or Unicode aliases, file/directory prefix
 conflicts, and symbolic-link ancestors. A pack may therefore be portable for
 listing while containing a name that one destination cannot extract.
 
+Relative Unicode link targets use a portable representation and extract on
+every supported host with native symlink support. Absolute, non-Unicode, and
+platform-specific targets retain their native encoding. Unix-native targets
+extract only on Unix, and Windows-native targets only on Windows. Windows
+packs record whether a link names a file or directory so dangling links can be
+restored. Extraction fails before changing snapshot entries when the target
+encoding or native symlink capability is unavailable; it never replaces a
+link with a regular file.
+
 ## Write snapshot files to standard output
 
 Write one file:
@@ -145,7 +157,8 @@ elfshaker show builds:build-002 bin/compiler > compiler
 ```
 
 When multiple paths are supplied, `show` concatenates their contents without
-separators.
+separators. For a symbolic link, it writes the stored target rather than the
+contents reached through the link.
 
 ## Remove redundant loose data
 

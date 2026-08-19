@@ -30,6 +30,9 @@ Start in the working directory:
 elfshaker store build-001
 ```
 
+An existing snapshot with the same tag is preserved by default. Use
+`elfshaker store --force build-001` to replace it.
+
 Make changes, then store another snapshot:
 
 ```bash
@@ -78,6 +81,9 @@ elfshaker pack builds
 This creates `elfshaker_data/packs/builds.pack` and
 `elfshaker_data/packs/builds.pack.idx`. The loose source data remains until it
 is removed with `gc`.
+
+Existing `.pack` or `.pack.idx` files with the same pack name are preserved
+by default. Use `elfshaker pack --force builds` to replace them.
 
 To pack selected snapshots, provide their names in a file:
 

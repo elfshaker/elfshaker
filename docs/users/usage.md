@@ -49,7 +49,7 @@ A basic workflow in elfshaker is to:
 
 ## Create snapshot
 ```bash
-elfshaker store <snapshot> [--files-from <file>] [--files0-from <file>]
+elfshaker store <snapshot> [--files-from <file>] [--files0-from <file>] [--force]
 ```
 
 ### Example
@@ -59,6 +59,8 @@ elfshaker store my-snapshot
 
 ### Description
 Creates the snapshot `my-snapshot` containing all files in the elfshaker repository.
+By default, an existing snapshot with the same name is preserved and the command fails.
+Pass `--force` to replace it.
 
 *For full command usage, use the `--help` option.*
 ```bash
@@ -99,7 +101,7 @@ elfshaker extract --help
 
 ## Pack loose snapshots
 ```bash
-elfshaker pack <pack> [--frames N]
+elfshaker pack <pack> [--frames N] [--force]
 ```
 
 The set of snapshots to be packed may be supplied with
@@ -112,7 +114,10 @@ elfshaker pack my-pack --frames 8
 ```
 
 ### Description
-Creates the pack `my-pack` (file is `elfshaker_data/packs/my-pack.idx`) by packing all loose snapshots.
+Creates the pack `my-pack` (`elfshaker_data/packs/my-pack.pack` and
+`elfshaker_data/packs/my-pack.pack.idx`) by packing all loose snapshots.
+By default, existing `.pack` or `.pack.idx` files with the same pack name are
+preserved and the command fails. Pass `--force` to replace them.
 
 ### Implementation
 1. Enumerate all loose object files (belonging to loose snapshot) in `elfshaker_data/loose`.

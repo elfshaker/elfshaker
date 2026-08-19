@@ -1,7 +1,7 @@
 //! SPDX-License-Identifier: Apache-2.0
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
-use clap::{Arg, ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use log::error;
 use std::{
     error::Error,
@@ -42,7 +42,11 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(data_dir)?;
 
     let mut repo = open_repo_from_cwd(data_dir)?;
-    repo.create_snapshot(&snapshot, files.into_iter())?;
+    if matches.get_flag("force") {
+        repo.create_snapshot_force(&snapshot, files.into_iter())?;
+    } else {
+        repo.create_snapshot(&snapshot, files.into_iter())?;
+    }
 
     Ok(())
 }
@@ -84,6 +88,12 @@ pub(crate) fn get_app() -> Command {
                 .long("files0-from")
                 .value_name("FILE")
                 .help("Read NUL-delimited paths to store from FILE; use - for standard input."),
+        )
+        .arg(
+            Arg::new("force")
+                .long("force")
+                .help("Overwrite an existing snapshot with the same name.")
+                .action(ArgAction::SetTrue),
         )
 }
 

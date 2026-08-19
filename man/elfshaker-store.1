@@ -4,7 +4,7 @@
 .SH NAME
 elfshaker\-store \- Store files from the working directory as a loose snapshot.
 .SH SYNOPSIS
-\fBelfshaker store\fR [\fB\-\-files\-from\fR] [\fB\-\-files0\-from\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISNAPSHOT\fR> 
+\fBelfshaker store\fR [\fB\-\-files\-from\fR] [\fB\-\-files0\-from\fR] [\fB\-\-force\fR] [\fB\-\-verbose\fR] [\fB\-\-data\-dir\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISNAPSHOT\fR> 
 .SH DESCRIPTION
 Creates a loose snapshot from files in the working directory and updates HEAD to refer to it. Without a file\-list option, elfshaker recursively selects files from the working directory and excludes the data directory.
 .PP
@@ -20,6 +20,9 @@ Read newline\-delimited paths to store from FILE; use \- for standard input.
 .TP
 \fB\-\-files0\-from\fR \fI<FILE>\fR
 Read NUL\-delimited paths to store from FILE; use \- for standard input.
+.TP
+\fB\-\-force\fR
+Overwrite an existing snapshot with the same name.
 .TP
 \fB\-\-verbose\fR
 Show informational progress and diagnostic messages.

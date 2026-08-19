@@ -6,7 +6,7 @@ use super::{constants::*, pack::IdError};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
@@ -30,6 +30,7 @@ use super::pack::{
 };
 use super::remote;
 use super::symlink;
+use crate::atomicfile::AtomicCreateFile;
 use crate::packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath};
 #[cfg(test)]
 use crate::packidx::{SymlinkTargetEncoding, SymlinkTargetKind};
@@ -179,6 +180,15 @@ fn restore_shared_lock_on_error(
         )
     })?;
     Err(lock_error)
+}
+
+#[cfg(windows)]
+fn remove_file_if_exists(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 impl Repository {
@@ -826,6 +836,32 @@ impl Repository {
         I: Iterator<Item = P>,
         P: AsRef<Path>,
     {
+        self.create_snapshot_impl(snapshot, files, false)
+    }
+
+    /// Creates a loose snapshot, replacing an existing snapshot with the same name.
+    pub fn create_snapshot_force<I, P>(
+        &mut self,
+        snapshot: &SnapshotId,
+        files: I,
+    ) -> Result<(), Error>
+    where
+        I: Iterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        self.create_snapshot_impl(snapshot, files, true)
+    }
+
+    fn create_snapshot_impl<I, P>(
+        &mut self,
+        snapshot: &SnapshotId,
+        files: I,
+        force: bool,
+    ) -> Result<(), Error>
+    where
+        I: Iterator<Item = P>,
+        P: AsRef<Path>,
+    {
         let files = clean_file_list(self.path.as_ref(), self.data_dir(), files)?
             .map(|native| {
                 PackPath::from_native(&native)
@@ -838,6 +874,29 @@ impl Repository {
                     })
             })
             .collect::<io::Result<Vec<_>>>()?;
+        self.lock_exclusive()?;
+        let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
+        let snapshot_path =
+            append_path_suffix(loose_path.join(snapshot.tag()), DOT_PACK_INDEX_EXTENSION);
+        ensure_dir(snapshot_path.parent().unwrap())?;
+        if matches!(snapshot_path.metadata(), Ok(metadata) if metadata.len() > 0) {
+            let existing_tags = PackIndex::load_only_snapshots(&snapshot_path)?;
+            match existing_tags.as_slice() {
+                [existing] if existing == snapshot.tag() => {}
+                [existing] => {
+                    return Err(Error::LooseSnapshotPathCollision {
+                        path: snapshot_path,
+                        requested: snapshot.tag().to_owned(),
+                        existing: existing.to_owned(),
+                    });
+                }
+                _ => return Err(Error::CorruptPackIndex),
+            }
+        }
+        let snapshot_output = (!force)
+            .then(|| AtomicCreateFile::new(&snapshot_path))
+            .transpose()?;
+
         info!("Computing checksums for {} files...", files.len());
 
         let temp_dir = self.temp_dir();
@@ -918,28 +977,14 @@ impl Repository {
         let mut index = PackIndex::new();
         index.push_snapshot(snapshot.tag().to_owned(), pack_entries)?;
 
-        self.lock_exclusive()?;
-        let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
-        let index_path =
-            append_path_suffix(loose_path.join(snapshot.tag()), DOT_PACK_INDEX_EXTENSION);
-        ensure_dir(index_path.parent().unwrap())?;
-
-        if index_path.exists() {
-            let existing_tags = PackIndex::load_only_snapshots(&index_path)?;
-            match existing_tags.as_slice() {
-                [existing] if existing == snapshot.tag() => {}
-                [existing] => {
-                    return Err(Error::LooseSnapshotPathCollision {
-                        path: index_path,
-                        requested: snapshot.tag().to_owned(),
-                        existing: existing.to_owned(),
-                    });
-                }
-                _ => return Err(Error::CorruptPackIndex),
-            }
+        let index_bytes = index.serialize()?;
+        if let Some(output) = snapshot_output {
+            output.commit_content(Cursor::new(index_bytes))?;
+        } else {
+            #[cfg(windows)]
+            remove_file_if_exists(&snapshot_path)?;
+            write_file_atomic(Cursor::new(index_bytes), &temp_dir, &snapshot_path)?;
         }
-
-        index.save(index_path)?;
 
         self.update_head(snapshot)?;
 
@@ -960,6 +1005,28 @@ impl Repository {
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {
+        self.create_pack_impl(pack, index, opts, reporter, false)
+    }
+
+    /// Creates a pack file, replacing an existing pack and index with the same name.
+    pub fn create_pack_force(
+        &mut self,
+        pack: &PackId,
+        index: PackIndex,
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+    ) -> Result<(), Error> {
+        self.create_pack_impl(pack, index, opts, reporter, true)
+    }
+
+    fn create_pack_impl(
+        &mut self,
+        pack: &PackId,
+        index: PackIndex,
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+        force: bool,
+    ) -> Result<(), Error> {
         pack.validate_regular()?;
         let PackId::Pack(pack_name) = pack;
 
@@ -970,6 +1037,21 @@ impl Repository {
             pack_path.push(format!("{pack_name}.{PACK_EXTENSION}"));
             pack_path
         };
+        let index_path = append_path_suffix(pack_path.clone(), ".idx");
+
+        // The index acts as the creation reservation for the pack/index pair.
+        // Check the pack first so a pre-existing pack does not leave behind a
+        // new empty index reservation.
+        if !force && matches!(pack_path.metadata(), Ok(metadata) if metadata.len() > 0) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already exists and is non-empty", pack_path.display()),
+            )
+            .into());
+        }
+        let index_output = (!force)
+            .then(|| AtomicCreateFile::new(&index_path))
+            .transpose()?;
 
         // Create a temporary file to use during compression.
         let temp_dir = self.temp_dir();
@@ -1061,12 +1143,28 @@ impl Repository {
         pack_writer.flush()?;
         drop(pack_writer);
 
-        let index_path = append_path_suffix(pack_path.clone(), ".idx");
         info!("Write index: {}", index_path.display());
-        index.save(index_path)?;
+        let index_bytes = index.serialize()?;
 
-        // Finally, move the .pack file itself to the packs/ dir.
-        fs::rename(&temp_path, &pack_path)?;
+        // Publish the pack before its index so readers never discover an index
+        // whose corresponding pack is still incomplete.
+        if !force {
+            let output = AtomicCreateFile::new(&pack_path)?;
+            output.commit_content(File::open(&temp_path)?)?;
+            fs::remove_file(&temp_path)?;
+        } else {
+            #[cfg(windows)]
+            remove_file_if_exists(&pack_path)?;
+            fs::rename(&temp_path, &pack_path)?;
+        }
+
+        if let Some(output) = index_output {
+            output.commit_content(Cursor::new(index_bytes))?;
+        } else {
+            #[cfg(windows)]
+            remove_file_if_exists(&index_path)?;
+            write_file_atomic(Cursor::new(index_bytes), &temp_dir, &index_path)?;
+        }
 
         Ok(())
     }

@@ -6,7 +6,7 @@ use super::{constants::*, fs::set_file_mode, pack::IdError};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Cursor, Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
@@ -26,6 +26,7 @@ use super::fs::{
 };
 use super::pack::{write_skippable_frame, Pack, PackFrame, PackHeader, PackId, SnapshotId};
 use super::remote;
+use crate::atomicfile::AtomicCreateFile;
 use crate::progress::ProgressReporter;
 use crate::{
     batch,
@@ -162,6 +163,15 @@ fn restore_shared_lock_on_error(
         )
     })?;
     Err(lock_error)
+}
+
+#[cfg(windows)]
+fn remove_file_if_exists(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 impl Repository {
@@ -627,8 +637,43 @@ impl Repository {
         I: Iterator<Item = P>,
         P: AsRef<Path>,
     {
+        self.create_snapshot_impl(snapshot, files, false)
+    }
+
+    /// Creates a loose snapshot, replacing an existing snapshot with the same name.
+    pub fn create_snapshot_force<I, P>(
+        &mut self,
+        snapshot: &SnapshotId,
+        files: I,
+    ) -> Result<(), Error>
+    where
+        I: Iterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        self.create_snapshot_impl(snapshot, files, true)
+    }
+
+    fn create_snapshot_impl<I, P>(
+        &mut self,
+        snapshot: &SnapshotId,
+        files: I,
+        force: bool,
+    ) -> Result<(), Error>
+    where
+        I: Iterator<Item = P>,
+        P: AsRef<Path>,
+    {
         let files =
             clean_file_list(self.path.as_ref(), self.data_dir(), files)?.collect::<Vec<_>>();
+        let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
+        ensure_dir(&loose_path)?;
+        let snapshot_path = loose_path
+            .join(snapshot.tag())
+            .with_extension(PACK_INDEX_EXTENSION);
+        let snapshot_output = (!force)
+            .then(|| AtomicCreateFile::new(&snapshot_path))
+            .transpose()?;
+
         info!("Computing checksums for {} files...", files.len());
 
         let temp_dir = self.temp_dir();
@@ -687,14 +732,14 @@ impl Repository {
         let mut index = PackIndex::new();
         index.push_snapshot(snapshot.tag().to_owned(), pack_entries)?;
 
-        let loose_path = self.data_dir().join(PACKS_DIR).join(LOOSE_DIR);
-        ensure_dir(&loose_path)?;
-
-        index.save(
-            loose_path
-                .join(snapshot.tag())
-                .with_extension(PACK_INDEX_EXTENSION),
-        )?;
+        let index_bytes = index.serialize()?;
+        if let Some(output) = snapshot_output {
+            output.commit_content(Cursor::new(index_bytes))?;
+        } else {
+            #[cfg(windows)]
+            remove_file_if_exists(&snapshot_path)?;
+            write_file_atomic(Cursor::new(index_bytes), &temp_dir, &snapshot_path)?;
+        }
 
         self.update_head(snapshot)?;
 
@@ -715,6 +760,28 @@ impl Repository {
         opts: &PackOptions,
         reporter: &ProgressReporter,
     ) -> Result<(), Error> {
+        self.create_pack_impl(pack, index, opts, reporter, false)
+    }
+
+    /// Creates a pack file, replacing an existing pack and index with the same name.
+    pub fn create_pack_force(
+        &mut self,
+        pack: &PackId,
+        index: PackIndex,
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+    ) -> Result<(), Error> {
+        self.create_pack_impl(pack, index, opts, reporter, true)
+    }
+
+    fn create_pack_impl(
+        &mut self,
+        pack: &PackId,
+        index: PackIndex,
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+        force: bool,
+    ) -> Result<(), Error> {
         let PackId::Pack(pack_name) = pack;
 
         // Construct output file path.
@@ -724,6 +791,21 @@ impl Repository {
             pack_path.push(format!("{pack_name}.{PACK_EXTENSION}"));
             pack_path
         };
+        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
+
+        // The index acts as the creation reservation for the pack/index pair.
+        // Check the pack first so a pre-existing pack does not leave behind a
+        // new empty index reservation.
+        if !force && matches!(pack_path.metadata(), Ok(metadata) if metadata.len() > 0) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already exists and is non-empty", pack_path.display()),
+            )
+            .into());
+        }
+        let index_output = (!force)
+            .then(|| AtomicCreateFile::new(&index_path))
+            .transpose()?;
 
         // Create a temporary file to use during compression.
         let temp_dir = self.temp_dir();
@@ -815,12 +897,28 @@ impl Repository {
         pack_writer.flush()?;
         drop(pack_writer);
 
-        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
         info!("Write index: {}", index_path.display());
-        index.save(index_path)?;
+        let index_bytes = index.serialize()?;
 
-        // Finally, move the .pack file itself to the packs/ dir.
-        fs::rename(&temp_path, &pack_path)?;
+        // Publish the pack before its index so readers never discover an index
+        // whose corresponding pack is still incomplete.
+        if !force {
+            let output = AtomicCreateFile::new(&pack_path)?;
+            output.commit_content(File::open(&temp_path)?)?;
+            fs::remove_file(&temp_path)?;
+        } else {
+            #[cfg(windows)]
+            remove_file_if_exists(&pack_path)?;
+            fs::rename(&temp_path, &pack_path)?;
+        }
+
+        if let Some(output) = index_output {
+            output.commit_content(Cursor::new(index_bytes))?;
+        } else {
+            #[cfg(windows)]
+            remove_file_if_exists(&index_path)?;
+            write_file_atomic(Cursor::new(index_bytes), &temp_dir, &index_path)?;
+        }
 
         Ok(())
     }

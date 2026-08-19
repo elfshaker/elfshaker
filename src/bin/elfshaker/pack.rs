@@ -2,7 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::Command;
-use clap::{Arg, ArgMatches};
+use clap::{Arg, ArgAction, ArgMatches};
 use log::error;
 use log::info;
 use std::{error::Error, fs, io, ops::ControlFlow, str::FromStr};
@@ -126,18 +126,18 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
     eprintln!("Compressing objects...");
     // Create a pack using the ordered "loose" index.
-    repo.create_pack(
-        &pack,
-        new_index,
-        &PackOptions {
-            compression_level,
-            // We don't expose the windowLog option yet.
-            compression_window_log: DEFAULT_COMPRESSION_WINDOW_LOG,
-            num_workers: threads,
-            num_frames: frames,
-        },
-        &reporter,
-    )?;
+    let options = PackOptions {
+        compression_level,
+        // We don't expose the windowLog option yet.
+        compression_window_log: DEFAULT_COMPRESSION_WINDOW_LOG,
+        num_workers: threads,
+        num_frames: frames,
+    };
+    if matches.get_flag("force") {
+        repo.create_pack_force(&pack, new_index, &options, &reporter)?;
+    } else {
+        repo.create_pack(&pack, new_index, &options, &reporter)?;
+    }
 
     if let (Some(head), _) = repo.read_head()? {
         if snapshots.iter().any(|pack_id| head.pack() == pack_id) {
@@ -230,6 +230,12 @@ pub(crate) fn get_app() -> Command {
                 .long("snapshots0-from")
                 .value_name("file")
                 .help("Reads the NUL-separated (ASCII \\0) list of snapshots to include in the pack from the specified file. '-' is taken to mean stdin."),
+        )
+        .arg(
+            Arg::new("force")
+                .long("force")
+                .help("Overwrite an existing pack and index with the same name.")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("indexes")

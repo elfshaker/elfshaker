@@ -347,6 +347,23 @@ test_store_twice_works() {
   fi
 }
 
+test_store_existing_requires_force() {
+  echo first > duplicate
+  "$elfshaker" store duplicate-name
+  index=elfshaker_data/packs/loose/duplicate-name.pack.idx
+  checksum_before=$(sha1sum < "$index")
+
+  echo second > duplicate
+  if "$elfshaker" store duplicate-name; then
+    echo "store unexpectedly overwrote an existing snapshot"
+    exit 1
+  fi
+  [[ "$checksum_before" == "$(sha1sum < "$index")" ]]
+
+  "$elfshaker" store --force duplicate-name
+  [[ "$checksum_before" != "$(sha1sum < "$index")" ]]
+}
+
 test_store_finds_new_files() {
   "$elfshaker" --verbose extract --verify --reset "$pack":"$snapshot_b"
   "$elfshaker" --verbose store "$snapshot_b"
@@ -401,6 +418,35 @@ test_pack_simple_works() {
     echo "Checksums do not match!";
     exit 1
   fi
+}
+
+test_pack_existing_requires_force() {
+  echo first > duplicate
+  "$elfshaker" store duplicate-pack-snapshot
+  "$elfshaker" pack duplicate-pack
+  pack_file=elfshaker_data/packs/duplicate-pack.pack
+  index_file=elfshaker_data/packs/duplicate-pack.pack.idx
+  pack_checksum_before=$(sha1sum < "$pack_file")
+  index_checksum_before=$(sha1sum < "$index_file")
+
+  echo second > duplicate
+  "$elfshaker" store duplicate-pack-snapshot-2
+  if "$elfshaker" pack duplicate-pack; then
+    echo "pack unexpectedly overwrote existing output files"
+    exit 1
+  fi
+  [[ "$pack_checksum_before" == "$(sha1sum < "$pack_file")" ]]
+  [[ "$index_checksum_before" == "$(sha1sum < "$index_file")" ]]
+
+  cp "$pack_file" elfshaker_data/packs/orphan.pack
+  if "$elfshaker" pack orphan; then
+    echo "pack unexpectedly accepted a pre-existing pack without an index"
+    exit 1
+  fi
+  [[ ! -e elfshaker_data/packs/orphan.pack.idx ]]
+
+  "$elfshaker" pack --force duplicate-pack
+  [[ "$index_checksum_before" != "$(sha1sum < "$index_file")" ]]
 }
 
 test_pack_two_snapshots_works() {
@@ -933,10 +979,12 @@ main() {
   run_test test_store_works
   run_test test_store_and_extract_different_works
   run_test test_store_twice_works
+  run_test test_store_existing_requires_force
   run_test test_store_finds_new_files
   run_test test_store_empty_directory_works
   run_test test_store_data_dir_works
   run_test test_pack_simple_works
+  run_test test_pack_existing_requires_force
   run_test test_pack_two_snapshots_works
   run_test test_pack_snapshots_from_list_works
   run_test test_pack_multi_snapshots_from_list_works

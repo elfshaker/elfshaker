@@ -3,11 +3,9 @@
 
 //! Contains types and function for parsing `.pack.idx` files created by
 //! elfshaker.
+use crate::atomicfile::AtomicCreateFile;
 use crate::entrypool::{EntryPool, Handle};
-use crate::repo::{
-    fs::{create_file, open_file},
-    partition_by_u64,
-};
+use crate::repo::{fs::open_file, partition_by_u64};
 
 use serde::de::{SeqAccess, Visitor};
 use serde::{ser::SerializeTuple, Deserialize, Deserializer, Serialize, Serializer};
@@ -17,7 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::Hash;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Cursor, Read, Write};
 use std::iter::FromIterator;
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -599,13 +597,17 @@ impl PackIndex {
     }
 
     pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
-        // TODO: Use AtomicCreateFile.
-        let wr = create_file(p.as_ref(), None)?;
-        let mut wr = BufWriter::new(wr);
-        Self::write_magic(&mut wr)?;
-
-        rmp_serde::encode::write(&mut wr, self)?;
+        let output = AtomicCreateFile::new(p.as_ref())?;
+        output.commit_content(Cursor::new(self.serialize()?))?;
         Ok(())
+    }
+
+    /// Serializes this index in the on-disk format used by [`PackIndex::save`].
+    pub(crate) fn serialize(&self) -> Result<Vec<u8>, PackError> {
+        let mut bytes = Vec::new();
+        Self::write_magic(&mut bytes)?;
+        rmp_serde::encode::write(&mut bytes, self)?;
+        Ok(bytes)
     }
 
     // Max supported version of the pack index by this version of elfshaker.
@@ -724,5 +726,28 @@ impl Serialize for PackIndex {
                 .collect::<Vec<ObjectMetadata>>(),
         )?;
         s.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn save_does_not_overwrite_existing_index() -> Result<(), Box<dyn std::error::Error>> {
+        let path = crate::repo::fs::create_temp_path(&std::env::temp_dir());
+        fs::write(&path, b"existing index")?;
+
+        let error = PackIndex::new().save(&path).unwrap_err();
+
+        assert!(matches!(
+            error,
+            PackError::IOError(ref error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(fs::read(&path)?, b"existing index");
+        fs::remove_file(path)?;
+        Ok(())
     }
 }

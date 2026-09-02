@@ -16,6 +16,10 @@ print_help() {
     echo ''
     echo 'If any step of finding a matching snapshot, extraction, or ./link.sh fails, the script exists with code 125 (git bisect skip).'
     echo 'Otherwise, the exit code is the code returned by COMMAND.'
+    echo ''
+    echo 'Set MANYCLANGS_RELINK_KIT to an extracted standalone Clang kit to use its'
+    echo 'bin/clang, bin/clang++, and bin/ld.lld for the relink. This is currently'
+    echo 'supported only when the snapshot runs directly on the host, not through Docker QEMU.'
 }
 
 get_file_arch() {
@@ -30,7 +34,26 @@ run_docker_image() {
     docker run --rm --mount type=bind,source="$(realpath "$ELFSHAKER_DIR")",target=/elfshaker "$@"
 }
 
+configure_relink_kit() {
+    if [[ -z "${MANYCLANGS_RELINK_KIT-}" ]]; then
+        return
+    fi
+
+    local kit=$MANYCLANGS_RELINK_KIT
+    for tool in clang clang++ ld.lld; do
+        if [[ ! -x "$kit/bin/$tool" ]]; then
+            echo "MANYCLANGS_RELINK_KIT is missing executable $kit/bin/$tool" >&2
+            exit 125
+        fi
+    done
+
+    export LINKSCRIPT_CC=${LINKSCRIPT_CC-"$kit/bin/clang"}
+    export LINKSCRIPT_CXX=${LINKSCRIPT_CXX-"$kit/bin/clang++"}
+    export LINKSCRIPT_LLD=${LINKSCRIPT_LLD-"$kit/bin/ld.lld"}
+}
+
 link_and_run() {
+    configure_relink_kit
     rm -r ./bin || true
     mkdir -p ./bin
 
@@ -42,6 +65,11 @@ link_and_run() {
         HOST_ARCH="$(get_file_arch /bin/cat)"
         TARGET_ARCH="$(get_file_arch "$TEST_OBJECT")"
         if [ "$HOST_ARCH" != "$TARGET_ARCH" ] && [ "$TARGET_ARCH" = "AArch64" ]; then
+            if [[ -n "${MANYCLANGS_RELINK_KIT-}" ]]; then
+                echo 'MANYCLANGS_RELINK_KIT is unavailable inside the Docker QEMU container.' >&2
+                echo 'Run on the target architecture, or arrange an explicit kit mount before adding container support.' >&2
+                exit 125
+            fi
             if ! command -v docker &> /dev/null; then
                 echo "The architecture of the executables you are attempting to run is '$TARGET_ARCH'."
                 echo "We support running these on '$HOST_ARCH' through emulation, but require docker to do so."
@@ -59,7 +87,8 @@ link_and_run() {
             exit 1
         fi
     else
-        $LINK_AND_RUN_COMMAND
+        bash ./link.sh "$COMMAND_BASENAME" || exit 125
+        "./bin/$COMMAND_BASENAME" "${@:2}"
     fi
 }
 

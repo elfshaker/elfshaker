@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT="$SCRIPT_DIR/manyclangs-run"
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/test-manyclangs-run.XXXXXX")
+trap 'rm -r "$TEST_ROOT"' EXIT
+
+fail() {
+    echo "test-manyclangs-run: $*" >&2
+    exit 1
+}
+
+REPOSITORY="$TEST_ROOT/llvm-project"
+git init -q "$REPOSITORY"
+git -C "$REPOSITORY" config user.email test@example.com
+git -C "$REPOSITORY" config user.name Test
+printf 'fixture\n' > "$REPOSITORY/README"
+git -C "$REPOSITORY" add README
+git -C "$REPOSITORY" commit -qm fixture
+COMMIT_SHA=$(git -C "$REPOSITORY" rev-parse HEAD)
+
+KIT="$TEST_ROOT/kit"
+mkdir -p "$KIT/bin"
+for TOOL in clang clang++ ld.lld; do
+    ln -s "$(type -P true)" "$KIT/bin/$TOOL"
+done
+
+BIN="$TEST_ROOT/bin"
+mkdir -p "$BIN"
+cat > "$BIN/elfshaker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+    find) printf 'fixture-snapshot fixture-pack\n' ;;
+    extract)
+        cat > link.sh <<'LINK'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$LINKSCRIPT_CC" = "$EXPECTED_KIT/bin/clang"
+test "$LINKSCRIPT_CXX" = "$EXPECTED_KIT/bin/clang++"
+test "$LINKSCRIPT_LLD" = "$EXPECTED_KIT/bin/ld.lld"
+test "$1" = hello
+mkdir -p bin
+cat > bin/hello <<'PROGRAM'
+#!/bin/sh
+printf '%s\n' kit-relink-ok
+PROGRAM
+chmod +x bin/hello
+LINK
+        chmod +x link.sh
+        ;;
+    *) echo "unexpected elfshaker command: $1" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$BIN/elfshaker"
+
+SNAPSHOT_ROOT="$TEST_ROOT/snapshot"
+mkdir -p "$SNAPSHOT_ROOT"
+OUTPUT=$(cd "$SNAPSHOT_ROOT" && \
+    PATH="$BIN:$PATH" \
+    GIT_DIR="$REPOSITORY/.git" \
+    EXPECTED_KIT="$KIT" \
+    MANYCLANGS_RELINK_KIT="$KIT" \
+    "$SCRIPT" "$SNAPSHOT_ROOT" "$COMMIT_SHA" hello)
+
+test "$OUTPUT" = kit-relink-ok || fail "unexpected program output: $OUTPUT"
+echo "test-manyclangs-run: ok"

@@ -42,6 +42,29 @@ Which will produce `*.pack` and `*.pack.idx` files in
 `/dev/shm/elfshaker_data/packs`, which are the precious output. Everything else
 can be discarded.
 
+### Relinking with a standalone Clang kit
+
+`manyclangs-run` normally finds the Ubuntu compatibility `clang-12` and
+`ld.lld-12` from `PATH`. To prove a standalone kit as the relink driver without
+changing pack generation, set `MANYCLANGS_RELINK_KIT` to its extracted root:
+
+```
+MANYCLANGS_RELINK_KIT=/path/to/kit \
+  manyclangs-run /path/to/extracted-snapshot COMMITISH clang
+```
+
+The kit must provide executable `bin/clang`, `bin/clang++`, and `bin/ld.lld`.
+The run path passes those as `LINKSCRIPT_*` overrides to the snapshot's existing
+`link.sh`; it does not copy the kit into a pack. This proof path runs directly
+on the snapshot architecture. Docker-QEMU execution remains on the legacy
+environment until the kit is explicitly made available inside the container.
+
+To build new snapshots with the same kit, set `MANYCLANGS_RELINK_KIT` while
+running `manyclangs-build-month`. The build scripts select its unsuffixed
+drivers and LLD, and configure LLVM with `LLVM_ENABLE_TERMINFO=Off` because the
+kit intentionally omits the Ubuntu terminfo library. This is a new snapshot
+profile; it does not retrofit older Ubuntu-compatibility snapshots.
+
 ### Efficient use of one big machine
 
 The primary use case is to have one-big-machine and build a
@@ -72,4 +95,3 @@ CPU time.
 * Builds happen entirely in tmpfs because the machine has enough RAM.
   * Total storage for 1 month is ~40G ccache (also in tmpfs) + a few gigabytes
     for the elfshaker dir + a few gigabytes for each incremental build.
-

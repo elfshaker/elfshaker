@@ -29,6 +29,20 @@ FILE_PREFIX="$(dirname "$(realpath "$LLVM_SRCDIR")")"
 # Defaults to "-12".
 BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
 
+if [[ -n "${MANYCLANGS_RELINK_KIT-}" ]]; then
+    for TOOL in clang clang++ ld.lld; do
+        if [[ ! -x "$MANYCLANGS_RELINK_KIT/bin/$TOOL" ]]; then
+            echo "MANYCLANGS_RELINK_KIT is missing executable $MANYCLANGS_RELINK_KIT/bin/$TOOL" >&2
+            exit 1
+        fi
+    done
+    # The kit supplies unsuffixed drivers and a self-contained musl sysroot.
+    # Existing Ubuntu snapshots keep their explicit -12 compatibility default.
+    BUILDER_CLANG_VERSION_SUFFIX=
+    export PATH="$MANYCLANGS_RELINK_KIT/bin:$PATH"
+    LLVM_USE_LINKER="$MANYCLANGS_RELINK_KIT/bin/ld.lld"
+fi
+
 COMPILER_FLAGS=(
     # Flags which improve the compression ratio.
     -ffunction-sections
@@ -80,6 +94,10 @@ FLAGS=(
     "-DLLVM_ENABLE_Z3_SOLVER=Off"
     # Faster builds(?)
     "-DCLANG_TOOLING_BUILD_AST_INTROSPECTION=Off"
+    # The standalone musl kit deliberately omits the distro terminfo library.
+    # Disable this optional LLVM feature so the resulting snapshots relink
+    # without a host-library dependency.
+    ${MANYCLANGS_RELINK_KIT:+"-DLLVM_ENABLE_TERMINFO=Off"}
 
     # Shrink ninja files.
     "-DCLANG_INCLUDE_TESTS=Off"

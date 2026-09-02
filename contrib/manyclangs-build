@@ -11,6 +11,17 @@ export LC_COLLATE=C
 
 BUILDER_CLANG_VERSION_SUFFIX=${BUILDER_CLANG_VERSION_SUFFIX--12}
 
+if [[ -n "${MANYCLANGS_RELINK_KIT-}" ]]; then
+    for TOOL in clang clang++ ld.lld; do
+        if [[ ! -x "$MANYCLANGS_RELINK_KIT/bin/$TOOL" ]]; then
+            echo "MANYCLANGS_RELINK_KIT is missing executable $MANYCLANGS_RELINK_KIT/bin/$TOOL" >&2
+            exit 1
+        fi
+    done
+    BUILDER_CLANG_VERSION_SUFFIX=
+    export PATH="$MANYCLANGS_RELINK_KIT/bin:$PATH"
+fi
+
 awk_inplace() {
     for LAST in "$@"; do :; done
     TMP="$(mktemp)"
@@ -192,7 +203,7 @@ main() {
     if time CCACHE_FILECLONE=1 \
         CCACHE_NOCOMPRESS=1 \
         CCACHE_SLOPPINESS=time_macros,include_file_ctime,include_file_mtime \
-        CCACHE_COMPILERCHECK=string:manyclangs-clang${BUILDER_CLANG_VERSION_SUFFIX} \
+        CCACHE_COMPILERCHECK="${MANYCLANGS_CCACHE_COMPILERCHECK-string:manyclangs-clang${BUILDER_CLANG_VERSION_SUFFIX}}" \
         "${NINJA}" -f build.patched.ninja |& tee -a build.log
     then
         # On build success, the log is not very interesting, so delete it.

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT="$SCRIPT_DIR/manyclangs-cmake"
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/test-manyclangs-cmake.XXXXXX")
+trap 'rm -r "$TEST_ROOT"' EXIT
+
+fail() {
+    echo "test-manyclangs-cmake: $*" >&2
+    exit 1
+}
+
+KIT="$TEST_ROOT/kit"
+mkdir -p "$KIT/bin"
+for TOOL in clang clang++ ld.lld; do
+    ln -s "$(type -P true)" "$KIT/bin/$TOOL"
+done
+
+SOURCE="$TEST_ROOT/llvm-project/llvm"
+BUILD="$TEST_ROOT/build"
+mkdir -p "$SOURCE" "$BUILD"
+BIN="$TEST_ROOT/bin"
+mkdir -p "$BIN"
+cat > "$BIN/cmake" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$MANYCLANGS_TEST_CMAKE_ARGS"
+EOF
+chmod +x "$BIN/cmake"
+
+ARGS="$TEST_ROOT/cmake-args"
+PATH="$BIN:$PATH" \
+    MANYCLANGS_RELINK_KIT="$KIT" \
+    MANYCLANGS_TEST_CMAKE_ARGS="$ARGS" \
+    "$SCRIPT" "$SOURCE" "$BUILD"
+
+grep -Fx -- "-DCMAKE_C_COMPILER=clang" "$ARGS" >/dev/null ||
+    fail "kit C compiler was not selected"
+grep -Fx -- "-DCMAKE_CXX_COMPILER=clang++" "$ARGS" >/dev/null ||
+    fail "kit C++ compiler was not selected"
+grep -Fx -- "-DLLVM_USE_LINKER=$KIT/bin/ld.lld" "$ARGS" >/dev/null ||
+    fail "kit LLD was not selected"
+grep -Fx -- '-DLLVM_ENABLE_TERMINFO=Off' "$ARGS" >/dev/null ||
+    fail "terminfo remained enabled for the standalone kit"
+
+echo "test-manyclangs-cmake: ok"

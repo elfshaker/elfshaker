@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Arm Limited or its affiliates and Contributors. All rights reserved.
+"""Check that generated-header changes rebuild their precompiled header."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+script = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name('manyclangs-build')
+text = script.read_text()
+helper = text[text.index('awk_inplace() {'):text.index('\n}', text.index('awk_inplace() {')) + 2]
+start = text.index('        awk_inplace -c -v "search=$ABS_BASE_PATH"')
+rewrite = text[start:text.index("        ' build.ninja", start) + len("        ' build.ninja")]
+root = Path(tempfile.mkdtemp(prefix='manyclangs-path-regression-'))
+print(f'fixture={root}', flush=True)
+work = root / 'build'
+(work / 'gen').mkdir(parents=True)
+(root / 'source').mkdir()
+(root / 'source/source.h').write_text('constexpr int source_value = 2;\n')
+(root / 'input.h').write_text('constexpr int answer = 1;\n')
+(work / 'pch.h').write_text('#include <generated.h>\n#include <source.h>\n')
+(work / 'build.ninja').write_text(f'''rule generate
+  command = cp ../input.h gen/generated.h
+rule CXX_COMPILER_PCH
+  command = {os.environ.get('CXX', 'clang++')} $INCLUDES -x c++-header $in -MD -MF header.pch.d -o header.pch
+  depfile = header.pch.d
+  deps = gcc
+build gen/generated.h: generate ../input.h
+build header.pch: CXX_COMPILER_PCH {work}/pch.h || gen/generated.h
+  INCLUDES = -I{work}/gen -I{root}/source
+default header.pch
+''')
+env = dict(os.environ, ABS_BASE_PATH=str(root)+'/', REL_BASE_PATH='../', ABS_BUILD_PATH=str(work)+'/')
+env.pop('BASH_ENV', None)
+subprocess.run(['bash', '-euc', helper + '\n' + rewrite], cwd=work, env=env, check=True)
+rewritten = (work / 'build.ninja').read_text()
+ninja = os.environ.get('NINJA', 'ninja')
+subprocess.run([ninja], cwd=work, check=True)
+before = (work / 'header.pch').stat().st_mtime_ns
+time.sleep(1.1)  # Accommodate filesystems with coarse timestamp resolution.
+(root / 'input.h').write_text('constexpr int answer = 1234567;\n')
+subprocess.run([ninja, '-d', 'explain'], cwd=work, check=True)
+assert (work / 'header.pch').stat().st_mtime_ns > before, 'Generated-header changes must rebuild the PCH'
+assert '../build/' not in rewritten, 'Generated paths must remain build-relative'
+assert '-I../source' in rewritten, 'Source includes must remain source-relative'
+print('PASS: real manyclangs rewrite preserves generated-header dependency propagation')

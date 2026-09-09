@@ -4,6 +4,7 @@
 
   naerskBuildPackage,
   netcat,
+  openssl,
   removeReferencesTo,
   rustToolchain,
   stdenv,
@@ -54,6 +55,7 @@ naerskBuildPackage isWindows target {
     stdenv.cc
     removeReferencesTo
     netcat # For tests.
+    openssl # For the local HTTPS clone test.
   ];
 
   postInstall = ''

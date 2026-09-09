@@ -683,6 +683,42 @@ test_update_fetches_indexes() {
   kill $server1_pid $server2_pid || true
 }
 
+# Exercise the real TLS client with a private trust anchor, without external networking.
+test_clone_uses_ca_bundle() (
+  mkdir tls
+  cd tls
+  for name in trusted unrelated; do
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+      -subj "/CN=$name" -addext 'subjectAltName=IP:127.0.0.1' \
+      -addext 'basicConstraints=critical,CA:FALSE' \
+      -keyout "$name.key" -out "$name.pem" > /dev/null 2>&1
+  done
+  printf 'meta\tv1\nurl\thttps://127.0.0.1:43105/index.esi\n' > index.esi
+  openssl s_server -accept 127.0.0.1:43105 -cert trusted.pem -key trusted.key \
+    -WWW -quiet > server.log 2>&1 &
+  server_pid=$!
+  trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+  sleep 1
+  kill -0 "$server_pid"
+
+  export SSL_CERT_DIR="$PWD/empty-certs"
+  mkdir "$SSL_CERT_DIR"
+  export SSL_CERT_FILE="$PWD/unrelated.pem"
+  if "$elfshaker" clone https://127.0.0.1:43105/index.esi untrusted > untrusted.log 2>&1; then
+    echo 'clone accepted an untrusted certificate'
+    exit 1
+  fi
+  grep -q 'UnknownIssuer' untrusted.log
+  test ! -e untrusted
+
+  export SSL_CERT_FILE="$PWD/trusted.pem"
+  "$elfshaker" clone https://127.0.0.1:43105/index.esi trusted
+  test -f trusted/elfshaker_data/remotes/origin.esi
+  mkdir parent
+  "$elfshaker" clone https://127.0.0.1:43105/index.esi "$PWD/parent/absolute"
+  test -f parent/absolute/elfshaker_data/remotes/origin.esi
+)
+
 # Test if elfshaker clone fetches pack indexes successfully
 test_clone_fetches_indexes() {
   pack_sha="$(sha1sum "$input" | awk '{print $1}')"
@@ -950,6 +986,7 @@ main() {
   run_test test_dirty_repo_can_be_forced
   run_test test_update_fetches_indexes
   run_test test_clone_fetches_indexes
+  [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_clone_uses_ca_bundle
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots
   [ -z "$SKIP_BAD_WINDOWS_TESTS" ] && run_test test_gc_snapshots_dry_run
   run_test test_store_duplicate_content_works

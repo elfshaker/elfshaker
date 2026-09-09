@@ -29,6 +29,8 @@ If you looked at the binary delta on the linked executable from such a change, i
 
 ## [Usage guide](docs/users/usage.md)
 
+## [HTTPS certificate trust](docs/users/https.md)
+
 ## Quickstart
 
 1. Consult our [installation](docs/users/installing.md) and [usage guide](docs/users/usage.md), make sure you know what you're doing.

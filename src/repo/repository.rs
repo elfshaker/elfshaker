@@ -116,7 +116,12 @@ pub struct PackOptions {
     pub compression_window_log: u32,
     pub compression_level: i32,
     pub num_workers: u32,
+    /// Explicit frame count for initial packing; zero uses the size and fill budget.
     pub num_frames: u32,
+    /// Target decompressed frame size for automatic packing and append.
+    pub frame_size: u64,
+    /// Initial and post-split fill percentage (1..=100).
+    pub frame_fill: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -221,13 +226,17 @@ impl Repository {
             Err(e) => Err(e)?,
         };
 
-        Ok(Repository {
+        let repo = Repository {
             path,
             data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
             lock_file,
             is_locked_exclusively: Mutex::new(false),
-        })
+        };
+        if super::transaction::pending(&repo.data_dir)? {
+            repo.lock_exclusive()?;
+        }
+        Ok(repo)
     }
 
     /// Acquires an exclusive lock for the remaining lifetime of this repository.
@@ -240,7 +249,7 @@ impl Repository {
             .lock()
             .map_err(|_| io::Error::other("repository lock state poisoned"))?;
         if *is_locked_exclusively {
-            return Ok(());
+            return super::transaction::recover(&self.data_dir);
         }
         let Some(lock_file) = &self.lock_file else {
             error!("Modifying readonly repository is not allowed.");
@@ -263,7 +272,7 @@ impl Repository {
         };
         restore_shared_lock_on_error(lock_file, lock_result)?;
         *is_locked_exclusively = true;
-        Ok(())
+        super::transaction::recover(&self.data_dir)
     }
 
     // Reads the state of HEAD. If the file does not exist, returns None values.
@@ -304,6 +313,7 @@ impl Repository {
 
     /// Open the pack.
     pub fn open_pack(&self, pack: &PackId) -> Result<Pack, Error> {
+        super::transaction::check_complete(&self.data_dir)?;
         Pack::open(self.data_dir(), pack)
     }
 
@@ -406,7 +416,10 @@ impl Repository {
         let PackId::Pack(pack_name) = pack_id;
 
         // The pack is loose if the .pack.idx is in the loose packs directory
-        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + std::path::MAIN_SEPARATOR_STR)) {
+        if !Path::new(pack_name)
+            .strip_prefix(LOOSE_DIR)
+            .is_ok_and(|rest| !rest.as_os_str().is_empty())
+        {
             return false;
         }
 
@@ -420,12 +433,14 @@ impl Repository {
     }
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
+        super::transaction::check_complete(&self.data_dir)?;
         let pack_index_path = self.get_pack_index_path(pack_id);
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Ok(PackIndex::load(pack_index_path)?)
     }
 
     pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
+        super::transaction::check_complete(&self.data_dir)?;
         let pack_index_path = match pack_id {
             PackId::Pack(name) => self
                 .data_dir()
@@ -732,16 +747,54 @@ impl Repository {
 
         let (index, ordering) = index.compute_object_offsets_and_ordering();
 
-        // Gather a list of all objects to compress.
-        let object_partitions = index.objects_partitioned_by_size(opts.num_frames, &ordering);
+        let (frames, frame_bufs) = self.compress_objects(&index, &ordering, opts, reporter)?;
 
-        let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
-            / std::cmp::max(1, object_partitions.len()) as u32;
+        // Create and serialize header.
+        let header = PackHeader::new(frames);
+        let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
+
+        // And a writer to that temporary file.
+        let mut pack_writer = io::BufWriter::new(create_file(&temp_path, None)?);
+        // Write header and frames.
+        write_skippable_frame(&mut pack_writer, &header_bytes)?;
+        for frame_buf in frame_bufs {
+            pack_writer.write_all(&frame_buf)?;
+        }
+        pack_writer.flush()?;
+        drop(pack_writer);
+
+        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
+        info!("Write index: {}", index_path.display());
+        index.save(index_path)?;
+
+        // Finally, move the .pack file itself to the packs/ dir.
+        fs::rename(&temp_path, &pack_path)?;
+
+        Ok(())
+    }
+
+    /// Compress the initial size-sorted layout from loose objects.
+    fn compress_objects(
+        &self,
+        index: &PackIndex,
+        ordering: &[crate::entrypool::Handle],
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+    ) -> Result<(Vec<PackFrame>, Vec<Vec<u8>>), Error> {
+        let fill = opts.fill_size()?;
+        let object_partitions = if opts.num_frames == 0 {
+            super::append::partition_by_budget(ordering, fill, |h| {
+                index.object_metadata(index.handle_to_checksum(*h)).size
+            })
+        } else {
+            index.objects_partitioned_by_size(opts.num_frames, ordering)
+        };
 
         let task_opts = batch::CompressionOptions {
             window_log: opts.compression_window_log,
             level: opts.compression_level,
-            num_workers: workers_per_task,
+            // Keep compression settings identical when a frame is rewritten.
+            num_workers: 1,
         };
 
         // Keep count of done compression tasks
@@ -764,10 +817,17 @@ impl Repository {
                     // All zero checksum is special case of empty object, which
                     // is not represented on disk.
                     if checksum.iter().all(|x| *x == 0) {
+                        if index.object_metadata(checksum).size != 0 {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "empty object has nonzero size",
+                            ));
+                        }
                         return Ok(Box::new(&[] as &[u8])); // Empty reader.
                     }
 
-                    Ok(Box::new(open_file(self.loose_object_path(checksum))?))
+                    let path = self.loose_object_path(checksum);
+                    Ok(Box::new(open_file(path)?))
                 });
 
                 let mut buf = vec![];
@@ -801,28 +861,7 @@ impl Repository {
         // Report that all compression tasks are done.
         reporter.checkpoint(total_task_count, Some(0));
 
-        // Create and serialize header.
-        let header = PackHeader::new(frames);
-        let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
-
-        // And a writer to that temporary file.
-        let mut pack_writer = io::BufWriter::new(create_file(&temp_path, None)?);
-        // Write header and frames.
-        write_skippable_frame(&mut pack_writer, &header_bytes)?;
-        for frame_buf in frame_bufs {
-            pack_writer.write_all(&frame_buf)?;
-        }
-        pack_writer.flush()?;
-        drop(pack_writer);
-
-        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
-        info!("Write index: {}", index_path.display());
-        index.save(index_path)?;
-
-        // Finally, move the .pack file itself to the packs/ dir.
-        fs::rename(&temp_path, &pack_path)?;
-
-        Ok(())
+        Ok((frames, frame_bufs))
     }
 
     /// Extracts all objects from the specified pack into the loose
@@ -1221,7 +1260,7 @@ impl Repository {
         Ok(())
     }
 
-    fn get_pack_path(&self, pack_id: &PackId) -> PathBuf {
+    pub(super) fn get_pack_path(&self, pack_id: &PackId) -> PathBuf {
         match pack_id {
             PackId::Pack(name) => self
                 .data_dir()

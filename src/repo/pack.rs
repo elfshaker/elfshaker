@@ -2,6 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 use std::{
     fmt,
     fs::File,
@@ -247,10 +248,44 @@ pub struct PackHeader {
     /// Valid pack headers have this value set to [`PACK_HEADER_MAGIC`].
     magic: u64,
     /// The list of frames in the pack file, sorted by their byte offsets.
-    frames: Vec<PackFrame>,
+    pub(crate) frames: Vec<PackFrame>,
 }
 
 impl PackHeader {
+    /// Read a modern pack's directory without opening decoders or reading objects.
+    /// Append deliberately rejects legacy/headerless packs and malformed lengths.
+    pub(crate) fn read_for_append(file: &mut File) -> Result<(Self, u64), Error> {
+        let file_size = file.metadata()?.len();
+        let mut prefix = [0u8; 8];
+        file.read_exact(&mut prefix)?;
+        let magic = u32::from_le_bytes(prefix[..4].try_into().unwrap());
+        if magic & 0xfffffff0 != SKIPPABLE_MAGIC_MASK {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                "appending requires a pack with a frame directory; explode and repack legacy packs first").into());
+        }
+        let size = u32::from_le_bytes(prefix[4..].try_into().unwrap()) as u64;
+        let header_size = size + 8;
+        if header_size > file_size {
+            return Err(Error::CorruptPack);
+        }
+        // Bound allocation by bytes actually present, including for corrupt input.
+        let header: Self =
+            rmp_serde::decode::from_read(file.take(size)).map_err(|_| Error::CorruptPack)?;
+        let compressed_size = header
+            .frames
+            .iter()
+            .try_fold(header_size, |offset, frame| {
+                offset
+                    .checked_add(frame.frame_size)
+                    .ok_or(Error::CorruptPack)
+            })?;
+        if !header.is_valid() || compressed_size != file_size {
+            return Err(Error::CorruptPack);
+        }
+        io::Seek::seek(file, io::SeekFrom::Start(header_size))?;
+        Ok((header, header_size))
+    }
+
     /// Create a new pack header.
     pub fn new(frames: Vec<PackFrame>) -> Self {
         Self {
@@ -279,8 +314,10 @@ pub struct Pack {
     name: String,
     /// The header of the pack.
     header: PackHeader,
-    /// PackReader instances for each frame in the .pack file.
-    frame_readers: Vec<PackReader>,
+    /// Compressed frame offsets. Open readers only while a worker uses a frame,
+    /// so a pack with thousands of appended frames does not exhaust file handles.
+    frame_offsets: Vec<u64>,
+    pack_path: PathBuf,
     /// The file size of the pack (in bytes).
     file_size: u64,
 }
@@ -295,6 +332,7 @@ impl Pack {
     where
         P: AsRef<Path>,
     {
+        super::transaction::check_complete(data_dir.as_ref())?;
         let PackId::Pack(pack_name) = pack_name;
         let packs_data = data_dir.as_ref().join(PACKS_DIR);
 
@@ -305,19 +343,20 @@ impl Pack {
         pack_path.set_extension(PACK_EXTENSION);
 
         info!("Opening pack file {:?}...", pack_path);
-        let (file_size, header, frame_readers) =
+        let (file_size, header, frame_offsets) =
             Self::open_pack(&pack_path).or_else(|_| Self::open_pack_legacy(&pack_path))?;
 
         Ok(Pack {
             name: pack_name.to_owned(),
             header,
-            frame_readers,
+            frame_offsets,
+            pack_path,
             file_size,
         })
     }
 
     /// Opens the pack file for reading.
-    fn open_pack(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
+    fn open_pack(pack_path: &Path) -> Result<(u64, PackHeader, Vec<u64>), Error> {
         let file = open_file(pack_path)?;
         let file_size = file.metadata()?.len();
         let mut reader = io::BufReader::new(file);
@@ -333,25 +372,15 @@ impl Pack {
             return Err(Error::CorruptPack);
         }
 
-        let frame_offsets = compute_frame_offsets(&header.frames);
-        let frame_readers = frame_offsets
-            .iter()
-            .map(|offset| -> Result<_, Error> {
-                let mut reader = open_file(pack_path)?;
-                io::Seek::seek(&mut reader, io::SeekFrom::Start(header_size + offset))?;
-                let mut reader = Decoder::new(reader)?;
-                reader.set_parameter(DParameter::WindowLogMax(DEFAULT_WINDOW_LOG_MAX))?;
-                // Wrap in a `PackReader`.
-                let reader = PackReader::Compressed(reader);
-                Ok(reader)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok((file_size, header, frame_readers))
+        let frame_offsets = compute_frame_offsets(&header.frames)
+            .into_iter()
+            .map(|offset| header_size + offset)
+            .collect();
+        Ok((file_size, header, frame_offsets))
     }
 
     /// Backwards-compatible open_pack for the legacy pack format (no skippable frame/no header).
-    fn open_pack_legacy(pack_path: &Path) -> Result<(u64, PackHeader, Vec<PackReader>), Error> {
+    fn open_pack_legacy(pack_path: &Path) -> Result<(u64, PackHeader, Vec<u64>), Error> {
         let file = open_file(pack_path)?;
         let file_size = file.metadata()?.len();
 
@@ -362,11 +391,7 @@ impl Pack {
             decompressed_size: u64::MAX,
         }]);
 
-        let mut reader = Decoder::new(file)?;
-        reader.set_parameter(DParameter::WindowLogMax(DEFAULT_WINDOW_LOG_MAX))?;
-        let frame_reader = PackReader::Compressed(reader);
-
-        Ok((file_size, header, vec![frame_reader]))
+        Ok((file_size, header, vec![0]))
     }
 
     /// The base filename ([`Path::file_stem`]) of the pack.
@@ -438,8 +463,9 @@ impl Pack {
         );
 
         // Collect required for run_in_parallel ExactSizeIterator argument.
+        let pack_path = &self.pack_path;
         let tasks = self
-            .frame_readers
+            .frame_offsets
             .into_iter()
             .zip(frame_to_entries)
             // Skip empty frames.
@@ -451,7 +477,18 @@ impl Pack {
         let results = run_in_parallel(
             num_workers as usize,
             tasks.into_iter(),
-            |(frame_reader, entries)| extract_files(frame_reader, &entries, &output_dir, verify),
+            |(offset, entries)| {
+                let mut file = open_file(pack_path)?;
+                io::Seek::seek(&mut file, io::SeekFrom::Start(offset))?;
+                let mut decoder = Decoder::new(file)?;
+                decoder.set_parameter(DParameter::WindowLogMax(DEFAULT_WINDOW_LOG_MAX))?;
+                extract_files(
+                    PackReader::Compressed(decoder),
+                    &entries,
+                    &output_dir,
+                    verify,
+                )
+            },
         );
         // Collect stats
         let stats = results
@@ -637,14 +674,13 @@ fn extract_files(
         let mut pos = 0;
         for entry in entries {
             let metadata = &entry.object_metadata;
-            // Seek forward
-            let discard_bytes = metadata.offset - pos;
             // Check if we need to read a new object.
             // The current position in stream can be AFTER the object offset only
             // if the previous and this object are the same. This is because the objects
             // are sorted by offset, and the current position is set to the offset at the
             // end of each object, after that object is consumed.
             if pos <= metadata.offset {
+                let discard_bytes = metadata.offset - pos;
                 stats.seek_time += measure_ok(|| reader.seek(discard_bytes))?.0.as_secs_f64();
                 // Resize buf
                 buf.resize(metadata.size as usize, 0);

@@ -3,6 +3,7 @@
 
 //! Contains core types for interfacing with elfshaker repositories.
 mod algo;
+mod append;
 mod constants;
 mod error;
 #[doc(hidden)]
@@ -10,6 +11,7 @@ pub mod fs;
 mod pack;
 mod remote;
 mod repository;
+mod transaction;
 
 #[doc(hidden)]
 pub use algo::{partition_by_u64, run_in_parallel};

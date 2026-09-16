@@ -4,6 +4,7 @@
 - [Core concepts](#core-concepts)
 - [Workflow](#workflow)
 - [Create snapshot](#create-snapshot)
+- [Append builds to a pack](#append-builds-to-a-pack)
 - [Extract snapshot](#extract-snapshot)
 - [List packs, snapshots, files](#extract-snapshot)
 - [Write files to stdout](#write-files-to-stdout)
@@ -121,6 +122,80 @@ Creates the pack `my-pack` (file is `elfshaker_data/packs/my-pack.idx`) by packi
     🛈 Our experiments indicate that 1 frame per 512 MiB is optimal for packing builds of LLVM and that is what omitting `--frames` does.
 
 3. Combine all snapshots into a `<pack>.pack.idx`.
+
+## Append builds to a pack
+
+Create a pack, then append new builds as they become available:
+
+```bash
+elfshaker store build-0001
+elfshaker pack current-month loose/build-0001
+
+# After the next build finishes:
+elfshaker store build-0002
+elfshaker pack --append current-month loose/build-0002
+elfshaker extract current-month:build-0002 --verify
+```
+
+Append accepts one or more loose snapshot indexes, or `--snapshots-from` /
+`--snapshots0-from` lists of loose snapshots. Supply them in build order. Without
+an explicit selection it tries all loose snapshots. Duplicate snapshot tags are
+errors, even when their contents match. The target must already exist locally and
+have a frame directory; headerless legacy packs must first be exploded and repacked.
+
+Identical objects are reused by checksum across the entire pack. New versions of
+a path are merged into the frame containing its last-seen version, including paths
+that disappeared in an intervening snapshot. New paths use the frame with the
+closest object-size range. Only affected frames are decompressed and recompressed;
+unaffected compressed frames are copied unchanged. All historical objects and
+snapshots remain accessible. Old loose objects are unnecessary for append; new
+loose objects and rewritten old objects are verified before publication.
+
+`--frame-size` sets the target decompressed frame size in MiB (default **512**).
+`--frame-fill` sets the initial and post-split fill percentage (default **75**).
+When old plus incoming objects exceed the target, the combined objects are sorted
+by size and split into frames at the fill budget. A single object is never split,
+so an oversized object occupies a frame by itself. Use the same settings when
+creating the initial pack and appending:
+
+```bash
+elfshaker pack --frame-size 512 --frame-fill 75 current-month loose/build-0001
+elfshaker pack --append --frame-size 512 --frame-fill 75 current-month loose/build-0002
+```
+
+The size and fill settings are supplied per command, not stored in the pack.
+`--frames` remains available for an explicit frame count during initial packing;
+it cannot be combined with append or explicit size/fill options. Compression uses
+one encoder thread per frame, with `--threads` controlling parallel frame work.
+Rewritten frames use the command's compression level; unaffected frames keep theirs.
+
+Append needs temporary disk space for the replacement compressed pack and index.
+It copies the compressed pack even when only a few frames change, and keeps the
+compressed output plus active frames in memory. Lower `--threads` to reduce the
+number of frames being decompressed and recompressed simultaneously.
+
+The repository lock serializes readers and writers. A prepared pack/index pair is
+published through a recovery journal: if interrupted, opening the repository with
+an append-capable elfshaker finishes publication before reading either file. Keep
+`elfshaker_data/.append-transaction` intact until recovery succeeds. Recovery needs
+write access. After an interruption, check the target's snapshot list before
+retrying; publication may already have completed. HEAD follows a packed loose
+snapshot after normal success; if interrupted earlier, it can still point to the
+retained loose snapshot. Append does not remove loose snapshots or objects.
+
+The pack and index formats are unchanged, so completed packs remain readable by
+older versions. Older versions do not recover unfinished append transactions;
+finish recovery with the updated elfshaker before using them or publishing files.
+Remote publication still requires a matching pack/index pair and updated manifest.
+
+To compact into a new pack, make each unique object loose once and repack the index:
+
+```bash
+elfshaker explode current-month
+elfshaker pack sealed-month current-month
+```
+
+There is no need to extract and store every historical snapshot individually.
 
 ## List packs, snapshots, files
 ```bash

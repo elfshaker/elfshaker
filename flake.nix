@@ -8,12 +8,27 @@
     fenix.url = "github:nix-community/fenix";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    toolchain-nixpkgs = {
+      url = "github:NixOS/nixpkgs/4c7870105e7f1fdf9c48688c8d7efc21abf0688a";
+      flake = false;
+    };
+    toolchain-gnu231 = {
+      url = "https://github.com/NixOS/nixpkgs/archive/cd63096d6d887d689543a0b97743d28995bc9bc3.tar.gz";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, naersk, fenix }: let
+  outputs = { self, nixpkgs, naersk, fenix, toolchain-nixpkgs, toolchain-gnu231 }: let
     inherit (nixpkgs) lib;
     forAllSystems = lib.genAttrs lib.systems.flakeExposed;
+    toolkit = system: import ./contrib/nix/toolchain {
+      inherit system;
+      nixpkgs = toolchain-nixpkgs;
+      gnu231 = toolchain-gnu231;
+    };
   in {
+    toolchainEval.aarch64-linux = (toolkit "aarch64-linux").evaluation;
+    checks.aarch64-linux = (toolkit "aarch64-linux").checks;
 
     devShell = forAllSystems (system: let
       pkgs = import nixpkgs { inherit system; };
@@ -195,6 +210,6 @@
         ''
         else builtins.throw "elfshaker flake: Unknown platform ${nativePlatform.config}"
       );
-    });
+    } // lib.optionalAttrs (system == "aarch64-linux") (toolkit system).packages);
   };
 }

@@ -21,7 +21,7 @@ hashbrown = "0.15.3"
 hex = "0.4.3"
 chrono = "0.4.41"
 url = "2.5.4"
-ureq = "2.12.1"
+ureq = { version = "2.12.1", features = ["native-certs"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 rmp-serde = "0.15.5"
 num_cpus = "1.17.0"

@@ -116,7 +116,12 @@ pub struct PackOptions {
     pub compression_window_log: u32,
     pub compression_level: i32,
     pub num_workers: u32,
+    /// Explicit frame count for initial packing; zero uses the size and fill budget.
     pub num_frames: u32,
+    /// Target decompressed frame size for automatic packing and append.
+    pub frame_size: u64,
+    /// Initial and post-split fill percentage (1..=100).
+    pub frame_fill: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -221,13 +226,22 @@ impl Repository {
             Err(e) => Err(e)?,
         };
 
-        Ok(Repository {
+        let repo = Repository {
             path,
             data_dir,
             progress_reporter_factory: Box::new(|_| ProgressReporter::dummy()),
             lock_file,
             is_locked_exclusively: Mutex::new(false),
-        })
+        };
+        if super::transaction::pending(&repo.data_dir)? {
+            repo.lock_exclusive()?;
+        }
+        Ok(repo)
+    }
+
+    /// Whether the data directory was opened without a writable mutex.
+    pub fn is_read_only(&self) -> bool {
+        self.lock_file.is_none()
     }
 
     /// Acquires an exclusive lock for the remaining lifetime of this repository.
@@ -240,7 +254,7 @@ impl Repository {
             .lock()
             .map_err(|_| io::Error::other("repository lock state poisoned"))?;
         if *is_locked_exclusively {
-            return Ok(());
+            return super::transaction::recover(&self.data_dir);
         }
         let Some(lock_file) = &self.lock_file else {
             error!("Modifying readonly repository is not allowed.");
@@ -263,7 +277,7 @@ impl Repository {
         };
         restore_shared_lock_on_error(lock_file, lock_result)?;
         *is_locked_exclusively = true;
-        Ok(())
+        super::transaction::recover(&self.data_dir)
     }
 
     // Reads the state of HEAD. If the file does not exist, returns None values.
@@ -304,6 +318,7 @@ impl Repository {
 
     /// Open the pack.
     pub fn open_pack(&self, pack: &PackId) -> Result<Pack, Error> {
+        super::transaction::check_complete(&self.data_dir)?;
         Pack::open(self.data_dir(), pack)
     }
 
@@ -406,7 +421,10 @@ impl Repository {
         let PackId::Pack(pack_name) = pack_id;
 
         // The pack is loose if the .pack.idx is in the loose packs directory
-        if !pack_name.starts_with(&(LOOSE_DIR.to_owned() + std::path::MAIN_SEPARATOR_STR)) {
+        if !Path::new(pack_name)
+            .strip_prefix(LOOSE_DIR)
+            .is_ok_and(|rest| !rest.as_os_str().is_empty())
+        {
             return false;
         }
 
@@ -420,12 +438,16 @@ impl Repository {
     }
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
+        super::transaction::check_complete(&self.data_dir)?;
+        self.validate_remote_index(pack_id)?;
         let pack_index_path = self.get_pack_index_path(pack_id);
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Ok(PackIndex::load(pack_index_path)?)
     }
 
     pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
+        self.validate_remote_index(pack_id)?;
+        super::transaction::check_complete(&self.data_dir)?;
         let pack_index_path = match pack_id {
             PackId::Pack(name) => self
                 .data_dir()
@@ -446,6 +468,9 @@ impl Repository {
         snapshot_id: SnapshotId,
         opts: ExtractOptions,
     ) -> Result<ExtractResult, Error> {
+        if !self.is_read_only() {
+            self.lock_exclusive()?;
+        }
         let (head, head_time) = self.read_head()?;
 
         if head.is_some() && head_time.is_none() && !opts.force() {
@@ -458,7 +483,7 @@ impl Repository {
 
         let entries = source_index
             .resolve_snapshot(snapshot_id.tag())
-            .expect("failed to resolve snapshot"); // TODO: Temporary.
+            .ok_or_else(|| PackError::SnapshotNotFound(snapshot_id.tag().to_owned()))?;
         let entries = source_index.entries_from_handles(entries.iter())?;
 
         let (new_entries, old_entries) = if opts.reset || head.is_none() {
@@ -470,7 +495,11 @@ impl Repository {
                 let head_entries = source_index.entries_from_handles(
                     source_index
                         .resolve_snapshot(head.tag())
-                        .expect("failed to resolve snapshot")
+                        .ok_or_else(|| {
+                            Error::BrokenHeadRef(Box::new(
+                                PackError::SnapshotNotFound(head.tag().to_owned()).into(),
+                            ))
+                        })?
                         .iter(), // TODO: Temporary.
                 )?;
                 Self::compute_entry_diff(&head_entries, &entries)
@@ -480,7 +509,11 @@ impl Repository {
                     .entries_from_handles(
                         head_index
                             .resolve_snapshot(head.tag())
-                            .expect("failed to resolve snapshot")
+                            .ok_or_else(|| {
+                                Error::BrokenHeadRef(Box::new(
+                                    PackError::SnapshotNotFound(head.tag().to_owned()).into(),
+                                ))
+                            })?
                             .iter(), // TODO: Temporary.
                     )
                     .map_err(|e| {
@@ -585,36 +618,55 @@ impl Repository {
         }
     }
 
-    fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
-        let remotes_dir = self.data_dir().join(REMOTES_DIR);
-        let remotes = remote::load_remotes(&remotes_dir)?;
-
-        let pack = match pack {
-            PackId::Pack(p) => p.rsplit_once('/').map(|x| x.1).unwrap_or(p),
+    /// Look up a pack only in its owning remote namespace.
+    fn remote_pack(&self, pack: &PackId) -> Result<Option<(remote::RemoteIndex, String)>, Error> {
+        let PackId::Pack(name) = pack;
+        let Some((remote_name, pack_name)) = name.split_once('/') else {
+            return Ok(None);
         };
-        let pack_file_name = pack.to_string() + "." + PACK_EXTENSION;
+        let path = self
+            .data_dir()
+            .join(REMOTES_DIR)
+            .join(format!("{remote_name}.esi"));
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some((
+            remote::RemoteIndex::load(path)?,
+            pack_name.to_owned(),
+        )))
+    }
 
-        let agent = ureq::AgentBuilder::new().build();
-        let reporter = (self.progress_reporter_factory)(&format!("Fetching {pack_file_name}"));
+    /// Refuse a partially installed catalog until update completes it.
+    pub fn validate_remote_index(&self, pack: &PackId) -> Result<(), Error> {
+        if let Some((remote, name)) = self.remote_pack(pack)? {
+            if let Some(remote_pack) = remote.find_pack(&name) {
+                if !remote::verify_checksum(
+                    &self.get_pack_index_path(pack),
+                    &remote_pack.index_checksum,
+                )? {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                        format!("Index for {pack} does not match its remote manifest; run elfshaker update")).into());
+                }
+            }
+        }
+        Ok(())
+    }
 
-        for remote in remotes {
-            if let Some(remote_pack) = remote.find_pack(pack) {
-                info!("Found {} in {}. Updating...", pack, remote);
+    fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
+        if let Some((remote, name)) = self.remote_pack(pack)? {
+            if let Some(remote_pack) = remote.find_pack(&name) {
+                let agent = ureq::AgentBuilder::new().build();
+                let reporter = (self.progress_reporter_factory)(&format!("Fetching {pack}"));
+                reporter.checkpoint(0, Some(1));
                 let pack_path = self
                     .data_dir()
                     .join(PACKS_DIR)
-                    .join(remote.name().unwrap())
-                    .join(pack_file_name);
-
-                // Immediately shows some progress, without waiting for the
-                // HTTP response for the pack.
-                reporter.checkpoint(0, Some(1));
-                remote::update_remote_pack(&agent, remote_pack, &pack_path, &reporter)?;
-                return Ok(());
+                    .join(format!("{pack}.{PACK_EXTENSION}"));
+                return remote::update_remote_pack(&agent, remote_pack, &pack_path, &reporter);
             }
         }
-
-        Err(Error::PackNotFound(pack.into()))
+        Err(Error::PackNotFound(pack.to_string()))
     }
 
     /// The name of the directory containing the elfshaker repository data.
@@ -732,16 +784,54 @@ impl Repository {
 
         let (index, ordering) = index.compute_object_offsets_and_ordering();
 
-        // Gather a list of all objects to compress.
-        let object_partitions = index.objects_partitioned_by_size(opts.num_frames, &ordering);
+        let (frames, frame_bufs) = self.compress_objects(&index, &ordering, opts, reporter)?;
 
-        let workers_per_task = (opts.num_workers + object_partitions.len() as u32 - 1)
-            / std::cmp::max(1, object_partitions.len()) as u32;
+        // Create and serialize header.
+        let header = PackHeader::new(frames);
+        let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
+
+        // And a writer to that temporary file.
+        let mut pack_writer = io::BufWriter::new(create_file(&temp_path, None)?);
+        // Write header and frames.
+        write_skippable_frame(&mut pack_writer, &header_bytes)?;
+        for frame_buf in frame_bufs {
+            pack_writer.write_all(&frame_buf)?;
+        }
+        pack_writer.flush()?;
+        drop(pack_writer);
+
+        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
+        info!("Write index: {}", index_path.display());
+        index.save(index_path)?;
+
+        // Finally, move the .pack file itself to the packs/ dir.
+        fs::rename(&temp_path, &pack_path)?;
+
+        Ok(())
+    }
+
+    /// Compress the initial size-sorted layout from loose objects.
+    fn compress_objects(
+        &self,
+        index: &PackIndex,
+        ordering: &[crate::entrypool::Handle],
+        opts: &PackOptions,
+        reporter: &ProgressReporter,
+    ) -> Result<(Vec<PackFrame>, Vec<Vec<u8>>), Error> {
+        let fill = opts.fill_size()?;
+        let object_partitions = if opts.num_frames == 0 {
+            super::append::partition_by_budget(ordering, fill, |h| {
+                index.object_metadata(index.handle_to_checksum(*h)).size
+            })
+        } else {
+            index.objects_partitioned_by_size(opts.num_frames, ordering)
+        };
 
         let task_opts = batch::CompressionOptions {
             window_log: opts.compression_window_log,
             level: opts.compression_level,
-            num_workers: workers_per_task,
+            // Keep compression settings identical when a frame is rewritten.
+            num_workers: 1,
         };
 
         // Keep count of done compression tasks
@@ -764,10 +854,17 @@ impl Repository {
                     // All zero checksum is special case of empty object, which
                     // is not represented on disk.
                     if checksum.iter().all(|x| *x == 0) {
+                        if index.object_metadata(checksum).size != 0 {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "empty object has nonzero size",
+                            ));
+                        }
                         return Ok(Box::new(&[] as &[u8])); // Empty reader.
                     }
 
-                    Ok(Box::new(open_file(self.loose_object_path(checksum))?))
+                    let path = self.loose_object_path(checksum);
+                    Ok(Box::new(open_file(path)?))
                 });
 
                 let mut buf = vec![];
@@ -801,28 +898,7 @@ impl Repository {
         // Report that all compression tasks are done.
         reporter.checkpoint(total_task_count, Some(0));
 
-        // Create and serialize header.
-        let header = PackHeader::new(frames);
-        let header_bytes = rmp_serde::encode::to_vec(&header).expect("Serialization failed!");
-
-        // And a writer to that temporary file.
-        let mut pack_writer = io::BufWriter::new(create_file(&temp_path, None)?);
-        // Write header and frames.
-        write_skippable_frame(&mut pack_writer, &header_bytes)?;
-        for frame_buf in frame_bufs {
-            pack_writer.write_all(&frame_buf)?;
-        }
-        pack_writer.flush()?;
-        drop(pack_writer);
-
-        let index_path = pack_path.with_extension(PACK_INDEX_EXTENSION);
-        info!("Write index: {}", index_path.display());
-        index.save(index_path)?;
-
-        // Finally, move the .pack file itself to the packs/ dir.
-        fs::rename(&temp_path, &pack_path)?;
-
-        Ok(())
+        Ok((frames, frame_bufs))
     }
 
     /// Extracts all objects from the specified pack into the loose
@@ -1221,7 +1297,7 @@ impl Repository {
         Ok(())
     }
 
-    fn get_pack_path(&self, pack_id: &PackId) -> PathBuf {
+    pub(super) fn get_pack_path(&self, pack_id: &PackId) -> PathBuf {
         match pack_id {
             PackId::Pack(name) => self
                 .data_dir()
@@ -1375,6 +1451,7 @@ impl Repository {
 
     /// Updates all remotes and their associated .pack.idx files.
     pub fn update_remotes(&self) -> Result<(), Error> {
+        self.lock_exclusive()?;
         let remotes_dir = self.data_dir().join(REMOTES_DIR);
         let remotes = remote::load_remotes(&remotes_dir)?;
 
@@ -1390,9 +1467,8 @@ impl Repository {
             remote_packs_dir.push(remote_name);
 
             info!("Updating {}...", remote);
-            let remote = remote::update_remote(&agent, &remote)?;
             fs::create_dir_all(&remote_packs_dir)?;
-            remote::update_remote_pack_indexes(&agent, &remote, &remote_packs_dir, &reporter)?;
+            remote::update_remote(&agent, &remote, &remote_packs_dir, &reporter)?;
         }
         Ok(())
     }

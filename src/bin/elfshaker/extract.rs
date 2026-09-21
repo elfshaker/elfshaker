@@ -15,6 +15,30 @@ pub(crate) const SUBCOMMAND: &str = "extract";
 pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let data_dir = std::path::Path::new(matches.get_one::<String>("data_dir").unwrap());
     let snapshot = matches.get_one::<String>("snapshot").unwrap();
+    let mut repo = open_repo_from_cwd(data_dir)?;
+    if !repo.is_read_only() {
+        repo.lock_exclusive()?;
+    }
+    let new_head = match repo.find_snapshot(snapshot) {
+        Err(RepoError::PackError(PackError::SnapshotNotFound(_))) => {
+            info!("Snapshot not available locally. Updating remotes...");
+            repo.update_remotes()?;
+            repo.find_snapshot(snapshot)?
+        }
+        r => r?,
+    };
+
+    repo.set_progress_reporter(|msg| create_percentage_print_reporter(msg, 5));
+    extract(&mut repo, matches, new_head)
+}
+
+/// Shared extraction behavior for extract and run; callers choose resolution
+/// and progress reporting and retain ownership of the repository lock.
+pub(crate) fn extract(
+    repo: &mut elfshaker::repo::Repository,
+    matches: &ArgMatches,
+    new_head: elfshaker::repo::SnapshotId,
+) -> Result<(), Box<dyn Error>> {
     let is_reset = matches.get_flag("reset");
     let is_verify = matches.get_flag("verify");
     let is_force = matches.get_flag("force");
@@ -32,22 +56,13 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         n => n,
     };
 
-    let mut repo = open_repo_from_cwd(data_dir)?;
-    let new_head = match repo.find_snapshot(snapshot) {
-        Err(RepoError::PackError(PackError::SnapshotNotFound(_))) => {
-            info!("Snapshot not available locally. Updating remotes...");
-            repo.update_remotes()?;
-            repo.find_snapshot(snapshot)?
-        }
-        r => r?,
-    };
-
+    repo.validate_remote_index(new_head.pack())?;
     match repo.read_head()? {
         (Some(h), _) if h == new_head && !is_reset => {
             // The specified snapshot is already extracted and --reset is not specified,
             // so this is a no-op.
             warn!(
-                "HEAD is already at {} and --reset is not specified. Exiting early...",
+                "HEAD is already at {} and --reset is not specified. Skipping extraction...",
                 h,
             );
             return Ok(());
@@ -61,7 +76,6 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     opts.set_force(is_force);
     opts.set_num_workers(threads);
 
-    repo.set_progress_reporter(|msg| create_percentage_print_reporter(msg, 5));
     let result = repo.extract_snapshot(new_head.clone(), opts)?;
 
     eprintln!("A \t{} files", result.added_file_count);

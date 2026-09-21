@@ -43,3 +43,17 @@ cargo +stable build --release --bin elfshaker
 ```bash
 ./target/release/elfshaker --help
 ```
+
+## HTTPS certificate trust
+
+Remote operations (`clone`, `update`, and pack downloads) use the operating
+system's trusted certificates. For private certificate authorities, install the
+CA in the system trust store or set `SSL_CERT_FILE` to a PEM certificate bundle:
+
+```bash
+SSL_CERT_FILE=/path/to/ca-bundle.pem elfshaker clone https://example.com/index.esi snapshots
+```
+
+An explicit bundle replaces the default certificate sources, so include all CAs
+needed by the remote and any download redirects. Keep the variable set for
+subsequent remote operations. Certificate and hostname verification remain enabled.

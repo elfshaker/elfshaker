@@ -13,32 +13,29 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let term = matches.get_one::<String>("term").unwrap();
     let repo = open_repo_from_cwd(data_dir)?;
 
-    let mut table = vec![];
-    for pack_id in repo.packs()? {
-        for snapshot in repo.load_index_snapshots(&pack_id)? {
-            table.push([snapshot.to_string(), pack_id.to_string()])
-        }
-    }
-
-    let table = repo
-        .packs()?
+    let table = search(&repo, term)?
         .into_iter()
-        .flat_map(|p| {
-            repo.load_index_snapshots(&p).map(|pack_index| {
-                pack_index
-                    .into_iter()
-                    .filter_map(|s| {
-                        s.contains(term)
-                            .then(|| IntoIterator::into_iter([s.to_string(), p.to_string()]))
-                    })
-                    .collect::<Vec<_>>()
-            })
-        })
-        .flatten();
+        .map(|s| IntoIterator::into_iter([s.tag().to_owned(), s.pack().to_string()]));
 
     let i = IntoIterator::into_iter(["SNAPSHOT".to_owned(), "PACK".to_owned()]);
     print_table(Some(i), table);
     Ok(())
+}
+
+/// Shared case-sensitive substring search. Never silently ignore broken indexes.
+pub(crate) fn search(
+    repo: &elfshaker::repo::Repository,
+    term: &str,
+) -> Result<Vec<elfshaker::repo::SnapshotId>, Box<dyn Error>> {
+    let mut matches = Vec::new();
+    for pack in repo.packs()? {
+        for tag in repo.load_index_snapshots(&pack)? {
+            if tag.contains(term) {
+                matches.push(elfshaker::repo::SnapshotId::new(pack.clone(), &tag)?);
+            }
+        }
+    }
+    Ok(matches)
 }
 
 pub(crate) fn get_app() -> Command {

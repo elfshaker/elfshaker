@@ -67,24 +67,40 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         n => n,
     };
 
-    let mut repo = open_repo_from_cwd(data_dir)?;
-
+    // Consume external input before opening the repository: a pipeline producer
+    // may itself need a repository lock before it can write the snapshot list.
     let open = |filename| {
         if filename == "-" {
-            Box::new(io::stdin()) as Box<dyn io::Read>
+            Ok(Box::new(io::stdin()) as Box<dyn io::Read>)
         } else {
-            Box::new(fs::File::open(filename).unwrap()) as Box<dyn io::Read>
+            fs::File::open(filename).map(|f| Box::new(f) as Box<dyn io::Read>)
         }
     };
-    let snapshots = match (snapshots_from, snapshots0_from, indexes) {
-        (Some(s), None, None) => packs_from_list(&repo, open(s), b'\n'),
-        (None, Some(s), None) => packs_from_list(&repo, open(s), b'\0'),
-        (None, None, Some(s)) => Ok(s),
-        (None, None, None) => repo.loose_packs(),
+    let snapshot_list = match (snapshots_from, snapshots0_from, indexes.as_ref()) {
+        (Some(s), None, None) => Some((s, b'\n')),
+        (None, Some(s), None) => Some((s, b'\0')),
+        (None, None, _) => None,
         _ => {
             error!("Cannot specify a combination of --snapshots-from, --snapshots0-from and <indexes>!");
             return Err("Invalid options!".into());
         }
+    }
+    .map(|(filename, separator)| {
+        let mut buf = Vec::new();
+        open(filename)?.read_to_end(&mut buf)?;
+        Ok::<_, io::Error>((buf, separator))
+    })
+    .transpose()?;
+
+    let mut repo = open_repo_from_cwd(data_dir)?;
+    let append = matches.get_flag("append");
+    // Resolve snapshots and read source indexes/HEAD only after acquiring the
+    // exclusive lock; upgrades can release the shared lock while waiting.
+    repo.lock_exclusive()?;
+    let snapshots = match (snapshot_list, indexes) {
+        (Some((buf, separator)), _) => packs_from_list(&repo, &buf, separator),
+        (None, Some(s)) => Ok(s),
+        (None, None) => repo.loose_packs(),
     }?;
 
     // No point in creating an empty pack.
@@ -95,38 +111,42 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     let mut new_index = PackIndex::new();
 
     for pack_id in &snapshots {
-        assert!(
-            repo.is_pack_loose(pack_id),
-            "packing non-loose indexes not yet supported"
-        );
+        if append && !repo.is_pack_loose(pack_id) {
+            return Err("--append accepts only loose snapshot indexes".into());
+        }
         let index = repo.load_index(pack_id)?;
         eprintln!("Packing {} {}", pack_id, index.snapshot_tags().len());
-        index.for_each_snapshot(|snapshot, entries| {
+        if let Some(error) = index.for_each_snapshot(|snapshot, entries| {
             if let Err(e) = new_index.push_snapshot(snapshot.to_owned(), entries.clone()) {
-                ControlFlow::Break(Result::<(), _>::Err(e))
+                ControlFlow::Break(e)
             } else {
                 ControlFlow::Continue(())
             }
-        })?;
+        })? {
+            return Err(error.into());
+        }
     }
 
-    // Parse --frames
-    let frames: u32 = match matches.get_one::<String>("frames").unwrap().parse()? {
-        0 => {
-            let loose_size = new_index.object_size_total();
-            let frames = get_frame_size_hint(loose_size);
-            info!("--frames=0: using suggested number of frames = {}", frames);
-            frames
-        }
-        n => n,
-    };
+    let frames = *matches.get_one::<u32>("frames").unwrap();
+    let frame_size = matches
+        .get_one::<u64>("frame-size")
+        .unwrap()
+        .checked_mul(1024 * 1024)
+        .ok_or("frame size is too large")?;
+    let frame_fill = *matches.get_one::<u8>("frame-fill").unwrap();
 
     // Print progress every 5%
     let reporter = create_percentage_print_reporter("Compressing objects", 5);
 
     eprintln!("Compressing objects...");
     // Create a pack using the ordered "loose" index.
-    repo.create_pack(
+    let pack_fn = if append {
+        Repository::append_pack
+    } else {
+        Repository::create_pack
+    };
+    pack_fn(
+        &mut repo,
         &pack,
         new_index,
         &PackOptions {
@@ -135,6 +155,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             compression_window_log: DEFAULT_COMPRESSION_WINDOW_LOG,
             num_workers: threads,
             num_frames: frames,
+            frame_size,
+            frame_fill,
         },
         &reporter,
     )?;
@@ -158,17 +180,20 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 fn packs_from_list(
     repo: &Repository,
-    mut reader: impl io::Read,
+    buf: &[u8],
     separator: u8,
 ) -> Result<Vec<PackId>, elfshaker::repo::Error> {
-    let mut buf = vec![];
-    reader.read_to_end(&mut buf)?;
-
     buf.split(|c| *c == separator)
         .filter(|s| !s.is_empty())
         .map(std::str::from_utf8)
         .map(|s| match s {
-            Ok(v) => repo.find_snapshot(v).map(|l| l.pack().clone()),
+            Ok(v) => repo.find_snapshot(v).and_then(|snapshot| {
+                if !repo.is_pack_loose(snapshot.pack()) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                        "snapshot lists require loose snapshots; to repack a whole packed index, pass its name positionally after exploding it").into());
+                }
+                Ok(snapshot.pack().clone())
+            }),
             Err(e) => {
                 let msg = format!("Unable to decode snapshot list: {e}");
                 Err(elfshaker::repo::Error::IOError(io::Error::new(
@@ -191,6 +216,12 @@ pub(crate) fn get_app() -> Command {
                 .index(1)
                 .value_name("name")
                 .help("Specifies the name of the pack to create."),
+        )
+        .arg(
+            Arg::new("append")
+                .long("append")
+                .action(clap::ArgAction::SetTrue)
+                .help("Append loose snapshots by merging new objects into related frames and splitting overflowing frames. Unaffected frames are copied unchanged. Duplicate snapshot tags are rejected."),
         )
         .arg(
             Arg::new("threads")
@@ -216,8 +247,26 @@ pub(crate) fn get_app() -> Command {
                     A lower number of frames limits the number of decompression \
                     processes that can run concurrently. A higher number of \
                     frames can result in poorer compression. Specify 0 to \
-                    auto-detect the appropriate number of frames to emit.")
+                    use the frame size and fill budget. Only available when creating a pack.")
+                .value_parser(clap::value_parser!(u32))
+                .conflicts_with_all(["append", "frame-size", "frame-fill"])
                 .default_value("0")
+        )
+        .arg(
+            Arg::new("frame-size")
+                .long("frame-size")
+                .value_name("MiB")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .default_value("512")
+                .help("Target decompressed frame size. Appending splits overflowing frames without splitting individual objects.")
+        )
+        .arg(
+            Arg::new("frame-fill")
+                .long("frame-fill")
+                .value_name("PERCENT")
+                .value_parser(clap::value_parser!(u8).range(1..=100))
+                .default_value("75")
+                .help("Fill budget for initial frames and frames created by splitting. Existing frames can grow to the full target.")
         )
         .arg(
             Arg::new("snapshots-from")
@@ -234,7 +283,8 @@ pub(crate) fn get_app() -> Command {
         .arg(
             Arg::new("indexes")
             .index(2)
-                .help("Specify the indexes of packs to include.")
+                .num_args(1..)
+                .help("Specify the indexes to include. Packed inputs require their objects to be made loose with 'explode' first. --append requires loose inputs.")
         )
 }
 
@@ -242,12 +292,4 @@ pub(crate) fn get_app() -> Command {
 /// The memory will only be reclaimed at process exit.
 fn leak_static_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
-}
-
-/// This is the built-in heuristic that tells us how many frames to use based on
-/// the data size. 1 frame / 512 MiB
-const FRAME_PER_DATA_SIZE: u64 = 512 * 1024 * 1024;
-fn get_frame_size_hint(object_size_total: u64) -> u32 {
-    // Divide by FRAME_PER_DATA_SIZE, rounding up
-    object_size_total.div_ceil(FRAME_PER_DATA_SIZE) as u32
 }

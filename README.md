@@ -10,6 +10,11 @@ elfshaker is a low-footprint, high-performance version control system fine-tuned
 
 - It allows few-second access to any commit of clang with the [manyclangs project](https://github.com/elfshaker/manyclangs). For example, this accelerates bisection of [LLVM](https://llvm.org/) by a factor of 60x! This is done by extracting builds of LLVM on-demand from locally stored elfshaker packs, each of which contains ~1,800 builds and is about 100 MiB in size, even though the full originals would take TiBs to store! Extracting a single build takes 2-4s on modern hardware.
 
+For downloading and running existing compiler builds, start with the
+[consumer workflow in contrib](contrib/README.md#consuming-manyclangs-packs).
+[`elfshaker run`](docs/users/usage.md#run-a-command-in-a-snapshot) resolves a unique
+snapshot search, extracts it, and runs your command with its exit status intact.
+
 ## †Applicability
 
 Or, "how on earth do you get such a phenomenal result?".

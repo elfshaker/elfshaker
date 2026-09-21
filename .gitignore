@@ -6,3 +6,5 @@ contrib/elfshaker-serve/elfshaker-serve
 contrib/elfshaker-serve/snapshots.txt
 contrib/elfshaker-serve/trace.log
 contrib/manyclangs-builder/manyclangs-builder
+
+__pycache__/

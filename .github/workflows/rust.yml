@@ -23,6 +23,8 @@ jobs:
       run: cargo build --release --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Run remote and command regression tests
+      run: PYTHONDONTWRITEBYTECODE=1 TEST_ELFSHAKER=target/release/elfshaker python3 -m unittest discover -s test-scripts -p 'test_*.py' -v
     - name: Run check
       run: ./test-scripts/check.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack
     - name: Generate random pack

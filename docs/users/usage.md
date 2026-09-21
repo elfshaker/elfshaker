@@ -4,7 +4,10 @@
 - [Core concepts](#core-concepts)
 - [Workflow](#workflow)
 - [Create snapshot](#create-snapshot)
+- [Append builds to a pack](#append-builds-to-a-pack)
+- [Refresh remote packs](#refresh-remote-packs)
 - [Extract snapshot](#extract-snapshot)
+- [Run a command in a snapshot](#run-a-command-in-a-snapshot)
 - [List packs, snapshots, files](#extract-snapshot)
 - [Write files to stdout](#write-files-to-stdout)
 
@@ -97,6 +100,44 @@ elfshaker extract --help
     a. If `--reset` is NOT specified, do perform an incremental update of the repository directory by comparing the set of files against the last extracted snapshot (`elfshaker_data/HEAD`).
     b. If `--reset` is specified, ignore `elfshaker_data/HEAD` and extract everything, overwriting if file names clash.
 
+## Run a command in a snapshot
+
+```sh
+elfshaker run [--verify] [--reset] [--force] [-T N] SNAPSHOT -- COMMAND [ARGS...]
+elfshaker run --verify commit-prefix -- ./test.sh 'argument with spaces'
+elfshaker run my-pack:my-snapshot -- sh -c 'make && ./test'
+```
+
+`run` searches the installed catalog using the same case-sensitive substring
+matching as `find`. Exactly one match is required, including when identical tags
+exist in several packs. An explicit `PACK:SNAPSHOT` selects that exact reference.
+Zero/multiple matches are errors; `run` never refreshes the catalog automatically.
+Run `elfshaker update` explicitly when new remote snapshots are needed.
+
+Extraction uses the same implementation and flags as `extract`. The command runs
+in the extraction working directory, including when that snapshot is already
+extracted. Arguments after `--` are passed directly, with no shell expansion;
+request a shell explicitly if needed. Environment and standard streams are
+inherited. Progress and extraction diagnostics go to stderr.
+
+Lookup, extraction and command-launch failures return **125** (useful for
+`git bisect run`). The command's own exit status is preserved, including Unix
+signal termination. Malformed CLI arguments retain the normal argument-error
+status. The repository is locked exclusively until the command exits. A command
+that invokes elfshaker on that same store can block; use a different store for
+nested operations. `run` requires a writable repository mutex.
+
+Elfshaker does not know how to link compilers. For manyclangs, pass the snapshot's
+existing script as the command:
+
+```sh
+mkdir -p bin
+elfshaker run --verify COMMIT_PREFIX -- bash ./link.sh --and-run clang --version
+```
+
+See [contrib's consumer workflow](../../contrib/README.md#consuming-manyclangs-packs)
+for catalog setup, Git refs, bisection and Docker/QEMU examples.
+
 ## Pack loose snapshots
 ```bash
 elfshaker pack <pack> [--frames N]
@@ -121,6 +162,80 @@ Creates the pack `my-pack` (file is `elfshaker_data/packs/my-pack.idx`) by packi
     🛈 Our experiments indicate that 1 frame per 512 MiB is optimal for packing builds of LLVM and that is what omitting `--frames` does.
 
 3. Combine all snapshots into a `<pack>.pack.idx`.
+
+## Append builds to a pack
+
+Create a pack, then append new builds as they become available:
+
+```bash
+elfshaker store build-0001
+elfshaker pack current-month loose/build-0001
+
+# After the next build finishes:
+elfshaker store build-0002
+elfshaker pack --append current-month loose/build-0002
+elfshaker extract current-month:build-0002 --verify
+```
+
+Append accepts one or more loose snapshot indexes, or `--snapshots-from` /
+`--snapshots0-from` lists of loose snapshots. Supply them in build order. Without
+an explicit selection it tries all loose snapshots. Duplicate snapshot tags are
+errors, even when their contents match. The target must already exist locally and
+have a frame directory; headerless legacy packs must first be exploded and repacked.
+
+Identical objects are reused by checksum across the entire pack. New versions of
+a path are merged into the frame containing its last-seen version, including paths
+that disappeared in an intervening snapshot. New paths use the frame with the
+closest object-size range. Only affected frames are decompressed and recompressed;
+unaffected compressed frames are copied unchanged. All historical objects and
+snapshots remain accessible. Old loose objects are unnecessary for append; new
+loose objects and rewritten old objects are verified before publication.
+
+`--frame-size` sets the target decompressed frame size in MiB (default **512**).
+`--frame-fill` sets the initial and post-split fill percentage (default **75**).
+When old plus incoming objects exceed the target, the combined objects are sorted
+by size and split into frames at the fill budget. A single object is never split,
+so an oversized object occupies a frame by itself. Use the same settings when
+creating the initial pack and appending:
+
+```bash
+elfshaker pack --frame-size 512 --frame-fill 75 current-month loose/build-0001
+elfshaker pack --append --frame-size 512 --frame-fill 75 current-month loose/build-0002
+```
+
+The size and fill settings are supplied per command, not stored in the pack.
+`--frames` remains available for an explicit frame count during initial packing;
+it cannot be combined with append or explicit size/fill options. Compression uses
+one encoder thread per frame, with `--threads` controlling parallel frame work.
+Rewritten frames use the command's compression level; unaffected frames keep theirs.
+
+Append needs temporary disk space for the replacement compressed pack and index.
+It copies the compressed pack even when only a few frames change, and keeps the
+compressed output plus active frames in memory. Lower `--threads` to reduce the
+number of frames being decompressed and recompressed simultaneously.
+
+The repository lock serializes readers and writers. A prepared pack/index pair is
+published through a recovery journal: if interrupted, opening the repository with
+an append-capable elfshaker finishes publication before reading either file. Keep
+`elfshaker_data/.append-transaction` intact until recovery succeeds. Recovery needs
+write access. After an interruption, check the target's snapshot list before
+retrying; publication may already have completed. HEAD follows a packed loose
+snapshot after normal success; if interrupted earlier, it can still point to the
+retained loose snapshot. Append does not remove loose snapshots or objects.
+
+The pack and index formats are unchanged, so completed packs remain readable by
+older versions. Older versions do not recover unfinished append transactions;
+finish recovery with the updated elfshaker before using them or publishing files.
+Remote publication still requires a matching pack/index pair and updated manifest.
+
+To compact into a new pack, make each unique object loose once and repack the index:
+
+```bash
+elfshaker explode current-month
+elfshaker pack sealed-month current-month
+```
+
+There is no need to extract and store every historical snapshot individually.
 
 ## List packs, snapshots, files
 ```bash
@@ -162,3 +277,24 @@ Writes the contents of the files specified by the given paths in the snapshot to
 (2) - Cleanup unreferenced loose objects.
 
 (3) - Cleanup snapshots and objects.
+
+## Refresh remote packs
+
+```sh
+elfshaker clone https://example.org/index.esi builds
+cd builds
+elfshaker update
+```
+
+`update` refreshes the manifest and verifies index downloads against its SHA-1
+hashes. It also hashes all cached remote payloads: unchanged packs stay cached,
+while changed or corrupt payloads are discarded and downloaded on demand by
+extraction. Reading all cached payloads can take time on large stores. Run
+`update` once when upgrading an existing store from an older client.
+
+Downloads are verified before installation. A publisher changing a pack/index
+pair while it is being downloaded can cause a checksum error; rerun `update`
+and then extraction after publication finishes. After an interrupted update,
+a manifest/index mismatch is reported with instructions to run `update` again.
+No pack or manifest format migration is needed. Remote publishers should retain
+existing snapshot tags and their contents when appending monthly builds.

@@ -3,6 +3,77 @@
 This directory contains scripts which make use of elfshaker, for example
 scripts to build a [manyclangs](https://github.com/elfshaker/manyclangs) pack.
 
+## Consuming manyclangs packs
+
+Use a build of elfshaker containing `run` and mutable remote-pack refresh.
+Create a repository from the publisher's `.esi` URL, then refresh it explicitly:
+
+```sh
+elfshaker clone https://your-publisher.example/index.esi manyclangs-store
+cd manyclangs-store
+elfshaker update
+elfshaker find COMMIT_PREFIX
+mkdir -p bin
+elfshaker run --verify COMMIT_PREFIX -- bash ./link.sh --and-run clang --version
+```
+
+`update` verifies indexes and hashes cached payloads. Unchanged monthly packs
+stay cached; changed payloads are discarded and downloaded when next needed.
+Run `update` once after upgrading an older store. On a checksum failure during
+publication, retry update and then run after the publisher finishes. Neither
+`run` nor the wrapper below refreshes the catalog automatically.
+
+`run` requires a unique substring match; `PACK:SNAPSHOT` disambiguates explicitly.
+It extracts into the current repository directory and holds its lock until the
+command finishes. That directory changes when another snapshot is selected.
+Avoid nested elfshaker commands on the same locked store.
+
+Linking stays in each snapshot's `link.sh`. Install a compatible linking
+compiler, or select one with `LINKSCRIPT_CC`, `LINKSCRIPT_CXX` and
+`LINKSCRIPT_LLD`. When needed, set `SSL_CERT_FILE` to a complete CA bundle for
+the endpoint. These settings are independent of elfshaker's generic execution.
+The historical packs and platform instructions are in the
+[manyclangs project](https://github.com/elfshaker/manyclangs).
+
+### Git refs and bisection
+
+From an LLVM Git checkout, the thin adapter resolves a Git ref and delegates
+extraction/execution to `elfshaker run`:
+
+```sh
+/path/to/elfshaker/contrib/manyclangs-run /absolute/path/to/manyclangs-store HEAD clang --version
+git bisect run /path/to/elfshaker/contrib/manyclangs-run /absolute/path/to/manyclangs-store HEAD clang /absolute/path/to/reproducer.c
+```
+
+The tool is linked on every invocation. Lookup, extraction and linking failures
+return 125; otherwise the tool's exit status is preserved. Use absolute paths
+for input files outside the extraction directory. The generic equivalent for
+link-and-run is:
+
+```sh
+sha=$(git rev-parse --short=10 HEAD)
+(cd /absolute/path/to/manyclangs-store && mkdir -p bin &&
+ elfshaker run --verify "$sha" -- bash ./link.sh --and-run clang --version)
+```
+
+Here a link failure is the command's status, not automatically a bisect skip;
+the wrapper provides that manyclangs-specific mapping.
+
+### Docker/QEMU
+
+Build the [manyclangs-qemu-aarch64 image](https://github.com/elfshaker/manyclangs/tree/main/docker-qemu-aarch64)
+and configure the documented emulation prerequisites. Set
+`USE_DOCKER_QEMU=aarch64` on the wrapper to link and run in that image. Direct use
+is also possible from the store:
+
+```sh
+elfshaker run --verify COMMIT_PREFIX -- docker run --rm \
+  --mount "type=bind,source=$PWD,target=/elfshaker" manyclangs-qemu-aarch64 \
+  bash -c 'mkdir -p bin; exec bash ./link.sh --and-run "$@"' manyclangs clang --version
+```
+
+The host performs extraction; the container performs linking and execution.
+
 # Building manyclangs packs
 
 These scripts are used to build the packfiles hosted at

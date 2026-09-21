@@ -10,7 +10,41 @@ A special kind of frame called a Skippable Frame can be used to inject custom un
 
 We use a Skippable Frame to write some additional metadata about the number of frames and their offsets in the file. Knowing these offsets beforehand allows us to split the file in chucks and decompress the frames individually. This header is the `PackHeader` struct serialized into the msgpack serialization format.
 
-The N compressed frames are regular Zstandard data frames. The decompressed content of each frame is the concatenation of the objects assigned to that frame. Our current heuristic for assigning objects works by sorting the full set of objects by size and then assigning those objects to equally-sized buckets. Each buckets forms a frame in the pack.
+The N compressed frames are regular Zstandard data frames. The decompressed content of each frame is the concatenation of the objects assigned to that frame. Initial packing sorts objects by size, then groups them by the frame fill budget (or an explicitly requested frame count). Each group forms a frame in the pack.
+
+`pack --append` deduplicates incoming objects against the target index and assigns
+novel objects to their last-seen same-path predecessor's frame, falling back to
+nearest object-size range. Only affected frames are decoded and rewritten. A frame
+that exceeds the target is split after sorting its old and new objects by size;
+unaffected compressed frames are copied unchanged. Initial and split frames use
+a configurable fill budget. No object is split across frames.
+
+Object offsets address the concatenated **decompressed** frames. Selective merging
+can shift offsets in every later frame, so append updates the complete index while
+preserving snapshot deltas and file metadata. An old index is not generally
+compatible with the new pack. No pack or index format version change is needed.
+
+Publication holds the exclusive repository lock. It writes and syncs the new pack,
+index and target name in a private directory under the data directory, then renames
+that directory to `.append-transaction` and syncs the data directory. This commits
+the intent to roll forward. Recovery renames each staged file over its destination
+and syncs both directories before proceeding. Missing staged files mean their
+renames already happened. After both destinations are durable, it atomically retires
+the journal directory and removes it. Directory syncing is performed on Unix;
+other platforms retain process-interruption recovery but do not have the same
+power-loss durability guarantee.
+
+Opening a repository checks for pending publication while holding the shared lock,
+then upgrades to exclusive and recovers before exposing data. Lock upgrades also
+recover after waiting for another writer. If recovery fails, the repository cannot
+be opened; an existing handle rejects pack/index reads while a journal remains.
+Unpublished staging directories and retired journals left by a killed process are
+not live state. Older elfshaker versions need a completed recovery before reading
+an interrupted repository. The journal does not update HEAD: until the command's
+normal HEAD update, the old reference remains valid because snapshots are retained.
+
+Extraction opens frame readers lazily, bounding open files by active workers
+rather than by the total frame count.
 
 🛈 The compression level can be set during packing. See the help output:
 ```bash

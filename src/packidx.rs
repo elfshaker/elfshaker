@@ -378,6 +378,71 @@ impl PackIndex {
         let handle = self.object_pool.get(checksum).unwrap();
         self.object_metadata.get(&handle).unwrap()
     }
+
+    /// Merge snapshots while retaining offsets of objects already in this pack.
+    /// Newly encountered objects must be available in the loose object store.
+    pub(crate) fn append_snapshots(&mut self, source: &PackIndex) -> Result<(), PackError> {
+        for checksum in source.object_checksums() {
+            if let Some(handle) = self.object_pool.get(checksum) {
+                if self.object_metadata[&handle].size != source.object_metadata(checksum).size {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "inconsistent size for an existing object",
+                    )
+                    .into());
+                }
+            }
+        }
+        // A deserialized index has no builder state. Reconstruct the last
+        // snapshot once, so the next delta is relative to it, not an empty tree.
+        if let Some(tag) = self.snapshot_tags.last() {
+            self.current = self.resolve_snapshot(tag).unwrap().into_iter().collect();
+        }
+        let result = source.for_each_snapshot(|tag, entries| {
+            let entries = entries
+                .iter()
+                .map(|entry| {
+                    let mut entry = FileEntry::from(entry.clone());
+                    entry.object_metadata = match self.object_pool.get(&entry.checksum) {
+                        Some(handle) => *self.object_metadata.get(&handle).unwrap(),
+                        None => ObjectMetadata {
+                            offset: LOOSE_OBJECT_OFFSET,
+                            size: entry.object_metadata.size,
+                        },
+                    };
+                    entry
+                })
+                .collect::<Vec<_>>();
+            match self.push_snapshot(tag.to_owned(), entries) {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(error) => ControlFlow::Break(error),
+            }
+        })?;
+        match result {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Include deleted paths too: a later reappearance can reuse their affinity.
+    pub(crate) fn last_seen_objects(
+        &self,
+    ) -> Result<std::collections::HashMap<OsString, ObjectChecksum>, PackError> {
+        let mut paths = std::collections::HashMap::new();
+        for delta in &self.snapshot_deltas {
+            for handle in &delta.added {
+                let entry = self.handle_to_entry(handle)?;
+                paths.insert(entry.path, entry.checksum);
+            }
+        }
+        Ok(paths)
+    }
+
+    /// Update the physical layout without changing snapshot history or sizes.
+    pub(crate) fn set_object_offset(&mut self, checksum: &ObjectChecksum, offset: u64) {
+        let handle = self.object_pool.get(checksum).unwrap();
+        self.object_metadata.get_mut(&handle).unwrap().offset = offset;
+    }
     pub(crate) fn objects_partitioned_by_size<'l>(
         &self,
         partitions: u32,
@@ -396,9 +461,10 @@ impl PackIndex {
 
         // Heuristic for good compression: Sort objects by size. This happens to
         // put similar objects next to each other. Can use a faster unstable
-        // sort because 'ties' in size are broken according to the order objects
-        // were added to the object pool.
-        size_handle.sort_unstable();
+        // sort because checksums break size ties deterministically, matching
+        // the ordering used when frames are rewritten during append.
+        size_handle
+            .sort_unstable_by_key(|(size, handle)| (*size, *self.handle_to_checksum(*handle)));
 
         // Update object metadata to reference new offsets.
         let mut offset = 0;
@@ -605,6 +671,7 @@ impl PackIndex {
         Self::write_magic(&mut wr)?;
 
         rmp_serde::encode::write(&mut wr, self)?;
+        wr.flush()?;
         Ok(())
     }
 

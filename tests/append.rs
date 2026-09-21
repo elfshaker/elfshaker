@@ -525,6 +525,29 @@ fn concurrent_appends_keep_both_snapshots() {
 }
 
 #[test]
+fn append_rejects_trailing_slashes_before_publication() {
+    let repo = Repo::new();
+    repo.setup();
+    repo.write("changed", b"second");
+    repo.run(&["store", "s2"]);
+    let pack = repo.pack();
+    let index = repo.index_bytes();
+    for target in ["base/", "base//"] {
+        repo.fail(
+            &["pack", "--append", target, "loose/s2"],
+            "invalid append target",
+        );
+        repo.assert_unchanged(&pack, &index);
+        assert!(!repo.path("elfshaker_data/.append-transaction").exists());
+    }
+    repo.run(&["list"]);
+    repo.extract("s1");
+    repo.append("s2");
+    repo.extract("s2");
+    assert_eq!(fs::read(repo.path("changed")).unwrap(), b"second");
+}
+
+#[test]
 fn pack_reads_piped_snapshot_list_before_locking() {
     use std::{
         io::Write,

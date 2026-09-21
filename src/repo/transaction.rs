@@ -31,7 +31,10 @@ pub(super) fn check_complete(data: &Path) -> io::Result<()> {
 }
 
 pub(super) fn validate_target(name: &str) -> io::Result<()> {
+    // Path::components ignores trailing separators, but appending an extension
+    // in recovery must address the same file as Repository::get_pack_path.
     if name.is_empty()
+        || name.ends_with('/')
         || name.starts_with("loose/")
         || PackId::from_str(name).is_err()
         || !Path::new(name)
@@ -172,8 +175,19 @@ mod tests {
         assert!(!staging.exists());
         assert!(!pending(&data).unwrap());
         assert_eq!(fs::read(data.join("packs/base.pack")).unwrap(), b"old pack");
-        for bad in ["", "/absolute", "../parent", "loose/snapshot"] {
+        for bad in [
+            "",
+            "/absolute",
+            "../parent",
+            "loose/snapshot",
+            "base/",
+            "base//",
+            "nested/base/",
+        ] {
             assert!(validate_target(bad).is_err());
+        }
+        for good in ["base", "nested/base"] {
+            validate_target(good).unwrap();
         }
         fs::remove_dir_all(data).unwrap();
     }

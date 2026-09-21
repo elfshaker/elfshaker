@@ -239,6 +239,11 @@ impl Repository {
         Ok(repo)
     }
 
+    /// Whether the data directory was opened without a writable mutex.
+    pub fn is_read_only(&self) -> bool {
+        self.lock_file.is_none()
+    }
+
     /// Acquires an exclusive lock for the remaining lifetime of this repository.
     ///
     /// Multi-step mutations must acquire this lock before reading any repository
@@ -434,12 +439,14 @@ impl Repository {
 
     pub fn load_index(&self, pack_id: &PackId) -> Result<PackIndex, Error> {
         super::transaction::check_complete(&self.data_dir)?;
+        self.validate_remote_index(pack_id)?;
         let pack_index_path = self.get_pack_index_path(pack_id);
         info!("Load index {} {}", pack_id, pack_index_path.display());
         Ok(PackIndex::load(pack_index_path)?)
     }
 
     pub fn load_index_snapshots(&self, pack_id: &PackId) -> Result<Vec<String>, Error> {
+        self.validate_remote_index(pack_id)?;
         super::transaction::check_complete(&self.data_dir)?;
         let pack_index_path = match pack_id {
             PackId::Pack(name) => self
@@ -461,6 +468,9 @@ impl Repository {
         snapshot_id: SnapshotId,
         opts: ExtractOptions,
     ) -> Result<ExtractResult, Error> {
+        if !self.is_read_only() {
+            self.lock_exclusive()?;
+        }
         let (head, head_time) = self.read_head()?;
 
         if head.is_some() && head_time.is_none() && !opts.force() {
@@ -473,7 +483,7 @@ impl Repository {
 
         let entries = source_index
             .resolve_snapshot(snapshot_id.tag())
-            .expect("failed to resolve snapshot"); // TODO: Temporary.
+            .ok_or_else(|| PackError::SnapshotNotFound(snapshot_id.tag().to_owned()))?;
         let entries = source_index.entries_from_handles(entries.iter())?;
 
         let (new_entries, old_entries) = if opts.reset || head.is_none() {
@@ -485,7 +495,11 @@ impl Repository {
                 let head_entries = source_index.entries_from_handles(
                     source_index
                         .resolve_snapshot(head.tag())
-                        .expect("failed to resolve snapshot")
+                        .ok_or_else(|| {
+                            Error::BrokenHeadRef(Box::new(
+                                PackError::SnapshotNotFound(head.tag().to_owned()).into(),
+                            ))
+                        })?
                         .iter(), // TODO: Temporary.
                 )?;
                 Self::compute_entry_diff(&head_entries, &entries)
@@ -495,7 +509,11 @@ impl Repository {
                     .entries_from_handles(
                         head_index
                             .resolve_snapshot(head.tag())
-                            .expect("failed to resolve snapshot")
+                            .ok_or_else(|| {
+                                Error::BrokenHeadRef(Box::new(
+                                    PackError::SnapshotNotFound(head.tag().to_owned()).into(),
+                                ))
+                            })?
                             .iter(), // TODO: Temporary.
                     )
                     .map_err(|e| {
@@ -600,36 +618,55 @@ impl Repository {
         }
     }
 
-    fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
-        let remotes_dir = self.data_dir().join(REMOTES_DIR);
-        let remotes = remote::load_remotes(&remotes_dir)?;
-
-        let pack = match pack {
-            PackId::Pack(p) => p.rsplit_once('/').map(|x| x.1).unwrap_or(p),
+    /// Look up a pack only in its owning remote namespace.
+    fn remote_pack(&self, pack: &PackId) -> Result<Option<(remote::RemoteIndex, String)>, Error> {
+        let PackId::Pack(name) = pack;
+        let Some((remote_name, pack_name)) = name.split_once('/') else {
+            return Ok(None);
         };
-        let pack_file_name = pack.to_string() + "." + PACK_EXTENSION;
+        let path = self
+            .data_dir()
+            .join(REMOTES_DIR)
+            .join(format!("{remote_name}.esi"));
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some((
+            remote::RemoteIndex::load(path)?,
+            pack_name.to_owned(),
+        )))
+    }
 
-        let agent = ureq::AgentBuilder::new().build();
-        let reporter = (self.progress_reporter_factory)(&format!("Fetching {pack_file_name}"));
+    /// Refuse a partially installed catalog until update completes it.
+    pub fn validate_remote_index(&self, pack: &PackId) -> Result<(), Error> {
+        if let Some((remote, name)) = self.remote_pack(pack)? {
+            if let Some(remote_pack) = remote.find_pack(&name) {
+                if !remote::verify_checksum(
+                    &self.get_pack_index_path(pack),
+                    &remote_pack.index_checksum,
+                )? {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                        format!("Index for {pack} does not match its remote manifest; run elfshaker update")).into());
+                }
+            }
+        }
+        Ok(())
+    }
 
-        for remote in remotes {
-            if let Some(remote_pack) = remote.find_pack(pack) {
-                info!("Found {} in {}. Updating...", pack, remote);
+    fn update_remote_pack(&self, pack: &PackId) -> Result<(), Error> {
+        if let Some((remote, name)) = self.remote_pack(pack)? {
+            if let Some(remote_pack) = remote.find_pack(&name) {
+                let agent = ureq::AgentBuilder::new().build();
+                let reporter = (self.progress_reporter_factory)(&format!("Fetching {pack}"));
+                reporter.checkpoint(0, Some(1));
                 let pack_path = self
                     .data_dir()
                     .join(PACKS_DIR)
-                    .join(remote.name().unwrap())
-                    .join(pack_file_name);
-
-                // Immediately shows some progress, without waiting for the
-                // HTTP response for the pack.
-                reporter.checkpoint(0, Some(1));
-                remote::update_remote_pack(&agent, remote_pack, &pack_path, &reporter)?;
-                return Ok(());
+                    .join(format!("{pack}.{PACK_EXTENSION}"));
+                return remote::update_remote_pack(&agent, remote_pack, &pack_path, &reporter);
             }
         }
-
-        Err(Error::PackNotFound(pack.into()))
+        Err(Error::PackNotFound(pack.to_string()))
     }
 
     /// The name of the directory containing the elfshaker repository data.
@@ -1414,6 +1451,7 @@ impl Repository {
 
     /// Updates all remotes and their associated .pack.idx files.
     pub fn update_remotes(&self) -> Result<(), Error> {
+        self.lock_exclusive()?;
         let remotes_dir = self.data_dir().join(REMOTES_DIR);
         let remotes = remote::load_remotes(&remotes_dir)?;
 
@@ -1429,9 +1467,8 @@ impl Repository {
             remote_packs_dir.push(remote_name);
 
             info!("Updating {}...", remote);
-            let remote = remote::update_remote(&agent, &remote)?;
             fs::create_dir_all(&remote_packs_dir)?;
-            remote::update_remote_pack_indexes(&agent, &remote, &remote_packs_dir, &reporter)?;
+            remote::update_remote(&agent, &remote, &remote_packs_dir, &reporter)?;
         }
         Ok(())
     }

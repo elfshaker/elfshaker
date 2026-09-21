@@ -5,6 +5,7 @@
 - [Workflow](#workflow)
 - [Create snapshot](#create-snapshot)
 - [Append builds to a pack](#append-builds-to-a-pack)
+- [Refresh remote packs](#refresh-remote-packs)
 - [Extract snapshot](#extract-snapshot)
 - [List packs, snapshots, files](#extract-snapshot)
 - [Write files to stdout](#write-files-to-stdout)
@@ -237,3 +238,24 @@ Writes the contents of the files specified by the given paths in the snapshot to
 (2) - Cleanup unreferenced loose objects.
 
 (3) - Cleanup snapshots and objects.
+
+## Refresh remote packs
+
+```sh
+elfshaker clone https://example.org/index.esi builds
+cd builds
+elfshaker update
+```
+
+`update` refreshes the manifest and verifies index downloads against its SHA-1
+hashes. It also hashes all cached remote payloads: unchanged packs stay cached,
+while changed or corrupt payloads are discarded and downloaded on demand by
+extraction. Reading all cached payloads can take time on large stores. Run
+`update` once when upgrading an existing store from an older client.
+
+Downloads are verified before installation. A publisher changing a pack/index
+pair while it is being downloaded can cause a checksum error; rerun `update`
+and then extraction after publication finishes. After an interrupted update,
+a manifest/index mismatch is reported with instructions to run `update` again.
+No pack or manifest format migration is needed. Remote publishers should retain
+existing snapshot tags and their contents when appending monthly builds.

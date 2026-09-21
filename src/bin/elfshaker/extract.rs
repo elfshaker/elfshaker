@@ -33,6 +33,9 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
     };
 
     let mut repo = open_repo_from_cwd(data_dir)?;
+    if !repo.is_read_only() {
+        repo.lock_exclusive()?;
+    }
     let new_head = match repo.find_snapshot(snapshot) {
         Err(RepoError::PackError(PackError::SnapshotNotFound(_))) => {
             info!("Snapshot not available locally. Updating remotes...");
@@ -42,6 +45,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         r => r?,
     };
 
+    repo.validate_remote_index(new_head.pack())?;
     match repo.read_head()? {
         (Some(h), _) if h == new_head && !is_reset => {
             // The specified snapshot is already extracted and --reset is not specified,

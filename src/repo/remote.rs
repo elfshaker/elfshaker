@@ -2,7 +2,7 @@ use std::{
     convert::TryInto,
     ffi::OsStr,
     fs, io,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
@@ -14,7 +14,7 @@ use url::Url;
 
 use super::constants::{PACK_EXTENSION, REMOTE_INDEX_EXTENSION};
 use super::error::Error;
-use super::fs::{create_file, open_file};
+use super::fs::{create_file, create_temp_path, open_file, write_file_atomic};
 use crate::packidx::{ObjectChecksum, PackIndex};
 use crate::progress::{ProgressReporter, ProgressWriter};
 
@@ -117,12 +117,6 @@ impl RemoteIndex {
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
-    }
-
-    pub fn name(&self) -> Option<String> {
-        self.path()
-            .and_then(|p| p.file_stem())
-            .map(|s| (*s.to_string_lossy()).into())
     }
 
     pub fn load<P: AsRef<Path>>(path: P) -> Result<RemoteIndex, Error> {
@@ -372,156 +366,121 @@ fn read_remote_resource(
     })
 }
 
-/// Updates the specified pack file by fetching the URL in the [`RemotePack`]
-/// only when necessary.
+/// Downloads and verifies a payload before atomically making it available.
 pub fn update_remote_pack(
     agent: &Agent,
     remote_pack: &RemotePack,
     pack_path: &Path,
     reporter: &ProgressReporter,
 ) -> Result<(), Error> {
-    let date_modified = fs::metadata(pack_path).ok().and_then(|x| x.modified().ok());
-
     let url = remote_pack.url.parse::<Url>().unwrap();
-    if let Some((content_length, mut reader)) =
-        open_remote_resource(agent, &url, None, date_modified)?
-    {
-        let mut data = vec![];
-
-        let mut writer = ProgressWriter::with_known_size(&mut data, reporter, content_length);
-        io::copy(&mut reader, &mut writer)?;
-
-        let mut hasher = Sha1::new();
-        hasher.update(&data);
-        let checksum: [u8; 20] = hasher.finalize().into();
-
-        if checksum == remote_pack.pack_checksum {
-            create_file(pack_path, None)?.write_all(&data)?;
+    let (content_length, mut reader) =
+        open_remote_resource(agent, &url, None, None)?.ok_or_else(|| {
+            Error::HttpError("Unexpected HTTP 304 for an unconditional download".into())
+        })?;
+    let parent = pack_path.parent().unwrap();
+    let temp_path = create_temp_path(parent);
+    let result = (|| {
+        let mut file = create_file(&temp_path, None)?;
+        let mut writer = if content_length == 0 {
+            ProgressWriter::new(&mut file, reporter)
         } else {
-            log::error!(
-                "The pack checksum did not match the one in the .esi! The download failed."
-            );
+            ProgressWriter::with_known_size(&mut file, reporter, content_length)
+        };
+        io::copy(&mut reader, &mut writer)?;
+        file.sync_all()?;
+        if !verify_checksum(&temp_path, &remote_pack.pack_checksum)? {
             return Err(Error::CorruptPack);
         }
+        fs::rename(&temp_path, pack_path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp_path);
     }
-    Ok(())
+    result
 }
 
-/// Updates all pack index files by fetching the URLs in the [`RemoteIndex`]
-/// only when necessary.
-pub fn update_remote_pack_indexes(
+/// Fetches a manifest without using local mtimes as HTTP cache validators.
+fn download_remote(agent: &Agent, url: &str, path: &Path) -> Result<(RemoteIndex, Vec<u8>), Error> {
+    let url = url.parse::<Url>().map_err(|e| Error::HttpError(e.into()))?;
+    let data =
+        read_remote_resource(agent, &url, Duration::from_secs(15), None)?.ok_or_else(|| {
+            Error::HttpError("Unexpected HTTP 304 for an unconditional download".into())
+        })?;
+    let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
+    remote.path = Some(path.to_owned());
+    Ok((remote, data))
+}
+
+/// Fetches and atomically installs a new remote registration.
+pub fn fetch_remote(agent: &Agent, url: &str, path: &Path) -> Result<RemoteIndex, Error> {
+    let (remote, data) = download_remote(agent, url, path)?;
+    write_file_atomic(data.as_slice(), path.parent().unwrap(), path)?;
+    Ok(remote)
+}
+
+/// Validates all candidate indexes before changing the installed catalog.
+/// The caller must hold the repository's exclusive lock. The manifest is
+/// installed last; readers reject indexes that do not match it after interruption.
+pub fn update_remote(
     agent: &Agent,
-    remote: &RemoteIndex,
+    current: &RemoteIndex,
     base_dir: &Path,
     reporter: &ProgressReporter,
 ) -> Result<(), Error> {
-    let mut done = 0usize;
-    let mut remaining = remote.packs.len();
+    let path = current.path().expect("loaded remote has a path");
+    let (remote, data) = download_remote(agent, &current.url, path)?;
+    let mut indexes = Vec::new();
+    for (done, pack) in remote.packs.iter().enumerate() {
+        let index_path = base_dir.join(format!("{}.idx", pack.file_name()));
+        if !verify_checksum(&index_path, &pack.index_checksum)? {
+            let url = format!("{}.idx", pack.url).parse::<Url>().unwrap();
+            let bytes = read_remote_resource(agent, &url, Duration::from_secs(15), None)?
+                .ok_or_else(|| {
+                    Error::HttpError("Unexpected HTTP 304 for an unconditional download".into())
+                })?;
+            let checksum: ObjectChecksum = Sha1::digest(&bytes).into();
+            if checksum != pack.index_checksum {
+                return Err(Error::CorruptPackIndex);
+            }
+            PackIndex::parse(bytes.as_slice())?;
+            indexes.push((index_path, bytes));
+        }
+        reporter.checkpoint_with_detail(
+            done + 1,
+            Some(remote.packs.len() - done - 1),
+            pack.file_name().to_owned(),
+        );
+    }
 
+    // Check every cached payload, including caches made by older clients. Do
+    // this even if the index hash is unchanged: payload hashes are independent.
     for pack in &remote.packs {
-        let url = (pack.url.to_string() + ".idx").parse::<Url>().unwrap();
-        let pack_index_file_name = url.path_segments().unwrap().next_back().unwrap();
-        let pack_index_path = base_dir.join(pack_index_file_name);
-
-        if verify_checksum(&pack_index_path, &pack.index_checksum)? {
-            // The file exists and the checksums match -> skip
-            log::info!("{} is up to date", pack_index_path.display());
-        } else {
-            update_pack_index(agent, &url, &pack_index_path)?;
+        let pack_path = base_dir.join(pack.file_name());
+        if !verify_checksum(&pack_path, &pack.pack_checksum)? {
+            match fs::remove_file(pack_path) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                result => result?,
+            }
         }
-
-        done += 1;
-        remaining -= 1;
-        reporter.checkpoint_with_detail(done, Some(remaining), pack.file_name().to_owned());
     }
+    for (index_path, bytes) in indexes {
+        write_file_atomic(bytes.as_slice(), base_dir, &index_path)?;
+    }
+    // On Unix, make invalidations and index renames durable before the new
+    // manifest can become durable in its separate directory.
+    #[cfg(unix)]
+    fs::File::open(base_dir)?.sync_all()?;
+    write_file_atomic(data.as_slice(), path.parent().unwrap(), path)?;
+    #[cfg(unix)]
+    fs::File::open(path.parent().unwrap())?.sync_all()?;
     Ok(())
-}
-
-/// Updates the pack index file by fetching its contents from the URL only
-/// when the content at the URL is newer than what is available on-disk.
-fn update_pack_index(agent: &Agent, url: &Url, pack_index_path: &Path) -> Result<(), Error> {
-    let date_modified = fs::metadata(pack_index_path)
-        .ok()
-        .and_then(|x| x.modified().ok());
-
-    let pack_index_bytes =
-        read_remote_resource(agent, url, Duration::from_secs(15), date_modified)?;
-
-    if let Some(pack_index_bytes) = pack_index_bytes {
-        if let Err(e) = PackIndex::parse(pack_index_bytes.as_slice()) {
-            log::error!(
-                "Failed to fetch {} from remote: The remote returned a broken .pack.idx! {}",
-                url,
-                e
-            );
-        } else {
-            log::info!(
-                "Writing {} ({} B)...",
-                pack_index_path.display(),
-                pack_index_bytes.len()
-            );
-            fs::write(pack_index_path, pack_index_bytes.as_slice()).map_err(Error::IOError)?;
-        }
-    }
-    Ok(())
-}
-
-/// Fetches the remote index from the server.
-pub fn fetch_remote(agent: &Agent, url: &str, path: &Path) -> Result<RemoteIndex, Error> {
-    let url = url.parse::<Url>().unwrap();
-    let response = read_remote_resource(agent, &url, Duration::from_secs(15), None)?;
-
-    match response {
-        None => unreachable!(
-            "Unexpected Not-Modified response from server given previously unseen resource"
-        ),
-        Some(data) => {
-            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
-            // Update the .esi
-            create_file(path, None)
-                .map_err(Error::IOError)?
-                .write_all(data.as_slice())
-                .map_err(Error::IOError)?;
-            // And return the parsed index
-            remote.path = Some(path.to_owned());
-            Ok(remote)
-        }
-    }
-}
-
-/// Fetches the new newest version of the [`RemoteIndex`] from the server and
-/// overwrites its backing file only when the remote file is newer.
-pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex, Error> {
-    let path = remote
-        .path
-        .as_ref()
-        .expect("The RemoteIndex must have a valid .path set! Use RemoteIndex::load().");
-
-    // Read the modification date of the .esi.
-    let date_modified = fs::metadata(path).ok().and_then(|x| x.modified().ok());
-    let url = remote.url.parse::<Url>().unwrap();
-    let response = read_remote_resource(agent, &url, Duration::from_secs(15), date_modified)?;
-
-    match response {
-        // The local version is up-to-date.
-        None => RemoteIndex::load(path).reify(path.display()),
-        Some(data) => {
-            let mut remote = RemoteIndex::read(BufReader::new(data.as_slice())).reify(url)?;
-            // Update the .esi
-            create_file(path, None)
-                .map_err(Error::IOError)?
-                .write_all(data.as_slice())
-                .map_err(Error::IOError)?;
-            // And return the parsed index
-            remote.path = Some(path.clone());
-            Ok(remote)
-        }
-    }
 }
 
 /// A convenience function which verifies the checksum of the file
 /// and coerces ENOENT to false.
-fn verify_checksum(path: &Path, checksum: &ObjectChecksum) -> io::Result<bool> {
+pub(super) fn verify_checksum(path: &Path, checksum: &ObjectChecksum) -> io::Result<bool> {
     match compute_checksum(path) {
         Ok(actual_checksum) => Ok(actual_checksum == *checksum),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),

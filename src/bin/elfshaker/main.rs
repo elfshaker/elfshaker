@@ -10,6 +10,7 @@ mod list;
 mod list_files;
 mod list_packs;
 mod pack;
+mod run;
 mod show;
 mod store;
 mod update;
@@ -37,14 +38,27 @@ fn main() {
         log::Level::Warn
     });
 
-    if let Err(e) = run_subcommand(&mut app, matches) {
-        error!("*FATAL*: {}", e);
-        std::process::exit(ERROR_EXIT_CODE);
+    let error_code = if matches.subcommand_name() == Some(run::SUBCOMMAND) {
+        125
+    } else {
+        ERROR_EXIT_CODE
+    };
+    match run_subcommand(&mut app, matches) {
+        Ok(Some(status)) => run::exit_with_status(status),
+        Ok(None) => {}
+        Err(e) => {
+            error!("*FATAL*: {}", e);
+            std::process::exit(error_code);
+        }
     }
 }
 
-fn run_subcommand(app: &mut Command, matches: ArgMatches) -> Result<(), Box<dyn Error>> {
+fn run_subcommand(
+    app: &mut Command,
+    matches: ArgMatches,
+) -> Result<Option<std::process::ExitStatus>, Box<dyn Error>> {
     match matches.subcommand() {
+        Some((run::SUBCOMMAND, matches)) => return run::run(matches).map(Some),
         Some((extract::SUBCOMMAND, matches)) => extract::run(matches),
         Some((explode::SUBCOMMAND, matches)) => explode::run(matches),
         Some((store::SUBCOMMAND, matches)) => store::run(matches),
@@ -63,6 +77,7 @@ fn run_subcommand(app: &mut Command, matches: ArgMatches) -> Result<(), Box<dyn 
             Ok(())
         }
     }
+    .map(|()| None)
 }
 
 fn get_app() -> Command {
@@ -70,6 +85,7 @@ fn get_app() -> Command {
         .override_usage("elfshaker [GLOBAL-OPTS] <SUBCOMMAND> [SUBCOMMAND-OPTS]")
         .version(env!("CARGO_PKG_VERSION"))
         .subcommand(extract::get_app())
+        .subcommand(run::get_app())
         .subcommand(store::get_app())
         .subcommand(list::get_app())
         .subcommand(list_packs::get_app())

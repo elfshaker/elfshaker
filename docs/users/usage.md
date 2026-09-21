@@ -7,6 +7,7 @@
 - [Append builds to a pack](#append-builds-to-a-pack)
 - [Refresh remote packs](#refresh-remote-packs)
 - [Extract snapshot](#extract-snapshot)
+- [Run a command in a snapshot](#run-a-command-in-a-snapshot)
 - [List packs, snapshots, files](#extract-snapshot)
 - [Write files to stdout](#write-files-to-stdout)
 
@@ -98,6 +99,44 @@ elfshaker extract --help
 3. Extract the files to the repository directory.
     a. If `--reset` is NOT specified, do perform an incremental update of the repository directory by comparing the set of files against the last extracted snapshot (`elfshaker_data/HEAD`).
     b. If `--reset` is specified, ignore `elfshaker_data/HEAD` and extract everything, overwriting if file names clash.
+
+## Run a command in a snapshot
+
+```sh
+elfshaker run [--verify] [--reset] [--force] [-T N] SNAPSHOT -- COMMAND [ARGS...]
+elfshaker run --verify commit-prefix -- ./test.sh 'argument with spaces'
+elfshaker run my-pack:my-snapshot -- sh -c 'make && ./test'
+```
+
+`run` searches the installed catalog using the same case-sensitive substring
+matching as `find`. Exactly one match is required, including when identical tags
+exist in several packs. An explicit `PACK:SNAPSHOT` selects that exact reference.
+Zero/multiple matches are errors; `run` never refreshes the catalog automatically.
+Run `elfshaker update` explicitly when new remote snapshots are needed.
+
+Extraction uses the same implementation and flags as `extract`. The command runs
+in the extraction working directory, including when that snapshot is already
+extracted. Arguments after `--` are passed directly, with no shell expansion;
+request a shell explicitly if needed. Environment and standard streams are
+inherited. Progress and extraction diagnostics go to stderr.
+
+Lookup, extraction and command-launch failures return **125** (useful for
+`git bisect run`). The command's own exit status is preserved, including Unix
+signal termination. Malformed CLI arguments retain the normal argument-error
+status. The repository is locked exclusively until the command exits. A command
+that invokes elfshaker on that same store can block; use a different store for
+nested operations. `run` requires a writable repository mutex.
+
+Elfshaker does not know how to link compilers. For manyclangs, pass the snapshot's
+existing script as the command:
+
+```sh
+mkdir -p bin
+elfshaker run --verify COMMIT_PREFIX -- bash ./link.sh --and-run clang --version
+```
+
+See [contrib's consumer workflow](../../contrib/README.md#consuming-manyclangs-packs)
+for catalog setup, Git refs, bisection and Docker/QEMU examples.
 
 ## Pack loose snapshots
 ```bash

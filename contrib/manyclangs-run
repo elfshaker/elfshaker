@@ -1,93 +1,34 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
-
-[[ "$TRACE" ]] && set -x
 set -euo pipefail
+[[ -z ${TRACE:-} ]] || set -x
 
-print_help() {
-    echo 'Usage: manyclangs-run [ELFSHAKER] [COMITTISH] [COMMAND]...'
-    echo ''
-    echo 'Extracts the snapshot matching COMITTISH to the specified ELFSHAKER directory and runs COMMAND.'
-    echo 'If the first token of COMMAND is a path to a file in the ELFSHAKER directory, that path will be resolved as an absolute path to that file.'
-    echo ''
-    echo 'The commit is matched to a snapshot by searching for a snapshot with a tag containing a part of the truncated commit SHA.'
-    echo 'ELFSHAKER/build/bin is removed, and ELFSHAKER/build/link.sh is run after extraction and before COMMAND.'
-    echo ''
-    echo 'If any step of finding a matching snapshot, extraction, or ./link.sh fails, the script exists with code 125 (git bisect skip).'
-    echo 'Otherwise, the exit code is the code returned by COMMAND.'
-}
+if [[ ${1:--h} == -h || ${1:-} == --help || $# -lt 3 ]]; then
+    echo 'Usage: manyclangs-run ELFSHAKER_DIRECTORY COMMITISH TOOL [ARGS...]'
+    echo 'Resolve COMMITISH in the current Git checkout, extract, link, and run TOOL.'
+    echo 'Set USE_DOCKER_QEMU=aarch64 to link/run in manyclangs-qemu-aarch64.'
+    echo 'Lookup, extraction and linking failures return 125; tool status is preserved.'
+    echo 'Refresh the catalog separately with elfshaker update.'
+    [[ $# == 0 || ${1:-} == -h || ${1:-} == --help ]] && exit 0
+    exit 2
+fi
 
-get_file_arch() {
-    readelf -h "$1" | grep Machine | awk '{$1=""; print $0}' | tr -d ' '
-}
+repo=$(cd "$1" && pwd) || exit 125
+sha=$(git rev-parse --short=10 --verify --end-of-options "$2^{commit}") || exit 125
+tool=$(basename -- "$3")
+shift 3
+cd "$repo" || exit 125
 
-has_docker_image() {
-    docker image inspect "$1" &>/dev/null
-}
-
-run_docker_image() {
-    docker run --rm --mount type=bind,source="$(realpath "$ELFSHAKER_DIR")",target=/elfshaker "$@"
-}
-
-link_and_run() {
-    rm -r ./bin || true
-    mkdir -p ./bin
-
-    COMMAND_BASENAME="$(basename "$1")"
-    LINK_AND_RUN_COMMAND="bash ./link.sh $COMMAND_BASENAME || exit 125; ./bin/$@"
-
-    if [ "${USE_DOCKER_QEMU-,,}" = "aarch64" ]; then
-        TEST_OBJECT=${ELFSHAKER_DIR}/lib/Object/CMakeFiles/LLVMObject.dir/Object.cpp.o
-        HOST_ARCH="$(get_file_arch /bin/cat)"
-        TARGET_ARCH="$(get_file_arch "$TEST_OBJECT")"
-        if [ "$HOST_ARCH" != "$TARGET_ARCH" ] && [ "$TARGET_ARCH" = "AArch64" ]; then
-            if ! command -v docker &> /dev/null; then
-                echo "The architecture of the executables you are attempting to run is '$TARGET_ARCH'."
-                echo "We support running these on '$HOST_ARCH' through emulation, but require docker to do so."
-                echo "Please install docker. https://www.docker.com/"
-                exit 125
-            elif ! has_docker_image manyclangs-qemu-aarch64 &>/dev/null; then
-                echo 'You need the manyclangs-qemu-aarch64 docker image to run manyclangs with AArch64 emulation.'
-                echo 'See https://github.com/elfshaker/manyclangs/blob/main/docker-qemu-aarch64/README.md for instructions.'
-                exit 1
-            else
-                run_docker_image manyclangs-qemu-aarch64 bash -c "$LINK_AND_RUN_COMMAND"
-            fi
-        else
-            echo "Running $TARGET_ARCH binaries on $HOST_ARCH via the manyclangs-qemu-aarch64 docker image is not supported!"
-            exit 1
-        fi
-    else
-        $LINK_AND_RUN_COMMAND
-    fi
-}
-
-main() {
-    ELFSHAKER_DIR="$1"
-    COMITTISH="$2"
-    COMMAND=("${@:3}")
-
-    SHA="$(git rev-parse --short=10 "$COMITTISH")"
-    (cd "$ELFSHAKER_DIR" && elfshaker find "$SHA") | {
-        read -r SNAPSHOT PACK || exit 125
-        TIMEFORMAT="elfshaker extracted $SHA in %R seconds"
-        COMMAND_BASENAME="$(basename "${COMMAND[0]}")"
-        time (
-            (cd "$ELFSHAKER_DIR" && elfshaker extract "$PACK:$SNAPSHOT" || exit 125)
-        )
-
-        link_and_run "${COMMAND[@]}"
+# Shell code is fixed; caller-supplied values are passed as separate arguments.
+link_and_run='mkdir -p bin || exit 125; bash ./link.sh "$1" >&2 || exit 125; tool=$1; shift; exec "./bin/$tool" "$@"'
+if [[ ${USE_DOCKER_QEMU:-} == aarch64 ]]; then
+    docker image inspect manyclangs-qemu-aarch64 >/dev/null 2>&1 || {
+        echo 'Build the manyclangs-qemu-aarch64 Docker image first; see contrib/README.md.' >&2
+        exit 125
     }
-}
-
-case "${1:--h}" in
-    -h | --help)
-        print_help
-        [ $# -ne 0 ]
-        exit $?
-        ;;
-    *)
-        main "$@"
-        ;;
-esac
+    exec elfshaker run --verify "$sha" -- docker run --rm \
+        --mount "type=bind,source=$repo,target=/elfshaker" \
+        manyclangs-qemu-aarch64 bash -c "$link_and_run" manyclangs "$tool" "$@"
+fi
+exec elfshaker run --verify "$sha" -- bash -c "$link_and_run" manyclangs "$tool" "$@"

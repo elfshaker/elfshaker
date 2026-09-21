@@ -525,6 +525,73 @@ fn concurrent_appends_keep_both_snapshots() {
 }
 
 #[test]
+fn pack_reads_piped_snapshot_list_before_locking() {
+    use std::{
+        io::Write,
+        process::{Child, Stdio},
+        time::{Duration, Instant},
+    };
+
+    fn finish(mut child: Child) -> Output {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child.wait_with_output().unwrap()
+    }
+
+    let repo = Repo::new();
+    repo.setup();
+    repo.write("changed", b"second");
+    repo.run(&["store", "s2"]);
+    for append in [false, true] {
+        let target = if append { "base" } else { "from-list" };
+        let mut command = Command::new(env!("CARGO_BIN_EXE_elfshaker"));
+        command
+            .env_remove("ELFSHAKER_DATA")
+            .current_dir(&repo.0)
+            .args(["pack", "--snapshots-from", "-", target])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if append {
+            command.arg("--append");
+        }
+        let mut consumer = command.spawn().unwrap();
+        let mut input = consumer.stdin.take().unwrap();
+        // Exceed the pipe capacity so pack has begun reading stdin before list
+        // starts. Empty records are ignored. Holding the exclusive lock here
+        // would deadlock list's shared lock against pack's wait for EOF.
+        input.write_all(&vec![b'\n'; 2 * 1024 * 1024]).unwrap();
+        let producer = Command::new(env!("CARGO_BIN_EXE_elfshaker"))
+            .env_remove("ELFSHAKER_DATA")
+            .current_dir(&repo.0)
+            .args(["list", "loose/s2"])
+            .stdout(Stdio::from(input))
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let produced = finish(producer);
+        let consumed = finish(consumer);
+        for (name, result) in [("list", produced), ("pack", consumed)] {
+            assert!(
+                result.status.success(),
+                "{name} failed or timed out: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let index =
+            PackIndex::load(repo.path(&format!("elfshaker_data/packs/{target}.pack.idx"))).unwrap();
+        let expected = if append { vec!["s1", "s2"] } else { vec!["s2"] };
+        assert_eq!(index.snapshot_tags(), expected);
+    }
+}
+
+#[test]
 fn append_accepts_multiple_inputs_and_snapshot_lists() {
     use std::io::Write;
     use std::process::Stdio;

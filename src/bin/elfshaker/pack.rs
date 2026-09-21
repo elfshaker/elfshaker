@@ -67,12 +67,8 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         n => n,
     };
 
-    let mut repo = open_repo_from_cwd(data_dir)?;
-    let append = matches.get_flag("append");
-    // Acquire before reading source indexes or HEAD; upgrades can release the
-    // shared lock while waiting for another writer.
-    repo.lock_exclusive()?;
-
+    // Consume external input before opening the repository: a pipeline producer
+    // may itself need a repository lock before it can write the snapshot list.
     let open = |filename| {
         if filename == "-" {
             Ok(Box::new(io::stdin()) as Box<dyn io::Read>)
@@ -80,15 +76,31 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
             fs::File::open(filename).map(|f| Box::new(f) as Box<dyn io::Read>)
         }
     };
-    let snapshots = match (snapshots_from, snapshots0_from, indexes) {
-        (Some(s), None, None) => packs_from_list(&repo, open(s)?, b'\n'),
-        (None, Some(s), None) => packs_from_list(&repo, open(s)?, b'\0'),
-        (None, None, Some(s)) => Ok(s),
-        (None, None, None) => repo.loose_packs(),
+    let snapshot_list = match (snapshots_from, snapshots0_from, indexes.as_ref()) {
+        (Some(s), None, None) => Some((s, b'\n')),
+        (None, Some(s), None) => Some((s, b'\0')),
+        (None, None, _) => None,
         _ => {
             error!("Cannot specify a combination of --snapshots-from, --snapshots0-from and <indexes>!");
             return Err("Invalid options!".into());
         }
+    }
+    .map(|(filename, separator)| {
+        let mut buf = Vec::new();
+        open(filename)?.read_to_end(&mut buf)?;
+        Ok::<_, io::Error>((buf, separator))
+    })
+    .transpose()?;
+
+    let mut repo = open_repo_from_cwd(data_dir)?;
+    let append = matches.get_flag("append");
+    // Resolve snapshots and read source indexes/HEAD only after acquiring the
+    // exclusive lock; upgrades can release the shared lock while waiting.
+    repo.lock_exclusive()?;
+    let snapshots = match (snapshot_list, indexes) {
+        (Some((buf, separator)), _) => packs_from_list(&repo, &buf, separator),
+        (None, Some(s)) => Ok(s),
+        (None, None) => repo.loose_packs(),
     }?;
 
     // No point in creating an empty pack.
@@ -168,12 +180,9 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
 
 fn packs_from_list(
     repo: &Repository,
-    mut reader: impl io::Read,
+    buf: &[u8],
     separator: u8,
 ) -> Result<Vec<PackId>, elfshaker::repo::Error> {
-    let mut buf = vec![];
-    reader.read_to_end(&mut buf)?;
-
     buf.split(|c| *c == separator)
         .filter(|s| !s.is_empty())
         .map(std::str::from_utf8)

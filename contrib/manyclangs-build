@@ -109,6 +109,7 @@ main() {
         REL_LLVM_PATH=../llvm/
         ABS_BASE_PATH=$(realpath $REL_LLVM_PATH/../)/
         REL_BASE_PATH=$(realpath --relative-to=. "$ABS_BASE_PATH")/
+        ABS_BUILD_PATH=$(realpath .)/
 
         command time -f 'Configured with manyclangs-cmake in %E' manyclangs-cmake "${REL_LLVM_PATH}" |& tee -a build.log
 
@@ -123,9 +124,19 @@ main() {
         # ("__PRETTY_FUNCTION__ leaks absolute paths even with -fmacro-prefix-map").
 
         # shellcheck disable=SC2016
-        awk_inplace -c -v "search=$ABS_BASE_PATH" -v "replace=$REL_BASE_PATH" '
-            /^  INCLUDES = / { gsub(" -I"search, " -I"replace, $0); print; next }
-            /^build.*C(XX)?_COMPILER/ { gsub(" "search, " "replace, $0); print; next }
+        awk_inplace -c -v "search=$ABS_BASE_PATH" -v "replace=$REL_BASE_PATH" -v "build=$ABS_BUILD_PATH" '
+            # Generated inputs must use the same build-relative spelling as
+            # their Ninja producer. ../build aliases lose dependency edges.
+            /^  INCLUDES = / {
+                gsub(" -I"build, " -I", $0)
+                gsub(" -I"search, " -I"replace, $0)
+                print; next
+            }
+            /^build.*C(XX)?_COMPILER/ {
+                gsub(" "build, " ", $0)
+                gsub(" "search, " "replace, $0)
+                print; next
+            }
             { print }
         ' build.ninja
 

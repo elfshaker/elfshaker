@@ -100,7 +100,7 @@
         # relating to our handling of file permissions which needs
         # fixing, but this may work.)
         CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc";
-        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.windows.mingw_w64_pthreads}/lib";
+        CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L${pkgs.pkgsCross.mingwW64.windows.pthreads}/lib";
 
       } // lib.optionalAttrs pkgs.stdenv.isDarwin {
         CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS = "-C link-arg=-Wl,-dead_strip_dylibs";
@@ -109,12 +109,13 @@
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc";
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeShellScript "wine-wrapper" ''
           export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all
-          export LC_ALL=en_US.UTF-8
           export LOCALE_ARCHIVE=${pkgs.glibcLocalesUtf8}/lib/locale/locale-archive
           export HOME=$WINEPREFIX
           export FONTCONFIG_PATH=${pkgs.buildPackages.fontconfig.out}/etc/fonts/
-          mkdir -p $WINEPREFIX
-          exec ${pkgs.buildPackages.wine64}/bin/wine "$@"
+          export XDG_RUNTIME_DIR="$WINEPREFIX/xdg-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 0700 "$XDG_RUNTIME_DIR"
+          exec env LC_ALL=en_US.UTF-8 ${pkgs.buildPackages.wine64}/bin/wine "$@"
         '';
       });
 
@@ -164,7 +165,7 @@
       elfshaker-aarch64-darwin = pkgs.pkgsCross.aarch64-darwin.callPackage ./elfshaker.nix args;
       elfshaker-x86_64-darwin = pkgs.pkgsCross.x86_64-darwin.callPackage ./elfshaker.nix args;
 
-      release = pkgs.runCommandNoCC "elfshaker-release" {
+      release = pkgs.runCommand "elfshaker-release" {
         nativeBuildInputs = lib.optionals nativePlatform.isDarwin [ pkgs.darwin.cctools ];
       } (
         if nativePlatform.isLinux then ''

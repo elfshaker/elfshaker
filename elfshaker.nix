@@ -35,13 +35,14 @@ let
     else nativePackages.writeShellScript "wine-wrapper" ''
       export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all
       # Wine decodes Unix command-line arguments using the locale code page.
-      export LC_ALL=en_US.UTF-8
       ${lib.optionalString nativePackages.stdenv.hostPlatform.isLinux ''
         export LOCALE_ARCHIVE=${nativePackages.glibcLocalesUtf8}/lib/locale/locale-archive
       ''}
       export HOME=$WINEPREFIX FONTCONFIG_PATH=${nativePackages.fontconfig.out}/etc/fonts/
-      mkdir -p $WINEPREFIX
-      exec ${nativePackages.wine64}/bin/wine "''${ELFSHAKER_BIN}.exe" "$@"
+      export XDG_RUNTIME_DIR="$WINEPREFIX/xdg-runtime"
+      mkdir -p "$XDG_RUNTIME_DIR"
+      chmod 0700 "$XDG_RUNTIME_DIR"
+      exec env LC_ALL=en_US.UTF-8 ${nativePackages.wine64}/bin/wine "''${ELFSHAKER_BIN}.exe" "$@"
   # '';
 
   maybeWindows = lib.optionalString isWindows "SKIP_BAD_WINDOWS_TESTS=1";

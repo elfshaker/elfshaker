@@ -5,6 +5,11 @@ certificate authorities belong in that store or in a PEM CA bundle selected with
 `SSL_CERT_FILE`. `SSL_CERT_DIR` selects an OpenSSL-style certificate directory.
 These settings apply to remote indexes, pack indexes, and packs.
 
+Configured PEM locations replace the platform's default trust roots on every
+supported platform, including macOS. Unreadable paths and selections containing
+no CA certificates produce an error. With no configured locations, elfshaker
+uses native platform verification, including the macOS Keychain.
+
 ```bash
 SSL_CERT_FILE=/path/to/ca-bundle.pem elfshaker clone https://example.com/index.esi destination
 ```

@@ -302,6 +302,7 @@ dependencies = [
  "rand",
  "rmp",
  "rmp-serde",
+ "rustls-native-certs",
  "serde",
  "sha1",
  "ureq",

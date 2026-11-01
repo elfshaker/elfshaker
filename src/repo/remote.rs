@@ -298,16 +298,41 @@ pub fn load_remotes(base_path: &Path) -> Result<Vec<RemoteIndex>, Error> {
         .collect()
 }
 
-/// Builds an HTTP agent using the operating system's certificate trust.
-pub(crate) fn http_agent() -> Agent {
-    Agent::config_builder()
-        .tls_config(
-            ureq::tls::TlsConfig::builder()
-                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                .build(),
-        )
+/// Builds an HTTP agent using explicit CA overrides or platform verification.
+pub(crate) fn http_agent() -> Result<Agent, Error> {
+    let ca_file = std::env::var_os("SSL_CERT_FILE");
+    let ca_dirs = std::env::var_os("SSL_CERT_DIR");
+    let has_ca_dirs = ca_dirs
+        .as_ref()
+        .is_some_and(|paths| std::env::split_paths(paths).any(|path| !path.as_os_str().is_empty()));
+    let roots = if ca_file.is_some() || has_ca_dirs {
+        // Load explicit PEM locations on every platform, including macOS,
+        // whose native verifier uses the Keychain rather than these variables.
+        let loaded = rustls_native_certs::load_native_certs();
+        if let Some(error) = loaded.errors.first() {
+            return Err(Error::IOError(io::Error::other(format!(
+                "Failed to load CA certificate overrides: {error}"
+            ))));
+        }
+        if loaded.certs.is_empty() {
+            return Err(Error::IOError(io::Error::other(
+                "No CA certificates loaded from SSL_CERT_FILE or SSL_CERT_DIR",
+            )));
+        }
+        ureq::tls::RootCerts::Specific(std::sync::Arc::new(
+            loaded
+                .certs
+                .iter()
+                .map(|cert| ureq::tls::Certificate::from_der(cert.as_ref()).to_owned())
+                .collect(),
+        ))
+    } else {
+        ureq::tls::RootCerts::PlatformVerifier
+    };
+    Ok(Agent::config_builder()
+        .tls_config(ureq::tls::TlsConfig::builder().root_certs(roots).build())
         .build()
-        .into()
+        .into())
 }
 
 /// Sends an HTTP GET request with the specified URL.

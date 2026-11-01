@@ -375,8 +375,16 @@ impl FileModeExt for fs::File {
 /**
  * Sets the file access mode bits on the specified file.
  */
+#[cfg(unix)]
 pub fn set_file_mode<P: AsRef<Path>>(path: P, mode: FileMode) -> io::Result<()> {
     File::open(path)?.set_file_mode(mode)
+}
+
+#[cfg(windows)]
+pub fn set_file_mode<P: AsRef<Path>>(path: P, mode: FileMode) -> io::Result<()> {
+    let mut permissions = fs::metadata(&path)?.permissions();
+    permissions.set_readonly(mode.0 & 0o200 == 0);
+    fs::set_permissions(path, permissions)
 }
 
 #[cfg(test)]
@@ -409,6 +417,22 @@ mod tests {
 
     fn is_empty_dir<P: AsRef<Path>>(path: P) -> io::Result<bool> {
         Ok(path.as_ref().read_dir()?.next().is_none())
+    }
+
+    #[test]
+    fn test_set_file_mode_after_copy() -> io::Result<()> {
+        let dir = TempDir::new("test_set_file_mode_after_copy")?;
+        let source = dir.0.join("source");
+        let destination = dir.0.join("destination");
+        fs::write(&source, b"copied contents")?;
+        fs::copy(&source, &destination)?;
+
+        set_file_mode(&destination, FileMode(0o444))?;
+        assert!(fs::metadata(&destination)?.permissions().readonly());
+        set_file_mode(&destination, FileMode(0o644))?;
+        assert!(!fs::metadata(&destination)?.permissions().readonly());
+        assert_eq!(fs::read(&destination)?, b"copied contents");
+        Ok(())
     }
 
     #[test]

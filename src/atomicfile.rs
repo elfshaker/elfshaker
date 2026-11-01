@@ -1,5 +1,5 @@
 use fs2::FileExt;
-use rand::RngCore;
+use rand::Rng;
 use std::io::Read;
 use std::{
     fs::{self, File, OpenOptions},

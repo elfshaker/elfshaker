@@ -2,7 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use clap::{Arg, ArgMatches, Command};
-use rand::RngCore;
+use rand::Rng;
 use std::ffi::OsString;
 use std::{collections::HashMap, error::Error};
 

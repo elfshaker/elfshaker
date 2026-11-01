@@ -3,10 +3,9 @@
 This plan verifies the ESI editing command, versioned endpoint lookup, and
 compatibility with an elfshaker binary that predates `meta v2` support.
 
-The compatibility promise covers old clients using the unversioned remote
-endpoint. It does not make a local repository containing a v2 ESI readable by
-a v1-only binary. The suite includes that case as an expected failure so the
-boundary remains visible.
+Existing v1 repositories remain usable across old and new clients. Ordinary
+updates preserve their v1 endpoint even when the publisher adds v2. New clones
+may select v2; a v1-only binary reports a format error for those repositories.
 
 ## Test artifacts
 
@@ -22,7 +21,7 @@ The tests use:
 The server binds an ephemeral local port, serves configurable status codes and
 files, and records request paths and headers. One server handles all ESI, pack,
 and pack-index routes. Tests can add the v2 route between commands to exercise
-an in-place upgrade.
+preservation of an existing v1 repository.
 
 The old binary is always the pinned revision. Using whichever released binary
 happens to be installed would make the result depend on the test machine.
@@ -101,13 +100,14 @@ The new-client update test has two phases:
 1. Clone while v2 returns 404, leaving the repository on the legacy endpoint.
 2. Add the v2 route and run `elfshaker update`.
 
-The second phase must request v2 without an `If-Modified-Since` header derived
-from the legacy file, install the v2 index, and fetch its pack indexes. A later
-update uses the v2 URL normally.
+The second phase must request only the original v1 endpoint and retain a v1
+local index. A separate old-client clone is updated by the new client, then
+listed, updated and extracted by the pinned old client. This checks repository
+compatibility across both client generations.
 
-Finally, running the old binary against that migrated local repository must
-fail with the known v2 format error. This is an expected boundary, not a
-regression in remote compatibility.
+A v2 clone continues to update from its selected endpoint with the appropriate
+`If-Modified-Since` header. Running the old binary against that new v2
+repository must fail with the known format error, providing a negative control.
 
 ## CI and acceptance
 

@@ -729,7 +729,7 @@ test_clone_uses_ca_bundle() (
       -addext 'basicConstraints=critical,CA:FALSE' \
       -keyout "$name.key" -out "$name.pem" > /dev/null 2>&1
   done
-  printf 'meta\tv1\nurl\thttps://127.0.0.1:43105/index.esi\n' > index.esi
+  printf 'meta\tv1\nurl\thttps://127.0.0.1:43105/index.v1.esi\n' > index.v1.esi
   openssl s_server -accept 127.0.0.1:43105 -cert trusted.pem -key trusted.key \
     -WWW -quiet > server.log 2>&1 &
   server_pid=$!
@@ -740,7 +740,7 @@ test_clone_uses_ca_bundle() (
   export SSL_CERT_DIR="$PWD/empty-certs"
   mkdir "$SSL_CERT_DIR"
   export SSL_CERT_FILE="$PWD/unrelated.pem"
-  if "$elfshaker" clone https://127.0.0.1:43105/index.esi untrusted > untrusted.log 2>&1; then
+  if "$elfshaker" clone https://127.0.0.1:43105/index.v1.esi untrusted > untrusted.log 2>&1; then
     echo 'clone accepted an untrusted certificate'
     exit 1
   fi
@@ -748,14 +748,14 @@ test_clone_uses_ca_bundle() (
   test ! -e untrusted
 
   export SSL_CERT_FILE="$PWD/trusted.pem"
-  "$elfshaker" clone https://127.0.0.1:43105/index.esi trusted
+  "$elfshaker" clone https://127.0.0.1:43105/index.v1.esi trusted
   test -f trusted/elfshaker_data/remotes/origin.esi
   mkdir parent
-  "$elfshaker" clone https://127.0.0.1:43105/index.esi "$PWD/parent/absolute"
+  "$elfshaker" clone https://127.0.0.1:43105/index.v1.esi "$PWD/parent/absolute"
   test -f parent/absolute/elfshaker_data/remotes/origin.esi
 
   export SSL_CERT_FILE="$PWD/missing.pem"
-  if "$elfshaker" clone https://127.0.0.1:43105/index.esi missing-bundle > missing.log 2>&1; then
+  if "$elfshaker" clone https://127.0.0.1:43105/index.v1.esi missing-bundle > missing.log 2>&1; then
     echo 'clone ignored an unreadable certificate override'
     exit 1
   fi
@@ -764,7 +764,7 @@ test_clone_uses_ca_bundle() (
   test ! -e missing-bundle
 
   unset SSL_CERT_FILE
-  if "$elfshaker" clone https://127.0.0.1:43105/index.esi empty-directory > empty.log 2>&1; then
+  if "$elfshaker" clone https://127.0.0.1:43105/index.v1.esi empty-directory > empty.log 2>&1; then
     echo 'clone ignored an empty certificate directory override'
     exit 1
   fi
@@ -773,7 +773,7 @@ test_clone_uses_ca_bundle() (
 
   hash=$(openssl x509 -hash -noout -in trusted.pem)
   cp trusted.pem "$SSL_CERT_DIR/$hash.0"
-  "$elfshaker" clone https://127.0.0.1:43105/index.esi trusted-directory
+  "$elfshaker" clone https://127.0.0.1:43105/index.v1.esi trusted-directory
   test -f trusted-directory/elfshaker_data/remotes/origin.esi
 )
 

@@ -319,27 +319,20 @@ assert_not_contains "$request_log" '"path": "/index.esi"'
 
 printf '404\n' > "$http_root/index.v2.esi.status"
 clear_log
-(cd "$clients" && "$elfshaker" clone "$base/index.esi" new-migrate)
+(cd "$clients" && "$elfshaker" clone "$base/index.esi" existing-v1)
 rm "$http_root/index.v2.esi.status"
 clear_log
-(cd "$clients/new-migrate" && "$elfshaker" update)
-assert_contains "$request_log" '"path": "/index.v2.esi"'
-assert_contains "$request_log" '"path": "/v2-verification.pack.idx"'
-assert_contains "$clients/new-migrate/elfshaker_data/remotes/origin.esi" $'meta\tv2'
-python3 - "$request_log" <<'PY'
-import json
-import sys
+(cd "$clients/existing-v1" && "$elfshaker" update)
+assert_contains "$request_log" '"path": "/index.esi"'
+assert_not_contains "$request_log" '"path": "/index.v2.esi"'
+assert_not_contains "$request_log" '"path": "/v2-verification.pack.idx"'
+assert_contains "$clients/existing-v1/elfshaker_data/remotes/origin.esi" $'meta\tv1'
 
-records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-probe = next(record for record in records if record["path"] == "/index.v2.esi")
-if "if-modified-since" in probe["headers"]:
-    raise SystemExit("v2 upgrade probe unexpectedly sent If-Modified-Since")
-PY
 clear_log
-(cd "$clients/new-migrate" && "$elfshaker" update)
+(cd "$clients/new-v2" && "$elfshaker" update)
 assert_contains "$request_log" '"path": "/index.v2.esi"'
 assert_not_contains "$request_log" '"path": "/index.esi"'
-python3 - "$request_log" <<'PY'
+python3 - "$request_log" <<'PYTEST'
 import json
 import sys
 
@@ -347,7 +340,7 @@ records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 probe = next(record for record in records if record["path"] == "/index.v2.esi")
 if "if-modified-since" not in probe["headers"]:
     raise SystemExit("normal v2 update did not send If-Modified-Since")
-PY
+PYTEST
 
 if [[ -n "$old_elfshaker" ]]; then
   clear_log
@@ -359,12 +352,20 @@ if [[ -n "$old_elfshaker" ]]; then
   assert_contains "$request_log" '"path": "/verification.pack"'
 
   clear_log
+  (cd "$clients/old-v1" && "$elfshaker" update)
+  assert_contains "$request_log" '"path": "/index.esi"'
+  assert_not_contains "$request_log" '"path": "/index.v2.esi"'
+  assert_contains "$clients/old-v1/elfshaker_data/remotes/origin.esi" $'meta\tv1'
+  (cd "$clients/old-v1" && "$old_elfshaker" update)
+  extract_first_snapshot "$old_elfshaker" "$clients/old-v1"
+
+  clear_log
   expect_old_format_error bash -c \
     "cd '$clients' && '$old_elfshaker' clone '$base/index.v2.esi' old-v2"
   assert_contains "$request_log" '"path": "/index.v2.esi"'
 
   expect_old_format_error bash -c \
-    "cd '$clients/new-migrate' && '$old_elfshaker' update"
+    "cd '$clients/new-v2' && '$old_elfshaker' update"
 fi
 
 echo "ESI checks passed"

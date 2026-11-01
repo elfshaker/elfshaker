@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
+  # Include PRs targeting feature branches in a stack.
   pull_request:
-    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always

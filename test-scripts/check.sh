@@ -388,7 +388,11 @@ test_snapshot_tag_charset_works() {
   "$elfshaker" store "$tag"
 
   index_path="elfshaker_data/packs/loose/release 1.2/résumé-β.2.pack.idx"
-  [ -f "$index_path" ]
+  if [ ! -f "$index_path" ]; then
+    printf 'Expected Unicode loose index: %s\n' "$index_path"
+    find elfshaker_data/packs/loose -type f -print
+    return 1
+  fi
   [ "$(cat elfshaker_data/HEAD)" = "loose/$tag:$tag" ]
   "$elfshaker" list --format '%t' | grep -Fx -- "$tag"
   "$elfshaker" list-files "loose/$tag:$tag" | grep -F -- payload

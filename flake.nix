@@ -94,6 +94,8 @@
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "x86_64-w64-mingw32-gcc";
         CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = pkgs.writeShellScript "wine-wrapper" ''
           export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all
+          export LC_ALL=en_US.UTF-8
+          export LOCALE_ARCHIVE=${pkgs.glibcLocalesUtf8}/lib/locale/locale-archive
           export HOME=$WINEPREFIX
           export FONTCONFIG_PATH=${pkgs.buildPackages.fontconfig.out}/etc/fonts/
           mkdir -p $WINEPREFIX

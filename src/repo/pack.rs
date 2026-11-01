@@ -284,7 +284,7 @@ pub fn write_skippable_frame(mut writer: impl Write, buf: &[u8]) -> io::Result<u
 /// The unidirectional stream of data stored in the pack.
 enum PackReader {
     Compressed(Decoder<'static, BufReader<File>>),
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     Raw(io::Cursor<Vec<u8>>),
 }
 
@@ -295,7 +295,7 @@ impl PackReader {
             Self::Compressed(decoder) => {
                 io::copy(&mut decoder.by_ref().take(bytes), &mut io::sink()).map(|_| {})
             }
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             Self::Raw(reader) => io::copy(&mut reader.take(bytes), &mut io::sink()).map(|_| {}),
         }
     }
@@ -303,7 +303,7 @@ impl PackReader {
     fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
         match self {
             Self::Compressed(decoder) => decoder.read_exact(buf),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             Self::Raw(reader) => reader.read_exact(buf),
         }
     }

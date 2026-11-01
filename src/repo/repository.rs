@@ -32,7 +32,7 @@ use super::remote;
 use super::symlink;
 use crate::atomicfile::AtomicCreateFile;
 use crate::packidx::{EntryMetadata, FileEntry, ObjectChecksum, PackError, PackIndex, PackPath};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use crate::packidx::{SymlinkTargetEncoding, SymlinkTargetKind};
 use crate::progress::ProgressReporter;
 use crate::{

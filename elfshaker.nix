@@ -34,6 +34,11 @@ let
     then "$ELFSHAKER_BIN"
     else nativePackages.writeShellScript "wine-wrapper" ''
       export WINEPREFIX="/tmp/elfshaker_testing" WINEDEBUG=-all
+      # Wine decodes Unix command-line arguments using the locale code page.
+      export LC_ALL=en_US.UTF-8
+      ${lib.optionalString nativePackages.stdenv.hostPlatform.isLinux ''
+        export LOCALE_ARCHIVE=${nativePackages.glibcLocalesUtf8}/lib/locale/locale-archive
+      ''}
       export HOME=$WINEPREFIX FONTCONFIG_PATH=${nativePackages.fontconfig.out}/etc/fonts/
       mkdir -p $WINEPREFIX
       exec ${nativePackages.wine64}/bin/wine "''${ELFSHAKER_BIN}.exe" "$@"

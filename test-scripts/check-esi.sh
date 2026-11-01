@@ -278,7 +278,8 @@ extract_first_snapshot() {
   local binary=$1
   local repository=$2
   local snapshot
-  snapshot=$(cd "$repository" && "$binary" list | head -n 1)
+  # Drain every row so selecting the first cannot break the writer's pipe.
+  snapshot=$(cd "$repository" && "$binary" list | sed -n '1p')
   [[ -n "$snapshot" ]] || fail "no snapshots listed in $repository"
   (cd "$repository" && "$binary" extract --reset --verify "$snapshot")
 }

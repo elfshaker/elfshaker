@@ -1986,6 +1986,7 @@ mod tests {
         ));
         assert_eq!(fs::read(root.join("sentinel")).unwrap(), b"sentinel");
         assert!(!root.join("file").exists());
+        drop(repo);
         fs::remove_dir_all(root).unwrap();
     }
 

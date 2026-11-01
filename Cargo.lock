@@ -300,6 +300,7 @@ dependencies = [
  "log",
  "num_cpus",
  "rand",
+ "rmp",
  "rmp-serde",
  "serde",
  "sha1",

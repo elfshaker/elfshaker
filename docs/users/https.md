@@ -7,8 +7,10 @@ These settings apply to remote indexes, pack indexes, and packs.
 
 Configured PEM locations replace the platform's default trust roots on every
 supported platform, including macOS. Unreadable paths and selections containing
-no CA certificates produce an error. With no configured locations, elfshaker
-uses native platform verification, including the macOS Keychain.
+no CA certificates are reported and leave HTTPS without trusted roots; they
+never fall back to the platform store. Plain HTTP requests do not require CA
+certificates. With no configured locations, elfshaker uses native platform
+verification, including the macOS Keychain.
 
 ```bash
 SSL_CERT_FILE=/path/to/ca-bundle.pem elfshaker clone https://example.com/index.esi destination

@@ -594,7 +594,7 @@ impl Repository {
         };
         let pack_file_name = pack.to_string() + "." + PACK_EXTENSION;
 
-        let agent = remote::http_agent()?;
+        let agent = remote::http_agent();
         let reporter = (self.progress_reporter_factory)(&format!("Fetching {pack_file_name}"));
 
         for remote in remotes {
@@ -909,7 +909,7 @@ impl Repository {
         path.push(name);
         path.set_extension("esi");
 
-        let agent = remote::http_agent()?;
+        let agent = remote::http_agent();
         let reporter = (self.progress_reporter_factory)(&format!(
             "Fetching remote repository index from {name}"
         ));
@@ -1378,7 +1378,7 @@ impl Repository {
         let remotes_dir = self.data_dir().join(REMOTES_DIR);
         let remotes = remote::load_remotes(&remotes_dir)?;
 
-        let agent = remote::http_agent()?;
+        let agent = remote::http_agent();
         let reporter = (self.progress_reporter_factory)("Fetching pack indexes from origin");
         // Display the progress bar immediately.
         reporter.checkpoint(0, Some(1));

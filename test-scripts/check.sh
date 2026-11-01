@@ -646,7 +646,9 @@ test_dirty_repo_can_be_forced() {
 }
 
 # Test if elfshaker update fetches pack indexes successfully
-test_update_fetches_indexes() {
+test_update_fetches_indexes() (
+  export SSL_CERT_FILE="$PWD/missing-ca.pem"
+  export SSL_CERT_DIR="$PWD/missing-ca-directory"
   pack_sha="$(sha1sum "$input" | awk '{print $1}')"
   pack_idx_sha="$(sha1sum "$input.idx" | awk '{print $1}')"
 
@@ -681,7 +683,7 @@ test_update_fetches_indexes() {
   fi
 
   kill $server1_pid $server2_pid || true
-}
+)
 
 # Exercise the real TLS client with a private trust anchor, without external networking.
 test_clone_uses_ca_bundle() (

@@ -23,16 +23,18 @@ The invariant is that `.vN.esi` contains `meta vN`. The unversioned endpoint is
 a permanent legacy alias rather than an alias for the newest format. This lets
 publishers add formats without changing the resource requested by old clients.
 
-When a newer client receives an unversioned ESI URL, it first requests the
+When cloning from an unversioned ESI URL, a newer client first requests the
 highest format it supports. A client that supports v2 therefore tries the
 `.v2.esi` sibling before the supplied URL. It falls back to the unversioned URL
 only when the versioned resource returns HTTP 404. Authentication errors,
 transport errors, server errors, and malformed versioned indexes remain
 visible instead of being hidden by a fallback.
 
-This lookup applies to both clone and update. An update that probes a different
-versioned URL does not send the modification time of the local legacy index.
-Explicitly versioned URLs are fetched as written.
+Updates keep the endpoint recorded in the local index. An existing v1 remote
+continues to use v1 when a publisher adds v2, so the repository remains usable
+with older clients. A remote created from a v2 endpoint continues to use v2.
+Updates send the modification time of that same local resource for conditional
+requests. Explicitly versioned URLs are fetched as written.
 
 ## Editing command
 

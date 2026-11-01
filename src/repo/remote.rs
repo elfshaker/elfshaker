@@ -490,20 +490,9 @@ pub fn update_remote(agent: &Agent, remote: &RemoteIndex) -> Result<RemoteIndex,
         .parse::<Url>()
         .map_err(|error| Error::HttpError(error.into()))?;
 
-    if let Some(versioned_url) = v2_sibling_url(&url) {
-        // The v2 probe is unconditional because the local mtime belongs to the
-        // legacy resource, not the versioned sibling.
-        match read_remote_resource(agent, &versioned_url, Duration::from_secs(15), None)? {
-            RemoteResource::Found { body, .. } => {
-                return install_remote(path, &versioned_url, body);
-            }
-            RemoteResource::NotFound => {}
-            RemoteResource::NotModified => {
-                unreachable!("Unexpected Not-Modified response from unconditional versioned probe")
-            }
-        }
-    }
-
+    // Keep the endpoint selected when this remote was created. Discovering a
+    // newer format here would make existing repositories unreadable by older
+    // clients after an ordinary update.
     match read_remote_resource(agent, &url, Duration::from_secs(15), date_modified)? {
         RemoteResource::Found { body, .. } => install_remote(path, &url, body),
         RemoteResource::NotModified => RemoteIndex::load(path).reify(path.display()),

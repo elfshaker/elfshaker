@@ -852,6 +852,36 @@ mod tests {
     }
 
     #[test]
+    fn extract_shared_object_to_multiple_paths() -> Result<(), Error> {
+        let root = crate::repo::fs::create_temp_path(&std::env::temp_dir());
+        fs::create_dir(&root)?;
+        let contents = b"shared object";
+        let compressed = zstd::stream::encode_all(&contents[..], 1)?;
+        let frame = root.join("frame");
+        fs::write(&frame, compressed)?;
+        let reader = PackReader::Compressed(Decoder::new(File::open(frame)?)?);
+        let checksum: ObjectChecksum = Sha1::digest(contents).into();
+        let entries: Vec<_> = ["a", "b"]
+            .iter()
+            .map(|name| {
+                FileEntry::new(
+                    pack_path(name),
+                    checksum,
+                    make_md(0, contents.len() as u64),
+                    EntryMetadata::Regular { mode: 0o644 },
+                )
+            })
+            .collect();
+
+        extract_files(reader, &entries, &root, true)?;
+        for name in ["a", "b"] {
+            assert_eq!(fs::read(root.join(name))?, contents);
+        }
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn pack_id_validation_works() {
         // VALID
         assert!("ABCD".parse::<PackId>().is_ok());

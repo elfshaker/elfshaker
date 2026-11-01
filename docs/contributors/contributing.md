@@ -17,6 +17,20 @@ Please ensure that any new source files contain the following header:
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 ```
 
+## Generated manual pages
+
+After changing CLI definitions or the package version, regenerate the
+committed manual pages:
+
+```bash
+cargo run --example generate-manpages -- man
+cargo test --locked generated_manpages_are_current
+```
+
+The freshness test compares page names and contents against the current
+command definitions and package version. It is included in `cargo test`,
+so stale, missing, or extra pages fail the Rust CI checks.
+
 ## Before opening a pull request
 
 1. Make sure all unit tests are passing.

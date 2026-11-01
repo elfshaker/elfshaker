@@ -3,7 +3,17 @@
 Use this checklist when preparing a tagged release.
 
 1. Update `Cargo.toml` to the release version and refresh `Cargo.lock` if
-   needed.
+   needed. Regenerate the manual pages after changing the version or CLI
+   definitions, and include the updated pages in the release commit:
+
+```bash
+cargo run --example generate-manpages -- man
+cargo test --locked generated_manpages_are_current
+```
+
+   The freshness test compares every committed page with generated output,
+   including the embedded package version. It also runs under `cargo test`
+   in CI.
 2. Update `CHANGELOG.md`, replacing `Unreleased` with the release date.
 3. Run the local release checks:
 

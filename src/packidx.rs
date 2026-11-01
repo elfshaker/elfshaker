@@ -594,8 +594,18 @@ impl PackIndex {
         let rd = open_file(p.as_ref())?;
         let mut rd = BufReader::new(rd);
         Self::read_magic(&mut rd)?;
-        let mut d = rmp_serde::Deserializer::new(rd);
-        Ok(PackIndex::deserialize_only_snapshots(&mut d)?.snapshot_tags)
+        Self::read_snapshot_tags(rd)
+    }
+
+    // Read the outer array header separately so listing snapshots leaves the
+    // potentially large index tables unread.
+    fn read_snapshot_tags(mut rd: impl Read) -> Result<Vec<String>, PackError> {
+        let fields =
+            rmp::decode::read_array_len(&mut rd).map_err(rmp_serde::decode::Error::from)?;
+        if fields != 5 {
+            return Err(rmp_serde::decode::Error::LengthMismatch(5).into());
+        }
+        Ok(rmp_serde::from_read(rd)?)
     }
 
     pub fn save<P: AsRef<Path>>(&self, p: P) -> Result<(), PackError> {
@@ -634,15 +644,7 @@ impl PackIndex {
     }
 }
 
-struct VisitPackIndex {
-    load_mode: LoadMode,
-}
-
-#[derive(PartialEq)]
-enum LoadMode {
-    Full,
-    OnlySnapshots,
-}
+struct VisitPackIndex;
 
 fn next_expecting<'de, T, V, E>(seq: &mut V) -> Result<T, E>
 where
@@ -663,9 +665,6 @@ impl<'de> Visitor<'de> for VisitPackIndex {
     {
         let mut result = PackIndex::new();
         result.snapshot_tags = next_expecting(&mut seq)?;
-        if self.load_mode == LoadMode::OnlySnapshots {
-            return Ok(result);
-        }
         result.snapshot_deltas = next_expecting(&mut seq)?;
         result.path_pool = next_expecting(&mut seq)?;
         result.object_pool = next_expecting(&mut seq)?;
@@ -688,20 +687,7 @@ impl<'de> Deserialize<'de> for PackIndex {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(VisitPackIndex {
-            load_mode: LoadMode::Full,
-        })
-    }
-}
-
-impl PackIndex {
-    fn deserialize_only_snapshots<'de, D>(deserializer: D) -> Result<PackIndex, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_seq(VisitPackIndex {
-            load_mode: LoadMode::OnlySnapshots,
-        })
+        deserializer.deserialize_seq(VisitPackIndex)
     }
 }
 
@@ -724,5 +710,21 @@ impl Serialize for PackIndex {
                 .collect::<Vec<ObjectMetadata>>(),
         )?;
         s.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_listing_reads_index_prefix() {
+        let mut index = PackIndex::new();
+        index.snapshot_tags = vec!["first".into(), "second".into()];
+        let bytes = rmp_serde::to_vec(&index).unwrap();
+        let mut reader = bytes.as_slice();
+        let listed = PackIndex::read_snapshot_tags(&mut reader).unwrap();
+        assert_eq!(listed, index.snapshot_tags);
+        assert!(!reader.is_empty(), "index tables remain unread");
     }
 }

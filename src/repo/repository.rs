@@ -1091,7 +1091,7 @@ impl Repository {
             fs::remove_file(&pack_path)?;
         }
 
-        info!("Deleted pack index {:?}", &pack_idx_path);
+        info!("Deleted pack index {:?}", pack_idx_path);
         Ok(())
     }
 

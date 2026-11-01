@@ -298,6 +298,18 @@ pub fn load_remotes(base_path: &Path) -> Result<Vec<RemoteIndex>, Error> {
         .collect()
 }
 
+/// Builds an HTTP agent using the operating system's certificate trust.
+pub(crate) fn http_agent() -> Agent {
+    Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .into()
+}
+
 /// Sends an HTTP GET request with the specified URL.
 ///
 /// # Arguments
@@ -312,22 +324,19 @@ fn open_remote_resource(
     if_modified_since: Option<SystemTime>,
 ) -> Result<Option<(usize, impl Read)>, Error> {
     let mut request = agent.get(url.as_ref());
-    // Alternatively, we could have used Duration::MAX to indicate no timeout.
-    // Unfortunately, the ureq crashes at some unwrap() somewhere then MAX is
-    // provided.
-    if let Some(timeout) = timeout {
-        request = request.timeout(timeout);
-    }
+    request = request.config().timeout_global(timeout).build();
     if let Some(if_modified_since) = if_modified_since {
-        request = request.set("If-Modified-Since", &format_http_date(if_modified_since));
+        request = request.header("If-Modified-Since", &format_http_date(if_modified_since));
     }
 
     let response = request.call().map_err(|e| Error::HttpError(e.into()))?;
 
-    let status = response.status();
+    let status = response.status().as_u16();
 
     let content_length = response
-        .header("Content-Length")
+        .headers()
+        .get("Content-Length")
+        .and_then(|value| value.to_str().ok())
         .unwrap_or("0")
         .parse::<usize>()
         .unwrap_or(0);
@@ -340,7 +349,7 @@ fn open_remote_resource(
     );
 
     match status {
-        HTTP_STATUS_OK => Ok(Some((content_length, response.into_reader()))),
+        HTTP_STATUS_OK => Ok(Some((content_length, response.into_body().into_reader()))),
         HTTP_STATUS_NOT_MODIFIED => Ok(None),
         _ => Err(Error::HttpError(
             format!(

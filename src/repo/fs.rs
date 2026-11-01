@@ -2,7 +2,7 @@
 //! Copyright (C) 2021 Arm Limited or its affiliates and Contributors. All rights reserved.
 
 use fs2::FileExt;
-use rand::RngCore;
+use rand::Rng;
 
 use std::{
     fs::{self, File},

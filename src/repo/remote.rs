@@ -299,7 +299,7 @@ pub fn load_remotes(base_path: &Path) -> Result<Vec<RemoteIndex>, Error> {
 }
 
 /// Builds an HTTP agent using explicit CA overrides or platform verification.
-pub(crate) fn http_agent() -> Result<Agent, Error> {
+pub(crate) fn http_agent() -> Agent {
     let ca_file = std::env::var_os("SSL_CERT_FILE");
     let ca_dirs = std::env::var_os("SSL_CERT_DIR");
     let has_ca_dirs = ca_dirs
@@ -308,16 +308,14 @@ pub(crate) fn http_agent() -> Result<Agent, Error> {
     let roots = if ca_file.is_some() || has_ca_dirs {
         // Load explicit PEM locations on every platform, including macOS,
         // whose native verifier uses the Keychain rather than these variables.
-        let loaded = rustls_native_certs::load_native_certs();
+        let mut loaded = rustls_native_certs::load_native_certs();
         if let Some(error) = loaded.errors.first() {
-            return Err(Error::IOError(io::Error::other(format!(
-                "Failed to load CA certificate overrides: {error}"
-            ))));
-        }
-        if loaded.certs.is_empty() {
-            return Err(Error::IOError(io::Error::other(
-                "No CA certificates loaded from SSL_CERT_FILE or SSL_CERT_DIR",
-            )));
+            log::warn!("Failed to load CA certificate overrides: {error}");
+            // Invalid overrides must never fall back to platform roots. Empty
+            // anchors reject HTTPS while leaving plain HTTP requests usable.
+            loaded.certs.clear();
+        } else if loaded.certs.is_empty() {
+            log::warn!("No CA certificates loaded from SSL_CERT_FILE or SSL_CERT_DIR");
         }
         ureq::tls::RootCerts::Specific(std::sync::Arc::new(
             loaded
@@ -329,10 +327,10 @@ pub(crate) fn http_agent() -> Result<Agent, Error> {
     } else {
         ureq::tls::RootCerts::PlatformVerifier
     };
-    Ok(Agent::config_builder()
+    Agent::config_builder()
         .tls_config(ureq::tls::TlsConfig::builder().root_certs(roots).build())
         .build()
-        .into())
+        .into()
 }
 
 /// Sends an HTTP GET request with the specified URL.

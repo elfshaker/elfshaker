@@ -46,7 +46,7 @@ var (
 	argPackMode          = flag.String("pack-project", "clang", "project type to pack [currently only clang is supported, affects tarball creation]")
 	argRetryAfter        = flag.String("retry-after", "5", "value for retry-after header to send to clients in case of too many requests in flight")
 	argSnapshotsFilename = flag.String("snapshots-filename", "snapshots.txt", "path to list of snapshots, one per line (elfshaker list > snapshots.txt)")
-	argCommitsFilename   = flag.String("commits-filename", "commits.txt", "path to list of commits (TZ=UTC GIT_DIR=path/to/llvm-project/.git git log --date=iso-strict-local --format='%h %cd %an | %s' > commits.txt)")
+	argCommitsFilename   = flag.String("commits-filename", "commits.txt", "path to list of commits (TZ=UTC GIT_DIR=path/to/llvm-project/.git git log --first-parent --topo-order --reverse --abbrev=15 --date=iso-strict-local --format='%h%x1f%cd%x1f%an%x1f%s' > commits.txt)")
 	argEncoderLevel      = flag.Int("zstd-encoder-level", 1, "zstd compression level for tarballs")
 	argServeWellKnown    = flag.String("well-known", "", "path to .well-knwon directory, if specified")
 )
@@ -112,8 +112,8 @@ func argCheck() {
 type Handler struct {
 	// snapshots is a btree of snapshots ordered on commit sha.
 	// This is used for lookup of matching commits by any-length prefix of a sha.
-	snapshots *btree.BTreeG[snapshot]
-	commits Commits // List of all commits, mapped onto snapshots.
+	snapshots  *btree.BTreeG[snapshot]
+	commits    Commits  // List of all commits, mapped onto snapshots.
 	commitText []string // List of commit text used for fuzzy search.
 
 	s3Client        *s3.Client
@@ -165,7 +165,7 @@ func (h *Handler) configureAWS() error {
 
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	queryString := strings.TrimPrefix(r.URL.Path, "/search/")
-	if queryString == "" {
+	if strings.TrimSpace(queryString) == "" {
 		http.Error(w, "No search query provided", http.StatusBadRequest)
 		return
 	}
@@ -173,21 +173,21 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		log.Printf("Search for %q took %v", queryString, time.Since(start).Truncate(1*time.Millisecond))
 	}()
-	
+
 	queryFields := strings.Fields(queryString)
 
 	results := make([]int, 0, 10)
 
-	outer:
+outer:
 	for id, commit := range slices.Backward(h.commits) {
 		for _, field := range queryFields {
-			if strings.Contains(commit.Text, field) {
-				results = append(results, id)
-				if len(results) >= 10 {
-					break outer // Limit to 10 results.
-				}
-				break // No need to check other fields for this commit.
+			if !strings.Contains(commit.Text, field) {
+				continue outer
 			}
+		}
+		results = append(results, id)
+		if len(results) >= 10 {
+			break // Limit to 10 results.
 		}
 	}
 

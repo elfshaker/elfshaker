@@ -24,11 +24,7 @@ pub(crate) fn run(matches: &ArgMatches) -> Result<(), Box<dyn Error>> {
         return Err(format!("'{directory}' already exists!").into());
     }
 
-    let temp_directory = PathBuf::from(format!(
-        ".{}-{}",
-        directory.to_owned(),
-        create_random_name()
-    ));
+    let temp_directory = temporary_directory(Path::new(directory))?;
     if let Err(e) = do_clone(&temp_directory, data_dir, origin_url) {
         let _ = fs::remove_dir_all(temp_directory);
         return Err(e);
@@ -75,6 +71,31 @@ pub(crate) fn get_app() -> Command {
                 .index(2)
                 .help("The name of a new directory to clone into."),
         )
+}
+
+fn temporary_directory(directory: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let name = directory
+        .file_name()
+        .ok_or("clone destination must have a directory name")?;
+    let mut temporary_name = std::ffi::OsString::from(".");
+    temporary_name.push(name);
+    temporary_name.push(format!("-{}", create_random_name()));
+    Ok(directory.with_file_name(temporary_name))
+}
+
+#[test]
+fn temporary_directory_is_a_sibling() {
+    for destination in ["mc", "parent/mc", "/tmp/parent/mc"] {
+        let destination = Path::new(destination);
+        let temporary = temporary_directory(destination).unwrap();
+        assert_eq!(temporary.parent(), destination.parent());
+        assert!(temporary
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(".mc-"));
+    }
 }
 
 fn create_random_name() -> String {

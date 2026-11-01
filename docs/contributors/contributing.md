@@ -38,3 +38,21 @@ cargo clippy
 
 ## After opening a pull request
 Go to the `Checks` tab on your new pull request and make sure all tests are passing and there are no warnings.
+
+## CI during PR iteration
+
+Rust build, unit and integration tests, formatting, and Clippy run before
+Nix builds start. Nix builds run when both Rust jobs pass.
+
+To skip Nix builds while iterating on a PR, add this trailer to the end of
+the latest PR head commit message, separated from the body by a blank line:
+
+```text
+CI-Skip-Nix: true
+```
+
+The trailer applies to that head commit. A new head commit without the
+trailer restores Nix builds. Rust tests, formatting, and Clippy run with
+either setting. Pushes to `main` and `test-ci` run Nix after the Rust jobs
+pass regardless of the trailer. Release builds also run independently of
+the trailer.

@@ -1,8 +1,7 @@
-name: Rust
+name: CI
 
 on:
   push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -14,11 +13,35 @@ permissions:
 
 jobs:
   build:
-
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/test-ci'
+    outputs:
+      skip-nix: ${{ steps.nix-policy.outputs.skip-nix }}
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      with:
+        # Include both parents of GitHub's PR merge commit to read the head message.
+        fetch-depth: 2
+    - name: Decide whether to run Nix
+      id: nix-policy
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        skip=false
+        if [[ "$EVENT_NAME" == pull_request ]]; then
+          trailers=$(git show -s --format=%B "$PR_HEAD_SHA" | git interpret-trailers --parse)
+          if grep -Fxiq 'CI-Skip-Nix: true' <<< "$trailers"; then
+            skip=true
+          fi
+        fi
+        echo "skip-nix=$skip" >> "$GITHUB_OUTPUT"
+        echo "Skip PR Nix builds: $skip" >> "$GITHUB_STEP_SUMMARY"
     - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
     - name: Build
       run: cargo build --release --verbose
@@ -30,3 +53,56 @@ jobs:
       run: |
         pack=$(contrib/create-test-pack ./target/release/elfshaker 5 64)
         ./test-scripts/check.sh ./target/release/elfshaker "$pack"
+
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - run: cargo fmt --all -- --check
+      - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --all-features -- -D warnings
+
+  build-linux:
+    needs: [build, clippy_check]
+    if: needs.build.outputs.skip-nix != 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:d3b963f787999e6c0219a48dba02978769286ff61a5f4d26245cb6a6e5567ea3
+          platforms: arm64
+      - name: Build aarch64 musl
+        run: timeout --signal=TERM --kill-after=30s 25m nix build -L --max-jobs 1 --cores 2 --no-link .#elfshaker-aarch64-musl
+      - name: Build x86_64 musl
+        run: timeout --signal=TERM --kill-after=30s 25m nix build -L --max-jobs 1 --cores 2 --no-link .#elfshaker-x86_64-musl
+      - name: Build x86_64 Windows
+        run: timeout --signal=TERM --kill-after=30s 25m nix build -L --max-jobs 1 --cores 2 --no-link .#elfshaker-x86_64-windows
+      - name: Build release archive
+        run: timeout --signal=TERM --kill-after=30s 5m nix build -L --max-jobs 1 --cores 2 .#release
+      - name: ls
+        run: ls -la result/
+
+  build-macos-arm64:
+    needs: [build, clippy_check]
+    if: needs.build.outputs.skip-nix != 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+      - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+      - name: Build
+        run: nix build -L .#release
+      - name: ls
+        run: ls -la result/

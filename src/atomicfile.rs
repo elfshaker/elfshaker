@@ -42,10 +42,16 @@ use std::{
 /// as though it doesn't yet exist. Further, stale temporary files can be
 /// identified as files with the prefix .elfshakertmp_ which have no exclusive
 /// lock held.
+/// Windows keeps a separate delete-on-close ownership file until publication,
+/// so closing the destination handle does not admit another creator. Windows
+/// removes that claim when its owner exits, including without Rust destructors.
+///
 pub struct AtomicCreateFile<'l> {
     path: &'l Path,
     temp: (PathBuf, File),
     target: File,
+    #[cfg(windows)]
+    _claim: File,
 }
 
 /// lock_name acquires a lock on the given `fd`, and ensures that the
@@ -127,6 +133,36 @@ fn lock_name(path: &Path, fd: &File) -> io::Result<()> {
     Ok(())
 }
 
+// Keep Windows ownership while its destination handle is closed for rename.
+// File identity makes alternate spellings in the same directory share a claim.
+#[cfg(windows)]
+fn claim_target(parent: &Path, target: &File) -> io::Result<File> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    use winapi::shared::winerror::{ERROR_DELETE_PENDING, ERROR_SHARING_VIOLATION};
+    use winapi::um::winbase::FILE_FLAG_DELETE_ON_CLOSE;
+
+    let (id, volume) = get_file_id_and_serial(target.as_raw_handle())?;
+    let path = parent.join(format!(".elfshakerlock_{volume:08x}_{id:016x}"));
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+        .open(path)
+    {
+        Err(error)
+            if error.kind() == io::ErrorKind::AlreadyExists
+                || matches!(
+                    error.raw_os_error().map(|code| code as u32),
+                    Some(ERROR_SHARING_VIOLATION | ERROR_DELETE_PENDING)
+                ) =>
+        {
+            Err(io::Error::new(io::ErrorKind::WouldBlock, error))
+        }
+        result => result,
+    }
+}
+
 impl<'l> AtomicCreateFile<'l> {
     pub fn new(dest: &'l Path) -> io::Result<Self> {
         let mut atomic_create_for_write = OpenOptions::new();
@@ -135,6 +171,8 @@ impl<'l> AtomicCreateFile<'l> {
         let parent = dest.parent().unwrap_or_else(|| Path::new("/"));
         match atomic_create_for_write.open(dest) {
             Ok(file) => {
+                #[cfg(windows)]
+                let claim = claim_target(parent, &file)?;
                 // Grab a lock to indicate that the use is 'live' as opposed to
                 // stale. Failure to grab the lock here should be a rare race
                 // condition, but some other process will have the lock and
@@ -151,6 +189,8 @@ impl<'l> AtomicCreateFile<'l> {
                     path: dest,
                     temp: Self::create_temp(parent)?,
                     target: file,
+                    #[cfg(windows)]
+                    _claim: claim,
                 })
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -192,7 +232,15 @@ impl<'l> AtomicCreateFile<'l> {
     /// commit_content updates the target file with the content of the reader
     /// 'r' atomically. It consumes 'self', and relinquishes any locks on the
     /// files being atomically updated.
-    pub fn commit_content(mut self, mut r: impl Read) -> io::Result<()> {
+    pub fn commit_content(self, r: impl Read) -> io::Result<()> {
+        self.commit_content_before_rename(r, || {})
+    }
+
+    fn commit_content_before_rename(
+        mut self,
+        mut r: impl Read,
+        before_rename: impl FnOnce(),
+    ) -> io::Result<()> {
         let written = io::copy(&mut r, &mut self.temp.1)?;
         assert!(
             written != 0,
@@ -202,11 +250,11 @@ impl<'l> AtomicCreateFile<'l> {
         // Check that the data made it to disk before proceeding.
         self.temp.1.sync_data()?;
 
-        // Windows (wine, at least) does not allow renaming a file that is
-        // currently open, so we need to drop the lock on the target file
-        // before renaming it. This creates a short race window.
+        // Wine requires closing the destination before replacing it. The
+        // separate ownership claim stays open through publication.
         #[cfg(windows)]
         drop(self.target);
+        before_rename();
         fs::rename(self.temp.0, self.path)?;
         // Silence field-not-read warning, and conceptually: release the lock
         // here.
@@ -271,6 +319,70 @@ mod tests {
         // Test that we see exactly one success and the rest as failures.
         assert_eq!(n_success + -n_fail, result);
 
+        Ok(())
+    }
+    #[test]
+    fn publication_keeps_one_owner() -> Result<(), Box<dyn Error>> {
+        use std::sync::mpsc::sync_channel;
+        use std::time::Duration;
+
+        let dir = create_temp_path(std::env::temp_dir());
+        fs::create_dir(&dir)?;
+        let path = dir.join("target");
+        let writer_path = path.clone();
+        let (ready_tx, ready_rx) = sync_channel(0);
+        let (resume_tx, resume_rx) = sync_channel(0);
+        let writer = std::thread::spawn(move || {
+            AtomicCreateFile::new(&writer_path)?.commit_content_before_rename(
+                &b"first writer"[..],
+                || {
+                    ready_tx.send(()).unwrap();
+                    resume_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+                },
+            )
+        });
+        ready_rx.recv_timeout(Duration::from_secs(30))?;
+        let contender = AtomicCreateFile::new(&path);
+        let admitted = contender.is_ok();
+        let second = contender.and_then(|pending| pending.commit_content(&b"second writer"[..]));
+        resume_tx.send(())?;
+        let first = writer.join().unwrap();
+        assert!(first.is_ok(), "first writer must publish: {:?}", first);
+        assert!(!admitted, "another creator was admitted before publication");
+        assert!(second.is_err(), "another writer also published");
+        assert_eq!(fs::read(&path)?, b"first writer");
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn claim_recovers_after_process_exit() -> Result<(), Box<dyn Error>> {
+        const CHILD_PATH: &str = "ELFSHAKER_ATOMICFILE_EXIT_PATH";
+        if let Some(path) = std::env::var_os(CHILD_PATH) {
+            let path = PathBuf::from(path);
+            let _pending = AtomicCreateFile::new(&path)?;
+            // Deliberately skip Rust destructors, as an interrupted owner does.
+            std::process::exit(0);
+        }
+
+        let dir = create_temp_path(std::env::temp_dir());
+        fs::create_dir(&dir)?;
+        let path = dir.join("target");
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "atomicfile::tests::claim_recovers_after_process_exit",
+                "--nocapture",
+            ])
+            .env(CHILD_PATH, &path)
+            .output()?;
+        assert!(output.status.success(), "child failed: {:?}", output);
+        assert!(path.is_file(), "child must reserve the destination");
+        AtomicCreateFile::new(&path)?.commit_content(&b"recovered"[..])?;
+        assert_eq!(fs::read(&path)?, b"recovered");
+        let error = AtomicCreateFile::new(&path).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        fs::remove_dir_all(dir)?;
         Ok(())
     }
 }

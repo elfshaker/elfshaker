@@ -88,6 +88,72 @@ mod tests {
             .collect()
     }
 
+    fn manpage_differences(
+        source: &BTreeMap<PathBuf, Vec<u8>>,
+        generated: &BTreeMap<PathBuf, Vec<u8>>,
+    ) -> Vec<String> {
+        let mut differences = Vec::new();
+        for (name, expected) in generated {
+            let Some(actual) = source.get(name) else {
+                differences.push(format!("{}: missing checked-in manpage", name.display()));
+                continue;
+            };
+            if actual == expected {
+                continue;
+            }
+            let offset = actual
+                .iter()
+                .zip(expected)
+                .position(|(a, b)| a != b)
+                .unwrap_or(actual.len().min(expected.len()));
+            let line = actual[..offset].iter().filter(|&&b| b == b'\n').count() + 1;
+            let context = |bytes: &[u8]| {
+                let start = offset.saturating_sub(40);
+                let end = (offset + 80).min(bytes.len());
+                format!("{:?}", String::from_utf8_lossy(&bytes[start..end]))
+            };
+            differences.push(format!(
+                "{}: line {line} differs (byte {offset})\n  checked in: {}\n  generated:  {}",
+                name.display(),
+                context(actual),
+                context(expected),
+            ));
+        }
+        for name in source.keys().filter(|name| !generated.contains_key(*name)) {
+            differences.push(format!("{}: unexpected checked-in manpage", name.display()));
+        }
+        differences
+    }
+
+    #[test]
+    fn manpage_diagnostics_identify_changes_without_dumping_contents() {
+        let mut source = BTreeMap::from([
+            (PathBuf::from("changed.1"), b"same\nold line\n".to_vec()),
+            (PathBuf::from("extra.1"), Vec::new()),
+        ]);
+        let mut generated = BTreeMap::from([
+            (PathBuf::from("changed.1"), b"same\nnew line\n".to_vec()),
+            (PathBuf::from("missing.1"), Vec::new()),
+        ]);
+        source.insert(
+            PathBuf::from("long.1"),
+            [vec![b'a'; 10_000], vec![b'x']].concat(),
+        );
+        generated.insert(
+            PathBuf::from("long.1"),
+            [vec![b'a'; 10_000], vec![b'y']].concat(),
+        );
+        let diagnostic = manpage_differences(&source, &generated).join("\n");
+        assert!(diagnostic.contains("changed.1: line 2 differs"));
+        assert!(diagnostic.contains("old line"));
+        assert!(diagnostic.contains("new line"));
+        assert!(diagnostic.contains("missing.1: missing checked-in manpage"));
+        assert!(diagnostic.contains("extra.1: unexpected checked-in manpage"));
+        assert!(diagnostic.contains("long.1: line 1 differs (byte 10000)"));
+        assert!(diagnostic.contains('x') && diagnostic.contains('y'));
+        assert!(diagnostic.len() < 1_000);
+    }
+
     #[test]
     fn generated_manpages_are_current() {
         let generated_dir = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
@@ -98,9 +164,13 @@ mod tests {
         let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("man");
         let source_pages = manpages_in(&source_dir);
         let generated_pages = manpages_in(&generated_dir);
-        assert_eq!(
-            source_pages, generated_pages,
-            "generated manpages differ; run `cargo run --example generate-manpages -- man`"
+        let differences = manpage_differences(&source_pages, &generated_pages);
+        fs::remove_dir_all(&generated_dir).unwrap();
+        assert!(
+            differences.is_empty(),
+            "generated manpages are out of date:\n{}\n\
+             Regenerate with `cargo run --example generate-manpages -- man`",
+            differences.join("\n")
         );
         for (page, marker) in [
             ("elfshaker-show.1", "<\\fIPATH\\fR>..."),
@@ -206,8 +276,6 @@ mod tests {
                 );
             }
         }
-
-        fs::remove_dir_all(generated_dir).unwrap();
     }
 
     #[test]

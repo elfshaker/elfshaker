@@ -37,6 +37,8 @@ pub enum Error {
     },
     /// The working directory contains unexpected files
     DirtyWorkDir,
+    /// Extraction would replace paths absent from the source snapshot.
+    UntrackedPaths(Vec<PathBuf>),
     /// The .pack file is not available in packs/
     PackNotFound(String),
     /// The directory is not a repository
@@ -88,6 +90,13 @@ impl Display for Error {
                 "Cannot store snapshot '{requested}' at '{}': the path contains snapshot '{existing}'",
                 path.display()
             ),
+            Self::UntrackedPaths(paths) => {
+                writeln!(f, "Untracked paths would be overwritten:")?;
+                for path in paths {
+                    writeln!(f, "  {}", path.display())?;
+                }
+                write!(f, "Move these paths aside, or use --force to replace them.")
+            }
             Self::DirtyWorkDir => write!(
                 f,
                 "Some files in the repository have been removed or modified unexpectedly! \

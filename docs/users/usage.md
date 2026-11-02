@@ -132,12 +132,18 @@ elfshaker extract build-002
 ```
 
 Extraction normally transitions incrementally from `HEAD`. It may delete files
-that belonged to the previous snapshot but not the new one. Untracked files are
-left alone.
+that belonged to the previous snapshot but not the new one. Existing untracked
+paths that would be replaced cause extraction to fail
+before snapshot entries or `HEAD` change. The error lists the conflicting paths;
+move them aside or use `--force` to authorize replacement. Unrelated untracked
+files remain in place.
 
-Use `--reset` to ignore `HEAD` and write every file in the selected snapshot.
-It does not remove unrelated paths. Use `--force` only when you intend to
-bypass checks for unexpected working-directory modifications.
+Use `--reset` to write every file in the selected snapshot while retaining
+untracked-path protection. It uses the snapshot named by `HEAD` to identify
+tracked paths and does not remove unrelated paths. Use `--force` only when you
+intend to bypass checks for unexpected working-directory modifications and
+untracked destination collisions. If the source index named by `HEAD` is missing,
+`--reset --force` can restore the destination without consulting that index.
 
 Before changing snapshot entries, elfshaker checks whether the destination can
 represent the complete path set. Extraction fails without partial snapshot

@@ -530,14 +530,15 @@ test_pack_snapshots_from_list_works() {
   rand_megs 1 > ./foo
   rand_megs 1 > ./bar
 
-  # Then extract from the pack and verify the checksums
-  "$elfshaker" --verbose extract --reset PL-1:SL-1
+  # These partial snapshots leave the other files untracked. Explicitly
+  # authorize replacing them while verifying the selected pack contents.
+  "$elfshaker" --verbose extract --reset --force PL-1:SL-1
   if [[ "$sha1_ss1" != $(cat ./foo | sha1sum) ]]; then
     echo "Checksums do not match!";
     exit 1
   fi
 
-  "$elfshaker" --verbose extract --reset PL-2:SL-2
+  "$elfshaker" --verbose extract --reset --force PL-2:SL-2
   if [[ "$sha1_ss2" != $(cat ./bar | sha1sum) ]]; then
     echo "Checksums do not match!";
     exit 1
@@ -570,20 +571,21 @@ test_pack_multi_snapshots_from_list_works() {
   rand_megs 1 > ./foo2
   rand_megs 1 > ./bar
 
-  # Then extract from the pack and verify the checksums
-  "$elfshaker" --verbose extract --reset PL2-1:SL2-1
+  # These partial snapshots leave the other files untracked. Explicitly
+  # authorize replacing them while verifying the selected pack contents.
+  "$elfshaker" --verbose extract --reset --force PL2-1:SL2-1
   if [[ "$sha1_ss1a" != $(cat ./foo1 | sha1sum) ]]; then
     echo "Checksums do not match!";
     exit 1
   fi
 
-  "$elfshaker" --verbose extract --reset PL2-1:SL2-2
+  "$elfshaker" --verbose extract --reset --force PL2-1:SL2-2
   if [[ "$sha1_ss1b" != $(cat ./foo2 | sha1sum) ]]; then
     echo "Checksums do not match!";
     exit 1
   fi
 
-  "$elfshaker" --verbose extract --reset PL2-2:SL2-3
+  "$elfshaker" --verbose extract --reset --force PL2-2:SL2-3
   if [[ "$sha1_ss2" != $(cat ./bar | sha1sum) ]]; then
     echo "Checksums do not match!";
     exit 1
@@ -675,10 +677,13 @@ test_pack_order_by_mtime() {
 }
 
 test_show_from_pack_works() {
-  "$elfshaker" extract --reset --verify "$pack":"$snapshot_a"
-  file_path="$({ "$elfshaker" list-files "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
+  file_path=show-file
+  printf 'contents for show\n' > "$file_path"
+  "$elfshaker" store show-snapshot
+  "$elfshaker" pack show-pack
+  "$elfshaker" extract --reset --verify show-pack:show-snapshot
   sha1_extract="$(sha1sum < "$file_path")"
-  sha1_show="$("$elfshaker" --verbose show "$pack":"$snapshot_a" "$file_path" | sha1sum)"
+  sha1_show="$("$elfshaker" --verbose show show-pack:show-snapshot "$file_path" | sha1sum)"
   if [[ "$sha1_extract" != "$sha1_show" ]]; then
     echo 'Outputs of extract and show do not match!'
     exit 1
@@ -686,11 +691,12 @@ test_show_from_pack_works() {
 }
 
 test_show_from_loose_works() {
-  "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
-  "$elfshaker" store "$snapshot_a"
-  file_path="$({ "$elfshaker" list-files "$pack":"$snapshot_a" || true; } | head -n1 | awk '{print $NF}')"
+  file_path=show-file
+  printf 'contents for show\n' > "$file_path"
+  "$elfshaker" store show-snapshot
+  "$elfshaker" extract --verify --reset loose/show-snapshot:show-snapshot
   sha1_extract="$(sha1sum < "$file_path")"
-  sha1_show="$("$elfshaker" --verbose show loose/"$snapshot_a":"$snapshot_a" "$file_path" | sha1sum)"
+  sha1_show="$("$elfshaker" --verbose show loose/show-snapshot:show-snapshot "$file_path" | sha1sum)"
   if [[ "$sha1_extract" != "$sha1_show" ]]; then
     echo 'Outputs of extract and show do not match!'
     exit 1
@@ -709,6 +715,8 @@ test_head_updated_after_packing() {
 
 test_touched_file_dirties_repo() {
   "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
+  printf 'tracked contents\n' > dirty-file
+  "$elfshaker" store dirty-source
   find . -not -path "./elfshaker_data/*" -exec touch -d "$(date -R --date='now +10 sec')" {} +
   if "$elfshaker" extract --verbose --verify "$pack":"$snapshot_b"; then
     echo 'Failed to detect files changes!'
@@ -718,6 +726,8 @@ test_touched_file_dirties_repo() {
 
 test_dirty_repo_can_be_forced() {
   "$elfshaker" extract --verify --reset "$pack":"$snapshot_a"
+  printf 'tracked contents\n' > dirty-file
+  "$elfshaker" store dirty-source
   find . -not -path "./elfshaker_data/*" -exec touch -d "$(date -R --date='now +10 sec')" {} +
   if ! "$elfshaker" extract --verbose --force --verify "$pack":"$snapshot_b"; then
     echo 'Could not use --force to skip dirty repository checks!'

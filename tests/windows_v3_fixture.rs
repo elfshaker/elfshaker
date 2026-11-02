@@ -114,7 +114,7 @@ fn windows_writer_v3_fixture_exposes_portable_and_native_target_metadata() {
 }
 
 #[test]
-fn portable_snapshot_from_windows_writer_extracts_on_this_host() {
+fn portable_snapshot_from_windows_writer_extracts_on_this_host_requires_symlinks() {
     let tree = TempTree::new();
     let (checkout, data) = install_fixture(&tree);
     succeeds(
@@ -175,7 +175,7 @@ fn windows_native_target_is_rejected_before_unix_mutation() {
 
 #[cfg(windows)]
 #[test]
-fn windows_native_target_extracts_on_windows() {
+fn windows_native_target_extracts_on_windows_requires_symlinks() {
     let tree = TempTree::new();
     let (checkout, data) = install_fixture(&tree);
     succeeds(

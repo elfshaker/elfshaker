@@ -314,7 +314,7 @@ fn symlink_dir(target: &Path, link: &Path) {
 }
 
 #[test]
-fn loose_and_packed_symlinks_round_trip_through_the_cli() {
+fn loose_and_packed_symlinks_round_trip_through_the_cli_requires_symlinks() {
     let tree = TempTree::new("symlink-pack");
     let source = tree.path().join("source");
     let loose_checkout = tree.path().join("loose-checkout");
@@ -443,7 +443,7 @@ fn assert_links_restored(checkout: &Path) {
 }
 
 #[test]
-fn every_entry_kind_transition_works_for_loose_and_packed_snapshots() {
+fn every_entry_kind_transition_works_for_loose_and_packed_snapshots_requires_symlinks() {
     let tree = TempTree::new("symlink-transitions");
     let source = tree.path().join("source");
     let data = tree.path().join("data");
@@ -554,7 +554,7 @@ fn every_entry_kind_transition_works_for_loose_and_packed_snapshots() {
 }
 
 #[test]
-fn incompatible_targets_fail_before_loose_or_packed_extraction_mutates_files() {
+fn incompatible_targets_fail_before_loose_or_packed_extraction_mutates_files_requires_symlinks() {
     let tree = TempTree::new("incompatible-symlink-targets");
     let source = tree.path().join("source");
     let data = tree.path().join("data");
@@ -634,7 +634,7 @@ fn incompatible_targets_fail_before_loose_or_packed_extraction_mutates_files() {
 }
 
 #[test]
-fn extraction_rejects_symlinked_destination_ancestors_on_every_host() {
+fn extraction_rejects_symlinked_destination_ancestors_on_every_host_requires_symlinks() {
     let tree = TempTree::new("symlinked-destination-ancestor");
     let source = tree.path().join("source");
     let data = tree.path().join("data");
@@ -742,6 +742,29 @@ fn checked_in_portable_symlink_pack_extracts_on_this_host() {
         b"target-file"
     );
 
+    if std::env::var("ELFSHAKER_TEST_NO_SYMLINKS").as_deref() == Ok("1") {
+        fs::write(checkout.join("sentinel"), b"original").unwrap();
+        let output = fails(
+            &checkout,
+            &data,
+            &[
+                "extract",
+                "portable-symlinks-v3:snapshot",
+                "--reset",
+                "--force",
+                "--verify",
+            ],
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Cannot create symbolic links"),
+            "unexpected stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read(checkout.join("sentinel")).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&checkout).unwrap().count(), 1);
+        return;
+    }
+
     succeeds(
         &checkout,
         &data,
@@ -773,7 +796,7 @@ fn checked_in_portable_symlink_pack_extracts_on_this_host() {
 
 #[cfg(unix)]
 #[test]
-fn absolute_and_non_unicode_unix_targets_round_trip_natively() {
+fn absolute_and_non_unicode_unix_targets_round_trip_natively_requires_symlinks() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
@@ -831,7 +854,7 @@ fn absolute_and_non_unicode_unix_targets_round_trip_natively() {
 
 #[cfg(windows)]
 #[test]
-fn absolute_windows_targets_round_trip_natively_from_loose_and_packed_storage() {
+fn absolute_windows_targets_round_trip_natively_from_loose_and_packed_storage_requires_symlinks() {
     let tree = TempTree::new("native-windows-links");
     let source = tree.path().join("source");
     let loose_checkout = tree.path().join("loose-checkout");

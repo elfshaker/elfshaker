@@ -379,12 +379,18 @@ pub(crate) fn probe(
     fs::create_dir_all(destination).map_err(PackError::IOError)?;
     for kind in kinds {
         let probe = create_temp_path(destination);
-        create_native(Path::new("elfshaker-symlink-probe-target"), &probe, kind).map_err(
-            |error| {
-                PackError::SymlinkCreationUnsupported(destination.to_owned(), error.to_string())
-            },
-        )?;
-        remove_leaf(&probe).map_err(PackError::IOError)?;
+        fs::create_dir(&probe).map_err(PackError::IOError)?;
+        // Wine can leave a partial file when reparse-point creation fails.
+        // Own the probe directory so cleanup cannot remove an existing entry.
+        let result = create_native(
+            Path::new("elfshaker-symlink-probe-target"),
+            &probe.join("link"),
+            kind,
+        );
+        fs::remove_dir_all(&probe).map_err(PackError::IOError)?;
+        result.map_err(|error| {
+            PackError::SymlinkCreationUnsupported(destination.to_owned(), error.to_string())
+        })?;
     }
     Ok(())
 }

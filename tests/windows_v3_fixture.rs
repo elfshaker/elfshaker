@@ -2,18 +2,21 @@ use elfshaker::packidx::{EntryMetadata, PackIndex, SymlinkTargetEncoding, Symlin
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempTree(PathBuf);
 
 impl TempTree {
     fn new() -> Self {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "elfshaker-windows-writer-v3-{}-{nonce}",
+            "elfshaker-windows-writer-v3-{}-{nonce}-{id}",
             std::process::id()
         ));
         fs::create_dir(&path).unwrap();

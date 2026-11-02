@@ -82,7 +82,8 @@ pub(crate) fn get_app() -> Command {
              remotes and retries.\n\nBy default, extraction transitions from \
              HEAD incrementally: files removed from the new snapshot are \
              deleted, and changed files are checked for unexpected local \
-             modifications. Untracked files are left alone.",
+             modifications. Existing untracked destination paths cause extraction to fail \
+             before files are changed; use --force to authorize replacement.",
         )
         .arg(
             Arg::new("snapshot")
@@ -92,7 +93,7 @@ pub(crate) fn get_app() -> Command {
                 .help("Snapshot tag or PACK:SNAPSHOT identifier to restore."),
         )
         .arg(Arg::new("reset").long("reset").help(
-            "Ignore HEAD and write every file in the snapshot. Files outside the snapshot are not removed.",
+            "Write every file in the snapshot, retaining untracked-path protection. Files outside the snapshot are not removed.",
         ).action(ArgAction::SetTrue))
         .arg(
             Arg::new("verify")

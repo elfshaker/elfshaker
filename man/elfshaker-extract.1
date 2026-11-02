@@ -8,11 +8,11 @@ elfshaker\-extract \- Restore a snapshot into the working directory.
 .SH DESCRIPTION
 Restores a snapshot into the working directory and updates HEAD. A snapshot may be named by its tag or as PACK:SNAPSHOT. If the snapshot is not available locally, elfshaker refreshes configured remotes and retries.
 .PP
-By default, extraction transitions from HEAD incrementally: files removed from the new snapshot are deleted, and changed files are checked for unexpected local modifications. Untracked files are left alone.
+By default, extraction transitions from HEAD incrementally: files removed from the new snapshot are deleted, and changed files are checked for unexpected local modifications. Existing untracked destination paths cause extraction to fail before files are changed; use \-\-force to authorize replacement.
 .SH OPTIONS
 .TP
 \fB\-\-reset\fR
-Ignore HEAD and write every file in the snapshot. Files outside the snapshot are not removed.
+Write every file in the snapshot, retaining untracked\-path protection. Files outside the snapshot are not removed.
 .TP
 \fB\-\-verify\fR
 Verify each extracted file against its stored SHA\-1 checksum.

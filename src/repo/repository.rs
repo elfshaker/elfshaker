@@ -498,39 +498,34 @@ impl Repository {
             TargetPlatform::current(),
         )?;
 
-        let (new_entries, old_entries) = if opts.reset || head.is_none() {
-            // Extract all, remove nothing
-            (entries, vec![])
-        } else if let Some(head) = head {
-            // HEAD and new snapshot packs might differ
-            if snapshot_id.pack() == head.pack() {
-                let head_entries = source_index.entries_from_handles(
-                    source_index
-                        .resolve_snapshot(head.tag())
-                        .expect("failed to resolve snapshot")
-                        .iter(), // TODO: Temporary.
-                )?;
-                Self::compute_entry_diff(&head_entries, &entries)
+        // Reset still needs the source path set to distinguish tracked outputs
+        // from untracked collisions. Forced reset can recover a broken HEAD.
+        let head_entries = if opts.reset && opts.force() {
+            vec![]
+        } else if let Some(head) = &head {
+            let head_index;
+            let index = if snapshot_id.pack() == head.pack() {
+                &source_index
             } else {
-                let head_index = self.load_index(head.pack())?;
-                let head_entries = head_index
-                    .entries_from_handles(
-                        head_index
-                            .resolve_snapshot(head.tag())
-                            .expect("failed to resolve snapshot")
-                            .iter(), // TODO: Temporary.
-                    )
-                    .map_err(|e| {
-                        if matches!(e, PackError::SnapshotNotFound(_)) {
-                            Error::BrokenHeadRef(Box::new(Error::PackError(e)))
-                        } else {
-                            Error::PackError(e)
-                        }
-                    })?;
-                Self::compute_entry_diff(&head_entries, &entries)
-            }
+                head_index = self
+                    .load_index(head.pack())
+                    .map_err(|error| Error::BrokenHeadRef(Box::new(error)))?;
+                &head_index
+            };
+            let handles = index.resolve_snapshot(head.tag()).ok_or_else(|| {
+                Error::BrokenHeadRef(Box::new(Error::PackError(PackError::SnapshotNotFound(
+                    head.tag().to_owned(),
+                ))))
+            })?;
+            index.entries_from_handles(handles.iter())?
         } else {
-            unreachable!();
+            vec![]
+        };
+        let (new_entries, old_entries) = if opts.reset || head.is_none() {
+            // Extract all, remove nothing.
+            (entries, vec![])
+        } else {
+            Self::compute_entry_diff(&head_entries, &entries)
         };
 
         // There is no point in deleting files which will be overwritten by the extract, so
@@ -592,6 +587,15 @@ impl Repository {
                 );
                 self.check_entry_unchanged_since(entry, head_time.unwrap(), &path_buf)?;
             }
+        }
+
+        if !opts.force() {
+            preflight_untracked_collisions(
+                &self.path,
+                &new_entries,
+                &head_entries,
+                &removable_ancestors,
+            )?;
         }
 
         let mut dir_queue = EmptyDirectoryCleanupQueue::new();
@@ -1876,6 +1880,91 @@ impl TargetPlatform {
         {
             Self::Unix
         }
+    }
+}
+
+/// Check every existing output before extraction removes any tracked entries.
+/// Directory replacements may consume only descendants represented by HEAD.
+fn preflight_untracked_collisions(
+    destination: &Path,
+    entries: &[FileEntry],
+    head_entries: &[FileEntry],
+    removable_ancestors: &HashSet<PathBuf>,
+) -> Result<(), Error> {
+    let platform = TargetPlatform::current();
+    let mut tracked = HashSet::new();
+    let mut directories = HashSet::new();
+    for entry in head_entries {
+        let key = target_path_key(&entry.path, platform)?;
+        for length in 1..key.len() {
+            directories.insert(key[..length].to_vec());
+        }
+        tracked.insert(key);
+    }
+
+    let mut collisions = Vec::new();
+    for entry in entries {
+        let native = entry
+            .path
+            .to_native()
+            .map_err(|error| PackError::PathNotRepresentable(entry.path.clone(), error))?;
+        // Removing a tracked file/link ancestor makes this output absent.
+        // In particular, never inspect a directory link's target here.
+        if native
+            .ancestors()
+            .skip(1)
+            .any(|ancestor| removable_ancestors.contains(ancestor))
+        {
+            continue;
+        }
+        let output = destination.join(&native);
+        match fs::symlink_metadata(&output) {
+            // A tracked file ancestor can be removed for a file-to-directory
+            // transition. Ancestor preflight has already validated that case.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue
+            }
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+        // WalkDir does not follow descendant links. Disable following a root
+        // link as well, so dangling links are collisions in their own right.
+        let mut walk = WalkDir::new(&output)
+            .follow_links(false)
+            .follow_root_links(false)
+            .into_iter();
+        while let Some(item) = walk.next() {
+            let item = item?;
+            let relative = item
+                .path()
+                .strip_prefix(destination)
+                .expect("output lies inside destination");
+            let path = PackPath::from_native(relative).map_err(PackError::InvalidLogicalPath)?;
+            let key = target_path_key(&path, platform)?;
+            let owned = if item.file_type().is_dir() {
+                directories.contains(&key)
+            } else {
+                tracked.contains(&key)
+            };
+            if !owned {
+                collisions.push(relative.to_path_buf());
+                if item.file_type().is_dir() {
+                    walk.skip_current_dir();
+                }
+            }
+        }
+    }
+    collisions.sort();
+    collisions.dedup();
+    if collisions.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::UntrackedPaths(collisions))
     }
 }
 

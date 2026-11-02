@@ -67,9 +67,12 @@ main() {
         done
         # Delete some files.
         delete_count="$(rand_int_inclusive 0 "$NUM_FILES")"
-        find \( -name elfshaker_data -prune \) -o -type f -print |
-            shuf -n "$delete_count" |
-            xargs rm -f
+        # shuf -n 0 closes its input and can fail find under pipefail.
+        if (( delete_count > 0 )); then
+            find \( -name elfshaker_data -prune \) -o -type f -print |
+                shuf -n "$delete_count" |
+                xargs rm -f
+        fi
         "${ELFSHAKER_BIN}" store "SNAPSHOT-$I" --verbose
     done
 

@@ -65,6 +65,9 @@ FLAGS=(
     "-DCMAKE_BUILD_TYPE=Release"
     "-DLLVM_ENABLE_ASSERTIONS=On"
     "-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra"
+    # Preserve the classic Clang profile when upstream enables ClangIR.
+    # CIR pulls in MLIR sources and increases build time and binary size.
+    "-DCLANG_ENABLE_CIR=OFF"
     "-DCLANGD_DECISION_FOREST=Off"
 
     # VC revision is written into binaries with manyclangs-build. This is not

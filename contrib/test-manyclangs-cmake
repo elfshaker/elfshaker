@@ -45,4 +45,16 @@ grep -Fx -- "-DLLVM_USE_LINKER=$KIT/bin/ld.lld" "$ARGS" >/dev/null ||
 grep -Fx -- '-DLLVM_ENABLE_TERMINFO=Off' "$ARGS" >/dev/null ||
     fail "terminfo remained enabled for the standalone kit"
 
+grep -Fx -- '-DCLANG_ENABLE_CIR=OFF' "$ARGS" >/dev/null ||
+    fail "ClangIR would pull MLIR into the standalone-kit profile"
+
+# The production Ubuntu profile must retain the same feature boundary.
+env -u MANYCLANGS_RELINK_KIT PATH="$BIN:$PATH" \
+    MANYCLANGS_TEST_CMAKE_ARGS="$ARGS" \
+    "$SCRIPT" "$SOURCE" "$BUILD"
+grep -Fx -- '-DCMAKE_C_COMPILER=clang-12' "$ARGS" >/dev/null ||
+    fail "the default Ubuntu compiler selection changed"
+grep -Fx -- '-DCLANG_ENABLE_CIR=OFF' "$ARGS" >/dev/null ||
+    fail "ClangIR would pull MLIR into the Ubuntu profile"
+
 echo "test-manyclangs-cmake: ok"

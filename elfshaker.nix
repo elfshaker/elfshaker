@@ -56,6 +56,12 @@ naerskBuildPackage isWindows target {
 
   strictDeps = true;
 
+  # Nix blocks the xattr writes Wine uses for Windows reparse points.
+  # Exercise rejection without mutation here; native CI requires symlinks.
+  ELFSHAKER_TEST_NO_SYMLINKS = lib.optionalString isWindows "1";
+  cargoTestOptions = options:
+    options ++ lib.optionals isWindows [ "--" "--skip" "requires_symlinks" ];
+
   nativeBuildInputs = [
     stdenv.cc
     removeReferencesTo

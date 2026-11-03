@@ -1092,10 +1092,7 @@ mod tests {
                 target_kind: SymlinkTargetKind::Unknown,
             },
         );
-        let root = std::env::temp_dir().join(format!(
-            "elfshaker-packed-symlink-test-{}",
-            std::process::id()
-        ));
+        let root = crate::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir_all(&root).unwrap();
 
         extract_files(

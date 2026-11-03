@@ -478,8 +478,7 @@ mod tests {
     fn materializes_a_dangling_link_without_following_it() {
         use std::os::unix::ffi::OsStrExt;
 
-        let root =
-            std::env::temp_dir().join(format!("elfshaker-symlink-test-{}", std::process::id()));
+        let root = crate::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir_all(&root).unwrap();
         let destination = root.join("link");
         materialize(

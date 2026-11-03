@@ -6,18 +6,12 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempTree(PathBuf);
 
 impl TempTree {
-    fn new(name: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("elfshaker-{name}-{}-{nonce}", std::process::id()));
+    fn new() -> Self {
+        let path = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -257,7 +251,7 @@ fn install_synthetic_symlink_snapshot(
 
 #[test]
 fn packed_show_keeps_zero_length_objects_separate_from_cached_duplicates() {
-    let tree = TempTree::new("packed-empty-show");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let data = tree.path().join("data");
     fs::create_dir(&source).unwrap();
@@ -315,7 +309,7 @@ fn symlink_dir(target: &Path, link: &Path) {
 
 #[test]
 fn loose_and_packed_symlinks_round_trip_through_the_cli_requires_symlinks() {
-    let tree = TempTree::new("symlink-pack");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let loose_checkout = tree.path().join("loose-checkout");
     let packed_checkout = tree.path().join("packed-checkout");
@@ -444,7 +438,7 @@ fn assert_links_restored(checkout: &Path) {
 
 #[test]
 fn every_entry_kind_transition_works_for_loose_and_packed_snapshots_requires_symlinks() {
-    let tree = TempTree::new("symlink-transitions");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let data = tree.path().join("data");
     fs::create_dir(&source).unwrap();
@@ -555,7 +549,7 @@ fn every_entry_kind_transition_works_for_loose_and_packed_snapshots_requires_sym
 
 #[test]
 fn incompatible_targets_fail_before_loose_or_packed_extraction_mutates_files_requires_symlinks() {
-    let tree = TempTree::new("incompatible-symlink-targets");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let data = tree.path().join("data");
     fs::create_dir(&source).unwrap();
@@ -635,7 +629,7 @@ fn incompatible_targets_fail_before_loose_or_packed_extraction_mutates_files_req
 
 #[test]
 fn extraction_rejects_symlinked_destination_ancestors_on_every_host_requires_symlinks() {
-    let tree = TempTree::new("symlinked-destination-ancestor");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let data = tree.path().join("data");
     fs::create_dir_all(source.join("dir")).unwrap();
@@ -681,7 +675,7 @@ fn portable_symlink_fixture(extension: &str) -> PathBuf {
 
 #[test]
 fn checked_in_portable_symlink_pack_extracts_on_this_host() {
-    let tree = TempTree::new("portable-symlink-fixture");
+    let tree = TempTree::new();
     let checkout = tree.path().join("checkout");
     let data = tree.path().join("data");
     let packs = data.join("packs");
@@ -800,7 +794,7 @@ fn absolute_and_non_unicode_unix_targets_round_trip_natively_requires_symlinks()
     use std::ffi::OsStr;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-    let tree = TempTree::new("native-unix-links");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let loose_checkout = tree.path().join("loose-checkout");
     let packed_checkout = tree.path().join("packed-checkout");
@@ -855,7 +849,7 @@ fn absolute_and_non_unicode_unix_targets_round_trip_natively_requires_symlinks()
 #[cfg(windows)]
 #[test]
 fn absolute_windows_targets_round_trip_natively_from_loose_and_packed_storage_requires_symlinks() {
-    let tree = TempTree::new("native-windows-links");
+    let tree = TempTree::new();
     let source = tree.path().join("source");
     let loose_checkout = tree.path().join("loose-checkout");
     let packed_checkout = tree.path().join("packed-checkout");

@@ -2722,7 +2722,7 @@ mod tests {
             0xFA, 0xF0, 0xDE, 0xAD, 0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0, 0xFA, 0xF0, 0xDE, 0xAD,
             0xBE, 0xEF, 0xBA, 0xDC, 0x0D, 0xE0,
         ];
-        let test_lock = std::env::temp_dir().join("elfshaker_test_lock");
+        let test_lock = create_temp_path(&std::env::temp_dir());
         let repo = Repository {
             path: "/repo".into(),
             data_dir: "/repo/elfshaker_data".into(),

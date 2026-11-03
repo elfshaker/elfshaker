@@ -75,7 +75,6 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn manpages_in(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         fs::read_dir(path)
@@ -91,12 +90,7 @@ mod tests {
 
     #[test]
     fn generated_manpages_are_current() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let generated_dir =
-            std::env::temp_dir().join(format!("elfshaker-manpages-{}-{nonce}", std::process::id()));
+        let generated_dir = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&generated_dir).unwrap();
 
         super::manpages::generate(super::cli::get_app(), &generated_dir).unwrap();

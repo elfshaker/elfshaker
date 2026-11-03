@@ -1,19 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempTree(PathBuf);
 impl TempTree {
     fn new() -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "elfshaker-collision-{}-{nonce}",
-            std::process::id()
-        ));
+        let path = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&path).unwrap();
         Self(path)
     }

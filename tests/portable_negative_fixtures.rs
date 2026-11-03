@@ -2,18 +2,12 @@ use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempTree(PathBuf);
 
 impl TempTree {
-    fn new(name: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("elfshaker-{name}-{}-{nonce}", std::process::id()));
+    fn new() -> Self {
+        let path = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -75,7 +69,7 @@ fn succeeds(root: &Path, data: &Path, arguments: &[&str]) -> Output {
 
 #[cfg(any(windows, target_os = "macos"))]
 fn assert_rejected_without_mutation(name: &str, error_fragment: &str) {
-    let tree = TempTree::new(name);
+    let tree = TempTree::new();
     let (checkout, data) = install_fixture(&tree, name);
     fs::write(checkout.join("sentinel"), b"original").unwrap();
     let snapshot = format!("{name}:snapshot");
@@ -94,7 +88,7 @@ fn assert_rejected_without_mutation(name: &str, error_fragment: &str) {
 }
 
 fn extract_fixture(name: &str) -> TempTree {
-    let tree = TempTree::new(name);
+    let tree = TempTree::new();
     let (checkout, data) = install_fixture(&tree, name);
     let snapshot = format!("{name}:snapshot");
     succeeds(
@@ -135,7 +129,7 @@ fn producer_derived_negative_fixtures_can_be_inspected_on_every_host() {
             hex::encode(Sha1::digest(fs::read(fixture(name, "pack.idx")).unwrap())),
             index_sha1
         );
-        let tree = TempTree::new(name);
+        let tree = TempTree::new();
         let (checkout, data) = install_fixture(&tree, name);
         let snapshot = format!("{name}:snapshot");
         let listing = succeeds(&checkout, &data, &["list-files", &snapshot]);

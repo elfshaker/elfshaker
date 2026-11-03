@@ -1,18 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempTree(PathBuf);
 
 impl TempTree {
-    fn new(name: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("elfshaker-{name}-{}-{nonce}", std::process::id()));
+    fn new() -> Self {
+        let path = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -52,7 +46,7 @@ fn succeeds(root: &Path, arguments: &[&str]) -> Output {
 
 #[test]
 fn version_three_pack_round_trips_through_cli_operations() {
-    let tree = TempTree::new("portable-pack");
+    let tree = TempTree::new();
     let source = tree.path().join("目录").join("résumé.txt");
     fs::create_dir(source.parent().unwrap()).unwrap();
     fs::write(&source, b"portable contents\n").unwrap();
@@ -103,7 +97,7 @@ fn version_three_pack_round_trips_through_cli_operations() {
 
 #[test]
 fn checked_in_version_three_pack_is_readable_on_this_host() {
-    let tree = TempTree::new("portable-fixture");
+    let tree = TempTree::new();
     let packs = tree.path().join("data/packs");
     fs::create_dir_all(&packs).unwrap();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/portable");

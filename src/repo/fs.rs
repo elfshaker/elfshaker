@@ -398,8 +398,8 @@ mod tests {
     struct TempDir(PathBuf);
 
     impl TempDir {
-        fn new<P: AsRef<Path>>(name: P) -> io::Result<TempDir> {
-            let path = env::temp_dir().join(name.as_ref());
+        fn new() -> io::Result<TempDir> {
+            let path = create_temp_path(&env::temp_dir());
             fs::create_dir(&path)?;
             Ok(TempDir(path))
         }
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_set_file_mode_after_copy() -> io::Result<()> {
-        let dir = TempDir::new("test_set_file_mode_after_copy")?;
+        let dir = TempDir::new()?;
         let source = dir.0.join("source");
         let destination = dir.0.join("destination");
         fs::write(&source, b"copied contents")?;
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_remove_empty_dirs_works() -> io::Result<()> {
-        let temp_dir = TempDir::new("test_remove_empty_dirs_works")?;
+        let temp_dir = TempDir::new()?;
         let boundary_dir = temp_dir.0.join("test_root");
         let leaf_dir = boundary_dir.join(PathBuf::from_iter(&["a", "b", "c", "d"]));
 
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_remove_empty_dirs_is_safe() -> Result<(), io::Error> {
-        let temp_dir = TempDir::new("test_remove_empty_dirs_is_safe")?;
+        let temp_dir = TempDir::new()?;
         let boundary_dir = temp_dir.0.join("test_root");
         let leaf_dir = boundary_dir.join(PathBuf::from_iter(&["a", "b", "c", "d"]));
         let file = leaf_dir.join("file");
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_queue_works() -> io::Result<()> {
-        let temp_dir = TempDir::new("test_cleanup_queue_works")?;
+        let temp_dir = TempDir::new()?;
         let boundary_dir = temp_dir.0.join("test_root");
         let leaf_dir = boundary_dir.join(PathBuf::from_iter(&["a", "b", "c", "d"]));
 
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_queue_processes_leaf_before_ancestor() -> io::Result<()> {
-        let temp_dir = TempDir::new("test_cleanup_queue_processes_leaf_before_ancestor")?;
+        let temp_dir = TempDir::new()?;
         let boundary_dir = temp_dir.0.join("test_root");
         let parent_dir = boundary_dir.join("1");
         let leaf_dir = parent_dir.join("41");

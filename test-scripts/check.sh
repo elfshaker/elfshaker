@@ -13,10 +13,6 @@ if [[ $# < 2 ]]; then
   exit 1
 fi
 
-timestamp() {
-  date "+%Y%m%d%H%M%S" # Unix timestamp
-}
-
 # Use specified elfshaker binary
 elfshaker=$(realpath "$1")
 input=$(realpath "$2")
@@ -25,7 +21,8 @@ pack="${pack%.*}"
 
 shift 2
 
-temp_dir=$(realpath ${TMP-${TMPDIR-/tmp}}/"test-T$(timestamp)")
+temp_dir=$(mktemp -d "${TMP-${TMPDIR-/tmp}}/elfshaker-test.XXXXXXXXXX")
+temp_dir=$(realpath "$temp_dir")
 trap 'trap_exit' EXIT
 
 cleanup() {
@@ -1038,7 +1035,6 @@ test_read_only() {
 }
 
 main() {
-  mkdir "$temp_dir"
   cd "$temp_dir"
 
   # Setup repository

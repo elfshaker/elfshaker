@@ -778,7 +778,6 @@ fn replace_file(source: &Path, target: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn checksum(byte: u8) -> Checksum {
         [byte; 20]
@@ -794,12 +793,8 @@ mod tests {
         }
     }
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("elfshaker-{name}-{unique}"));
+    fn temp_dir() -> PathBuf {
+        let path = crate::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&path).unwrap();
         path
     }
@@ -1001,7 +996,7 @@ mod tests {
 
     #[test]
     fn digest_file_computes_known_sha1_and_size() {
-        let dir = temp_dir("digest");
+        let dir = temp_dir();
         let path = dir.join("small");
         fs::write(&path, b"abc").unwrap();
         let digest = digest_file(&path).unwrap();
@@ -1015,7 +1010,7 @@ mod tests {
 
     #[test]
     fn failed_second_publish_restores_first_target_and_backups() {
-        let dir = temp_dir("rollback");
+        let dir = temp_dir();
         let first = dir.join("first.esi");
         let second = dir.join("second.esi");
         fs::write(&first, b"old-first").unwrap();
@@ -1052,7 +1047,7 @@ mod tests {
 
     #[test]
     fn backup_destinations_cannot_alias_another_target() {
-        let dir = temp_dir("backup-target-collision");
+        let dir = temp_dir();
         let first = dir.join("foo.esi");
         let second = backup_path(&first);
         fs::write(&first, b"old-first").unwrap();

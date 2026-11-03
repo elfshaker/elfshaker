@@ -398,14 +398,9 @@ fn also_arg() -> Arg {
 mod tests {
     use super::*;
     use elfshaker::esi::Checksum;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_dir(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("elfshaker-cli-{name}-{unique}"));
+    fn temp_dir() -> PathBuf {
+        let path = elfshaker::repo::fs::create_temp_path(&std::env::temp_dir());
         fs::create_dir(&path).unwrap();
         path
     }
@@ -422,7 +417,7 @@ mod tests {
 
     #[test]
     fn validates_aliases_before_filtering_unchanged_documents() {
-        let dir = temp_dir("unchanged-alias");
+        let dir = temp_dir();
         let primary_path = dir.join("index.esi");
         let secondary_path = dir.join("index.esi.bak");
 

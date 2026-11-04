@@ -4,6 +4,8 @@ on:
   push:
   # Include PRs targeting feature branches in a stack.
   pull_request:
+  merge_group:
+    types: [checks_requested]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,6 +17,7 @@ jobs:
   build:
     if: >-
       github.event_name == 'pull_request' ||
+      github.event_name == 'merge_group' ||
       github.ref == 'refs/heads/main' ||
       github.ref == 'refs/heads/test-ci'
     outputs:

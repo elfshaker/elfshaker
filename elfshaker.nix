@@ -85,6 +85,9 @@ naerskBuildPackage isWindows target {
     doInstallCheck = true;
 
     installCheckPhase = ''
+      # Nix supplies an unusable CA path in sandboxed builds. The integration
+      # suite uses local servers and sets its own explicit TLS overrides.
+      unset SSL_CERT_FILE SSL_CERT_DIR
       ${buildPackages.tree}/bin/tree $out
       echo "Testing elfshaker binary with check.sh"
       export ELFSHAKER_BIN=$out/bin/elfshaker

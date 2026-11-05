@@ -53,6 +53,9 @@ jobs:
     - name: Run check
       run: ./test-scripts/check.sh ./target/release/elfshaker ./test-scripts/artifacts/verification.pack
     - name: Build pre-v2 elfshaker
+      env:
+        # Preserve the pinned reader while allowing a newer style-only lint.
+        RUSTFLAGS: -A mismatched_lifetime_syntaxes
       run: |
         git worktree add /tmp/elfshaker-pre-v2 9c18314b72b0a64544b96932fa10d64f82798328
         cargo build --release --manifest-path /tmp/elfshaker-pre-v2/Cargo.toml --target-dir /tmp/elfshaker-pre-v2-target

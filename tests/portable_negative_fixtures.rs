@@ -87,6 +87,7 @@ fn assert_rejected_without_mutation(name: &str, error_fragment: &str) {
     assert_eq!(fs::read(checkout.join("sentinel")).unwrap(), b"original");
 }
 
+#[cfg(any(target_os = "linux", windows))]
 fn extract_fixture(name: &str) -> TempTree {
     let tree = TempTree::new();
     let (checkout, data) = install_fixture(&tree, name);

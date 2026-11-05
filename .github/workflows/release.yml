@@ -1,10 +1,12 @@
 name: Release
 
 on:
-  release:
-    types: [created]
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: Existing draft release tag to upload and publish (blank for test build)
+        required: false
+        type: string
       scope:
         description: Platforms to build for a non-publishing test run
         required: true
@@ -15,18 +17,56 @@ on:
           - all
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      revision: ${{ steps.target.outputs.revision }}
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - name: Resolve build revision and check draft release
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$RELEASE_TAG" ]]; then
+            git check-ref-format "refs/tags/$RELEASE_TAG"
+            draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+            if [[ "$draft" != true ]]; then
+              echo "::error::The release must be a draft; published releases cannot receive assets."
+              exit 1
+            fi
+            git fetch --no-tags origin "refs/tags/$RELEASE_TAG"
+            revision=$(git rev-parse 'FETCH_HEAD^{commit}')
+          else
+            revision=$(git rev-parse HEAD)
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
   release:
     name: release ${{ matrix.os }}
+    needs: prepare
+    permissions:
+      contents: write
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.scope == 'linux' && '["ubuntu-22.04"]' || '["ubuntu-22.04","macos-15"]') }}
+        os: ${{ fromJSON(inputs.release_tag == '' && inputs.scope == 'linux' && '["ubuntu-22.04"]' || '["ubuntu-22.04","macos-15"]') }}
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
       - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
         with:
@@ -134,7 +174,31 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Upload release artifacts
-        if: github.event_name == 'release'
+        if: inputs.release_tag != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.event.release.tag_name }}" workflow-artifacts/* --clobber
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_TAG" workflow-artifacts/* --clobber
+
+  publish:
+    if: inputs.release_tag != ''
+    needs: [prepare, release]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft after every platform uploads successfully
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release edit "$RELEASE_TAG" --draft=false

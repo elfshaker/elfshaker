@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main, test-ci]
   # Include PRs targeting feature branches in a stack.
   pull_request:
   merge_group:
@@ -13,13 +14,14 @@ env:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Merge-queue checks must finish for the queued revision.
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
+
 jobs:
   build:
-    if: >-
-      github.event_name == 'pull_request' ||
-      github.event_name == 'merge_group' ||
-      github.ref == 'refs/heads/main' ||
-      github.ref == 'refs/heads/test-ci'
+    needs: clippy-check
     outputs:
       skip-nix: ${{ steps.nix-policy.outputs.skip-nix }}
     runs-on: ubuntu-latest
@@ -76,7 +78,7 @@ jobs:
         pack=$(contrib/create-test-pack ./target/release/elfshaker 5 64)
         ./test-scripts/check.sh ./target/release/elfshaker "$pack"
 
-  clippy_check:
+  clippy-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
@@ -86,7 +88,7 @@ jobs:
       - run: cargo clippy --all-features -- -D warnings
 
   build-linux:
-    needs: [build, clippy_check]
+    needs: build
     if: needs.build.outputs.skip-nix != 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 60
@@ -113,38 +115,34 @@ jobs:
         run: ls -la result/
 
   build-macos-arm64:
-    needs: [build, clippy_check]
-    if: needs.build.outputs.skip-nix != 'true'
+    needs: build
     runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Run native Rust tests
+        run: cargo test --verbose
       - uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+        if: needs.build.outputs.skip-nix != 'true'
       - uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        if: needs.build.outputs.skip-nix != 'true'
         with:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
       - name: Build
+        if: needs.build.outputs.skip-nix != 'true'
         run: nix build -L .#release
       - name: ls
+        if: needs.build.outputs.skip-nix != 'true'
         run: ls -la result/
 
   test-windows:
+    needs: clippy-check
     runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
     - name: Run unit tests
-      run: cargo test --verbose
-
-  portable-pack-hosts:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
-    runs-on: ${{ matrix.os }}
-
-    steps:
-    - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
-    - name: Run portable pack and symlink tests
       run: cargo test --verbose

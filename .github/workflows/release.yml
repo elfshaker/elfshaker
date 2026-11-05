@@ -25,6 +25,9 @@ concurrency:
 
 jobs:
   prepare:
+    # Draft releases are visible only to tokens with push access.
+    permissions:
+      contents: write
     runs-on: ubuntu-22.04
     outputs:
       revision: ${{ steps.target.outputs.revision }}
